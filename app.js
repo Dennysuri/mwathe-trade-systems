@@ -4,34 +4,44 @@ import { AutomatedBot } from './src/core/automated-bot.js';
 
 const autoD = new AutoDAI();
 const denny = new DennyBot();
-const autoBot = new AutomatedBot(100.0); // Initialized with $100 starting capital
+const autoBot = new AutomatedBot(100.0);
 
-console.log("Mwathe Trade Systems: All Engines Online");
+// DOM Elements
+const symbolEl = document.getElementById('symbol-display');
+const digitEl = document.getElementById('digit-display');
+const entropyEl = document.getElementById('entropy-display');
+const stakeEl = document.getElementById('stake-display');
+const statusEl = document.getElementById('status');
+const logEl = document.getElementById('terminal-log');
 
-// Select top performing market via Multi-Armed Bandit
+function log(msg, isSignal = false) {
+    const entry = document.createElement('div');
+    entry.className = `log-entry ${isSignal ? 'signal' : ''}`;
+    entry.innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    logEl.prepend(entry);
+}
+
 const target = autoBot.selectOptimalSymbol();
-console.log(`Bandit Selected Market: ${target.symbol} (Score: ${target.ucbScore})`);
+symbolEl.innerText = target.symbol;
+stakeEl.innerText = `$${autoBot.getCurrentStake()}`;
+statusEl.innerText = "Connecting WebSocket...";
 
-// Connect WebSocket
 denny.connect();
 
-// Stream ticks into AutoD AI
 denny.subscribeTicks(target.symbol, (tickData) => {
+    statusEl.innerText = "Streaming Ticks";
+    digitEl.innerText = tickData.lastDigit;
+
     autoD.addDigit(tickData.lastDigit);
     const state = autoD.predictNextState();
 
-    console.log(`[${target.symbol}] Quote: ${tickData.quote} | Last: ${tickData.lastDigit} | Entropy: ${state.entropy}`);
+    entropyEl.innerText = state.entropy;
+
+    log(`[${target.symbol}] Quote: ${tickData.quote} | Digit: ${tickData.lastDigit} | Entropy: ${state.entropy}`);
 
     if (state.isValidSignal && state.predictedDigit !== null) {
         const currentStake = autoBot.getCurrentStake();
-        console.log(`>>> EXECUTING SNIPE: Target Digit ${state.predictedDigit} | Stake: $${currentStake}`);
-        
-        // denny.executeTrade({
-        //     symbol: target.symbol,
-        //     contractType: 'DIGITMATCH',
-        //     amount: currentStake,
-        //     barrier: state.predictedDigit.toString()
-        // });
+        log(`>>> SNIPE TRIGGERED: Target Digit ${state.predictedDigit} | Stake: $${currentStake}`, true);
     }
 });
 
