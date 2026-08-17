@@ -1,117 +1,177 @@
 import { AutoDAI } from './src/core/autod-ai.js';
 import { DennyBot } from './src/core/denny-bots.js';
-import { AutomatedBot } from './src/core/automated-bot.js';
 
-const autoD = new AutoDAI();
 const denny = new DennyBot();
-const autoBot = new AutomatedBot(100.0);
+const autoD = new AutoDAI();
 
-// DOM References
-const symbolEl = document.getElementById('symbol-display');
-const digitEl = document.getElementById('digit-display');
-const entropyEl = document.getElementById('entropy-display');
-const entropyBar = document.getElementById('entropy-bar');
-const stakeEl = document.getElementById('stake-display');
-const statusDot = document.getElementById('status-dot');
-const statusText = document.getElementById('status-text');
-const regimeTag = document.getElementById('regime-tag');
-const histoContainer = document.getElementById('histogram-container');
-const logEl = document.getElementById('terminal-log');
+// Views
+const stageLanding = document.getElementById('page-landing');
+const stageNavigation = document.getElementById('page-navigation');
+const stageTrading = document.getElementById('page-trading');
+
+// Controls
+const btnGetStarted = document.getElementById('btn-get-started');
+const btnOAuthConnect = document.getElementById('btn-oauth-connect');
+const btnConnect = document.getElementById('btn-connect-api');
+const btnDisconnect = document.getElementById('btn-disconnect');
+const appIdInput = document.getElementById('app-id-input');
 const tokenInput = document.getElementById('api-token');
-const authBtn = document.getElementById('auth-btn');
-const clearLogBtn = document.getElementById('clear-log-btn');
+const accountTypeSelect = document.getElementById('account-type-select');
+const authStatusMsg = document.getElementById('auth-status-msg');
 
-// Initialize 0-9 Histogram DOM
-for (let i = 0; i <= 9; i++) {
-    const col = document.createElement('div');
-    col.className = 'histo-col';
-    col.innerHTML = `
-        <div class="histo-bar-wrapper">
-            <div class="histo-bar" id="bar-${i}"></div>
-        </div>
-        <span class="histo-num">${i}</span>
-    `;
-    histoContainer.appendChild(col);
+// Trading UI
+const liveBalance = document.getElementById('live-balance');
+const accountTypeTag = document.getElementById('account-type-tag');
+const accountEmail = document.getElementById('account-email');
+const menuSignals = document.getElementById('menu-signals');
+const signalsLockBadge = document.getElementById('signals-lock-badge');
+const signalsStatusText = document.getElementById('signals-status-text');
+const terminalLog = document.getElementById('terminal-log');
+
+let isAnalysisComplete = false;
+
+function showStage(stageElement) {
+    stageLanding.classList.remove('active');
+    stageNavigation.classList.remove('active');
+    stageTrading.classList.remove('active');
+
+    stageElement.classList.add('active');
 }
 
-function updateHistogram(history) {
-    if (history.length === 0) return;
-    const counts = Array(10).fill(0);
-    history.forEach(d => counts[d]++);
-    const maxCount = Math.max(...counts, 1);
-
-    for (let i = 0; i <= 9; i++) {
-        const bar = document.getElementById(`bar-${i}`);
-        const pct = (counts[i] / maxCount) * 100;
-        bar.style.height = `${Math.max(pct, 8)}%`;
-        
-        if (counts[i] === maxCount && counts[i] > 2) {
-            bar.classList.add('hot');
-        } else {
-            bar.classList.remove('hot');
-        }
-    }
-}
-
-function log(msg, type = 'normal') {
+function log(msg) {
     const entry = document.createElement('div');
-    entry.className = `log-entry ${type}`;
+    entry.className = 'log-entry sys';
     entry.innerText = `[${new Date().toLocaleTimeString()}] ${msg}`;
-    logEl.prepend(entry);
+    terminalLog.prepend(entry);
 }
 
-clearLogBtn.addEventListener('click', () => { logEl.innerHTML = ''; });
+// 1. Navigation Actions
+btnGetStarted.addEventListener('click', () => {
+    showStage(stageNavigation);
+});
 
-// Persistent Token Auth
-const savedToken = localStorage.getItem('mwathe_deriv_token');
-if (savedToken) tokenInput.value = savedToken;
+// OAuth 2.0 Redirect Connection Flow
+btnOAuthConnect.addEventListener('click', () => {
+    const appId = appIdInput.value.trim() || '1089';
+    const redirectUrl = window.location.origin + window.location.pathname;
+    const oauthUrl = `https://oauth.deriv.com/oauth2/authorize?app_id=${appId}&l=EN&brand=deriv`;
+    
+    window.location.href = oauthUrl;
+});
 
-authBtn.addEventListener('click', () => {
+// 2. Token-Based Authentication via WebSocket
+function authenticateWithToken(token) {
+    authStatusMsg.className = 'auth-status';
+    authStatusMsg.innerText = 'Connecting to Deriv WebSocket...';
+
+    const appId = appIdInput.value.trim() || '1089';
+    const wsUrl = `wss://ws.derivws.com/websockets/v3?app_id=${appId}`;
+    
+    const ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+        authStatusMsg.innerText = 'Authorizing API token permissions...';
+        ws.send(JSON.stringify({ authorize: token }));
+    };
+
+    ws.onmessage = (msg) => {
+        const data = JSON.parse(msg.data);
+
+        if (data.msg_type === 'authorize') {
+            if (data.error) {
+                // Connection Failed -> Remain on Navigation Page & Show Error
+                authStatusMsg.className = 'auth-status error';
+                authStatusMsg.innerText = `Auth Failed: ${data.error.message}`;
+                localStorage.removeItem('mwathe_deriv_token');
+                showStage(stageNavigation);
+            } else {
+                // Connection Successful -> Land Directly on Trading Page
+                localStorage.setItem('mwathe_deriv_token', token);
+
+                const balance = data.authorize.balance;
+                const isVirtual = data.authorize.is_virtual;
+                const email = data.authorize.email || 'User';
+
+                liveBalance.innerText = `$${parseFloat(balance).toFixed(2)}`;
+                accountTypeTag.innerText = isVirtual ? 'DEMO' : 'LIVE';
+                accountEmail.innerText = email;
+
+                showStage(stageTrading);
+                log(`Authorized: ${email} (${isVirtual ? 'Demo' : 'Real'})`);
+
+                // Subscribe to real-time account balance updates
+                ws.send(JSON.stringify({ balance: 1, subscribe: 1 }));
+            }
+        } else if (data.msg_type === 'balance') {
+            if (data.balance) {
+                liveBalance.innerText = `$${parseFloat(data.balance.balance).toFixed(2)}`;
+            }
+        }
+    };
+
+    ws.onerror = (err) => {
+        authStatusMsg.className = 'auth-status error';
+        authStatusMsg.innerText = 'WebSocket connection error. Return to Navigation.';
+        showStage(stageNavigation);
+    };
+}
+
+btnConnect.addEventListener('click', () => {
     const token = tokenInput.value.trim();
-    if (token) {
-        localStorage.setItem('mwathe_deriv_token', token);
-        denny.authorize(token);
-        log("Authenticating session token...", "sys");
+    if (!token) {
+        authStatusMsg.className = 'auth-status error';
+        authStatusMsg.innerText = 'Please enter a valid Deriv API token.';
+        return;
+    }
+    authenticateWithToken(token);
+});
+
+btnDisconnect.addEventListener('click', () => {
+    localStorage.removeItem('mwathe_deriv_token');
+    showStage(stageNavigation);
+});
+
+// Check URL Params for Deriv OAuth Callback tokens (token1, acct1, etc.)
+function handleOAuthCallback() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const token1 = urlParams.get('token1');
+    if (token1) {
+        tokenInput.value = token1;
+        // Clean URL query params
+        window.history.replaceState({}, document.title, window.location.pathname);
+        authenticateWithToken(token1);
+        return true;
+    }
+    return false;
+}
+
+// Auto-check saved session token or OAuth parameters on startup
+window.addEventListener('DOMContentLoaded', () => {
+    const hasOAuthToken = handleOAuthCallback();
+    if (!hasOAuthToken) {
+        const savedToken = localStorage.getItem('mwathe_deriv_token');
+        if (savedToken) {
+            tokenInput.value = savedToken;
+            authenticateWithToken(savedToken);
+        }
     }
 });
 
-// Run Core Engine
-const target = autoBot.selectOptimalSymbol();
-symbolEl.innerText = target.symbol;
-stakeEl.innerText = `$${autoBot.getCurrentStake()}`;
+// Trading Menu Logic
+document.getElementById('menu-analysis').addEventListener('click', () => {
+    isAnalysisComplete = true;
+    signalsLockBadge.innerText = 'UNLOCKED';
+    signalsLockBadge.style.background = '#00e676';
+    signalsStatusText.innerText = 'AI Probability Signals Active';
+    menuSignals.classList.remove('locked');
+    log("Analysis complete. Signals module unlocked.");
+});
 
-denny.connect(savedToken || null);
-
-denny.subscribeTicks(target.symbol, (tickData) => {
-    statusDot.classList.add('online');
-    statusText.innerText = "STREAMING";
-
-    digitEl.innerText = tickData.lastDigit;
-
-    autoD.addDigit(tickData.lastDigit);
-    const state = autoD.predictNextState();
-
-    // Entropy & UI Telemetry
-    entropyEl.innerText = state.entropy;
-    entropyBar.style.width = `${Math.min(state.entropy * 100, 100)}%`;
-    
-    if (state.entropy < 0.80) {
-        entropyBar.style.backgroundColor = 'var(--accent-green)';
-        regimeTag.innerText = "PATTERN DETECTED";
-        regimeTag.style.color = 'var(--accent-green)';
+document.getElementById('menu-signals').addEventListener('click', () => {
+    if (!isAnalysisComplete) {
+        alert("Please run the Analysis Tool first to unlock Signals.");
     } else {
-        entropyBar.style.backgroundColor = 'var(--accent-red)';
-        regimeTag.innerText = "HIGH NOISE";
-        regimeTag.style.color = 'var(--accent-red)';
-    }
-
-    updateHistogram(autoD.history);
-
-    log(`[${target.symbol}] Quote: ${tickData.quote} | Digit: ${tickData.lastDigit}`);
-
-    if (state.isValidSignal && state.predictedDigit !== null) {
-        const currentStake = autoBot.getCurrentStake();
-        log(`>>> SNIPE SIGNAL: Target Digit ${state.predictedDigit} | Stake: $${currentStake}`, "signal");
+        log("Accessing AI Signals matrix...");
     }
 });
 

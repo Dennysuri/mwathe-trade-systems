@@ -3,85 +3,190 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mwathe Trade Systems | Terminal</title>
+    <title>Mwathe Trade Systems</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@700&family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-    <!-- Header Navigation Bar -->
-    <header class="app-header">
-        <div class="brand">
-            <div class="logo-icon">M</div>
-            <div class="brand-text">
-                <span class="title">MWATHE</span>
-                <span class="subtitle">TRADE SYSTEMS</span>
+    <!-- STAGE 1: LANDING DASHBOARD -->
+    <section id="page-landing" class="stage-view active">
+        <div class="landing-content">
+            <div class="hero-logo-box">
+                <div class="hero-logo-symbol">
+                    <span class="logo-m">M</span>
+                </div>
+                <h1 class="hero-brand-name">MWATHE</h1>
+                <span class="hero-brand-sub">TRADE SYSTEMS</span>
             </div>
-        </div>
-        <div class="status-badge">
-            <span class="status-dot" id="status-dot"></span>
-            <span id="status-text">OFFLINE</span>
-        </div>
-    </header>
 
-    <!-- Auth / Account Control Card -->
-    <section class="card auth-card">
-        <div class="card-header">
-            <span class="label">API CONNECTION</span>
-            <span class="secure-badge">🔒 256-BIT ENCRYPTED</span>
+            <p class="hero-tagline">
+                Next-generation algorithmic trading hub powered by 5th-order Markov probability state validation, real-time Shannon Entropy analysis, and sub-millisecond execution engines.
+            </p>
         </div>
-        <div class="input-group">
-            <input type="password" id="api-token" placeholder="Enter Deriv API Token..." autocomplete="off">
-            <button id="auth-btn">
-                <span>CONNECT</span>
+
+        <div class="landing-footer">
+            <button id="btn-get-started" class="btn-primary-large">
+                <span>GET STARTED</span>
+                <span class="btn-arrow">→</span>
             </button>
         </div>
     </section>
 
-    <!-- Key Performance Metrics Grid -->
-    <section class="metrics-grid">
-        <div class="card metric-card">
-            <span class="card-label">TARGET MARKET</span>
-            <span class="metric-value accent-blue" id="symbol-display">---</span>
-        </div>
-        <div class="card metric-card">
-            <span class="card-label">LAST DIGIT</span>
-            <span class="metric-value giant-digit" id="digit-display">-</span>
-        </div>
-        <div class="card metric-card">
-            <span class="card-label">SHANNON ENTROPY</span>
-            <span class="metric-value accent-green" id="entropy-display">1.00</span>
-            <div class="entropy-bar-track">
-                <div class="entropy-bar-fill" id="entropy-bar"></div>
+
+    <!-- STAGE 2: NAVIGATION (API & AUTH CONNECTIONS) -->
+    <section id="page-navigation" class="stage-view">
+        <header class="nav-stage-header">
+            <div class="mini-logo">MWATHE</div>
+            <span class="secure-badge">🔒 DERIV API v2 & OAUTH HUB</span>
+        </header>
+
+        <div class="auth-container">
+            <h2>API & OAuth Connections</h2>
+            <p class="auth-desc">Connect using Deriv OAuth 2.0 or authorize via scoped API token (Read & Trade permissions required for Live/Demo execution).</p>
+
+            <!-- OAuth Direct Connect Option -->
+            <div class="auth-option-card">
+                <div class="option-header">
+                    <span class="option-title">METHOD 1: DERIV OAUTH 2.0</span>
+                    <span class="badge-recommended">FASTEST</span>
+                </div>
+                <div class="input-field-sm">
+                    <label for="app-id-input">DERIV APP ID</label>
+                    <input type="text" id="app-id-input" value="1089" placeholder="Enter App ID...">
+                </div>
+                <button id="btn-oauth-connect" class="btn-secondary-large">
+                    <span>CONNECT WITH DERIV OAUTH</span>
+                </button>
+            </div>
+
+            <div class="auth-divider"><span>OR</span></div>
+
+            <!-- Manual Token Verification Option -->
+            <div class="auth-option-card">
+                <div class="option-header">
+                    <span class="option-title">METHOD 2: SCOPED API TOKEN</span>
+                </div>
+                <div class="input-field-sm">
+                    <label for="account-type-select">ACCOUNT TYPE</label>
+                    <select id="account-type-select" class="select-field">
+                        <option value="demo">Demo Account Token</option>
+                        <option value="real">Real / Live Account Token</option>
+                    </select>
+                </div>
+
+                <div class="input-field-sm">
+                    <label for="api-token">API TOKEN (READ + TRADE SCOPES)</label>
+                    <input type="password" id="api-token" placeholder="Paste Deriv API token..." autocomplete="off">
+                </div>
+
+                <div id="auth-status-msg" class="auth-status"></div>
+
+                <button id="btn-connect-api" class="btn-primary-large">
+                    <span id="btn-connect-text">VERIFY & AUTHORIZE</span>
+                </button>
             </div>
         </div>
-        <div class="card metric-card">
-            <span class="card-label">ACTIVE STAKE</span>
-            <span class="metric-value accent-gold" id="stake-display">$1.00</span>
-        </div>
     </section>
 
-    <!-- Digit Frequency Histogram Engine -->
-    <section class="card histogram-card">
-        <div class="card-header">
-            <span class="label">DIGIT FREQUENCY SPECTRUM (LAST 100 TICKS)</span>
-            <span id="regime-tag" class="regime-badge">ANALYZING...</span>
-        </div>
-        <div class="histogram-grid" id="histogram-container">
-            <!-- Dynamically populated 0-9 bars -->
-        </div>
-    </section>
 
-    <!-- High-Speed Console Terminal Log -->
-    <section class="card console-card">
-        <div class="card-header">
-            <span class="label">SYSTEM TELEMETRY LOG</span>
-            <button class="clear-btn" id="clear-log-btn">CLEAR</button>
+    <!-- STAGE 3: TRADING TERMINAL -->
+    <section id="page-trading" class="stage-view">
+        <!-- Top Navigation Header with Real-Time Balance -->
+        <header class="trading-topbar">
+            <div class="brand-mini">
+                <span class="logo-m-sm">M</span>
+                <span class="brand-name-sm">MWATHE</span>
+            </div>
+            <div class="account-balance-card">
+                <div class="balance-meta">
+                    <span class="balance-label">ACCOUNT BALANCE</span>
+                    <span id="account-email" class="account-email-txt">authenticating...</span>
+                </div>
+                <span id="live-balance" class="balance-amount">$0.00</span>
+                <span id="account-type-tag" class="account-tag">DEMO</span>
+            </div>
+        </header>
+
+        <!-- Main Navigation Grid Menu -->
+        <div class="menu-section-header">MAIN TERMINAL MENU</div>
+        
+        <div class="trading-menu-grid">
+            <!-- Analysis Tool -->
+            <div class="menu-card" id="menu-analysis">
+                <div class="menu-icon">📊</div>
+                <div class="menu-info">
+                    <h3>Analysis Tool</h3>
+                    <p>Live digit frequency, tick buffer & entropy stats</p>
+                </div>
+            </div>
+
+            <!-- Signals (Locked initially) -->
+            <div class="menu-card locked" id="menu-signals">
+                <div class="menu-icon">⚡</div>
+                <div class="menu-info">
+                    <h3>Signals <span class="lock-tag" id="signals-lock-badge">🔒 LOCKED</span></h3>
+                    <p id="signals-status-text">Complete Analysis run first</p>
+                </div>
+            </div>
+
+            <!-- Denny Bots -->
+            <div class="menu-card" id="menu-denny">
+                <div class="menu-icon">🎯</div>
+                <div class="menu-info">
+                    <h3>Denny Bots</h3>
+                    <p>Sub-millisecond high-speed sniper execution</p>
+                </div>
+            </div>
+
+            <!-- Automated Trading Bot -->
+            <div class="menu-card" id="menu-automated">
+                <div class="menu-icon">🤖</div>
+                <div class="menu-info">
+                    <h3>Automated Trading Bot</h3>
+                    <p>Multi-Armed Bandit strategy & risk manager</p>
+                </div>
+            </div>
+
+            <!-- The AutoD AI -->
+            <div class="menu-card" id="menu-autod">
+                <div class="menu-icon">🧠</div>
+                <div class="menu-info">
+                    <h3>The AutoD AI</h3>
+                    <p>Markov transition engine & noise filter</p>
+                </div>
+            </div>
+
+            <!-- Settings -->
+            <div class="menu-card" id="menu-settings">
+                <div class="menu-icon">⚙️</div>
+                <div class="menu-info">
+                    <h3>Settings</h3>
+                    <p>API options, proxy routes & layout preferences</p>
+                </div>
+            </div>
+
+            <!-- Admin Panel -->
+            <div class="menu-card" id="menu-admin">
+                <div class="menu-icon">🛡️</div>
+                <div class="menu-info">
+                    <h3>Admin Panel</h3>
+                    <p>System logs, WebSocket latency & metrics</p>
+                </div>
+            </div>
         </div>
-        <div class="console-box" id="terminal-log">
-            <div class="log-entry sys">Mwathe Central Core Ready. Waiting for WebSocket handshake...</div>
+
+        <!-- Dynamic Console Log Drawer -->
+        <div class="card console-card" style="margin-top: 15px;">
+            <div class="card-header">
+                <span class="label">LIVE TELEMETRY LOG</span>
+                <button id="btn-disconnect" class="clear-btn" style="color: #ff3366;">DISCONNECT</button>
+            </div>
+            <div class="console-box" id="terminal-log">
+                <div class="log-entry sys">Authentication verified via Deriv API WebSocket. Real-time balance feed active.</div>
+            </div>
         </div>
     </section>
 
