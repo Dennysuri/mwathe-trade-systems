@@ -1,25 +1,37 @@
 import { AutoDAI } from './src/core/autod-ai.js';
 import { DennyBot } from './src/core/denny-bots.js';
+import { AutomatedBot } from './src/core/automated-bot.js';
 
 const autoD = new AutoDAI();
-const bot = new DennyBot();
+const denny = new DennyBot();
+const autoBot = new AutomatedBot(100.0); // Initialized with $100 starting capital
 
-console.log("Mwathe Trade Systems Initializing...");
+console.log("Mwathe Trade Systems: All Engines Online");
 
-// Connect to WebSocket feed
-bot.connect();
+// Select top performing market via Multi-Armed Bandit
+const target = autoBot.selectOptimalSymbol();
+console.log(`Bandit Selected Market: ${target.symbol} (Score: ${target.ucbScore})`);
 
-// Stream ticks directly into AutoD AI
-bot.subscribeTicks('R_100', (tickData) => {
+// Connect WebSocket
+denny.connect();
+
+// Stream ticks into AutoD AI
+denny.subscribeTicks(target.symbol, (tickData) => {
     autoD.addDigit(tickData.lastDigit);
     const state = autoD.predictNextState();
 
-    console.log(`[R_100] Quote: ${tickData.quote} | Digit: ${tickData.lastDigit} | Entropy: ${state.entropy} | Regime: ${state.regime}`);
+    console.log(`[${target.symbol}] Quote: ${tickData.quote} | Last: ${tickData.lastDigit} | Entropy: ${state.entropy}`);
 
-    // If AutoD AI detects an ordered pattern signal, trigger a trade automatically
     if (state.isValidSignal && state.predictedDigit !== null) {
-        console.log(`>>> AUTO-TRIGGER: High Probability Detected for Digit ${state.predictedDigit}`);
-        // bot.executeTrade({ symbol: 'R_100', contractType: 'DIGITMATCH', barrier: state.predictedDigit.toString() });
+        const currentStake = autoBot.getCurrentStake();
+        console.log(`>>> EXECUTING SNIPE: Target Digit ${state.predictedDigit} | Stake: $${currentStake}`);
+        
+        // denny.executeTrade({
+        //     symbol: target.symbol,
+        //     contractType: 'DIGITMATCH',
+        //     amount: currentStake,
+        //     barrier: state.predictedDigit.toString()
+        // });
     }
 });
 
