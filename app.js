@@ -1,16 +1,25 @@
 import { AutoDAI } from './src/core/autod-ai.js';
+import { DennyBot } from './src/core/denny-bots.js';
 
 const autoD = new AutoDAI();
+const bot = new DennyBot();
 
-// Simulated tick stream demonstration
-console.log("AutoD AI Module Loaded");
+console.log("Mwathe Trade Systems Initializing...");
 
-// Example tick feed processing
-const mockTicks = [5, 2, 8, 2, 8, 2, 8, 3, 2, 8, 1, 9, 2, 8];
+// Connect to WebSocket feed
+bot.connect();
 
-mockTicks.forEach(digit => {
-    autoD.addDigit(digit);
-    const prediction = autoD.predictNextState();
-    console.log(`Ingested: ${digit} | Entropy: ${prediction.entropy} | Next Predicted: ${prediction.predictedDigit} (p=${prediction.probability})`);
+// Stream ticks directly into AutoD AI
+bot.subscribeTicks('R_100', (tickData) => {
+    autoD.addDigit(tickData.lastDigit);
+    const state = autoD.predictNextState();
+
+    console.log(`[R_100] Quote: ${tickData.quote} | Digit: ${tickData.lastDigit} | Entropy: ${state.entropy} | Regime: ${state.regime}`);
+
+    // If AutoD AI detects an ordered pattern signal, trigger a trade automatically
+    if (state.isValidSignal && state.predictedDigit !== null) {
+        console.log(`>>> AUTO-TRIGGER: High Probability Detected for Digit ${state.predictedDigit}`);
+        // bot.executeTrade({ symbol: 'R_100', contractType: 'DIGITMATCH', barrier: state.predictedDigit.toString() });
+    }
 });
 
