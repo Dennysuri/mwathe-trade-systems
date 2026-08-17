@@ -3,37 +3,87 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mwathe Trade Systems</title>
+    <title>Mwathe Trade Systems | Terminal</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <div class="header">
-        <h1>Mwathe Trade Systems</h1>
-        <small id="status">Connecting...</small>
-    </div>
 
-    <div class="grid">
-        <div class="card">
-            <div class="card-title">Target Symbol</div>
-            <div class="card-value" id="symbol-display">---</div>
+    <!-- Header Navigation Bar -->
+    <header class="app-header">
+        <div class="brand">
+            <div class="logo-icon">M</div>
+            <div class="brand-text">
+                <span class="title">MWATHE</span>
+                <span class="subtitle">TRADE SYSTEMS</span>
+            </div>
         </div>
-        <div class="card">
-            <div class="card-title">Last Digit</div>
-            <div class="card-value" id="digit-display">-</div>
+        <div class="status-badge">
+            <span class="status-dot" id="status-dot"></span>
+            <span id="status-text">OFFLINE</span>
         </div>
-        <div class="card">
-            <div class="card-title">Entropy</div>
-            <div class="card-value" id="entropy-display">1.00</div>
-        </div>
-        <div class="card">
-            <div class="card-title">Current Stake</div>
-            <div class="card-value" id="stake-display">$1.00</div>
-        </div>
-    </div>
+    </header>
 
-    <div class="log-box" id="terminal-log">
-        <div class="log-entry">System ready. Waiting for WebSocket initialization...</div>
-    </div>
+    <!-- Auth / Account Control Card -->
+    <section class="card auth-card">
+        <div class="card-header">
+            <span class="label">API CONNECTION</span>
+            <span class="secure-badge">🔒 256-BIT ENCRYPTED</span>
+        </div>
+        <div class="input-group">
+            <input type="password" id="api-token" placeholder="Enter Deriv API Token..." autocomplete="off">
+            <button id="auth-btn">
+                <span>CONNECT</span>
+            </button>
+        </div>
+    </section>
+
+    <!-- Key Performance Metrics Grid -->
+    <section class="metrics-grid">
+        <div class="card metric-card">
+            <span class="card-label">TARGET MARKET</span>
+            <span class="metric-value accent-blue" id="symbol-display">---</span>
+        </div>
+        <div class="card metric-card">
+            <span class="card-label">LAST DIGIT</span>
+            <span class="metric-value giant-digit" id="digit-display">-</span>
+        </div>
+        <div class="card metric-card">
+            <span class="card-label">SHANNON ENTROPY</span>
+            <span class="metric-value accent-green" id="entropy-display">1.00</span>
+            <div class="entropy-bar-track">
+                <div class="entropy-bar-fill" id="entropy-bar"></div>
+            </div>
+        </div>
+        <div class="card metric-card">
+            <span class="card-label">ACTIVE STAKE</span>
+            <span class="metric-value accent-gold" id="stake-display">$1.00</span>
+        </div>
+    </section>
+
+    <!-- Digit Frequency Histogram Engine -->
+    <section class="card histogram-card">
+        <div class="card-header">
+            <span class="label">DIGIT FREQUENCY SPECTRUM (LAST 100 TICKS)</span>
+            <span id="regime-tag" class="regime-badge">ANALYZING...</span>
+        </div>
+        <div class="histogram-grid" id="histogram-container">
+            <!-- Dynamically populated 0-9 bars -->
+        </div>
+    </section>
+
+    <!-- High-Speed Console Terminal Log -->
+    <section class="card console-card">
+        <div class="card-header">
+            <span class="label">SYSTEM TELEMETRY LOG</span>
+            <button class="clear-btn" id="clear-log-btn">CLEAR</button>
+        </div>
+        <div class="console-box" id="terminal-log">
+            <div class="log-entry sys">Mwathe Central Core Ready. Waiting for WebSocket handshake...</div>
+        </div>
+    </section>
 
     <script type="module" src="app.js"></script>
 </body>
