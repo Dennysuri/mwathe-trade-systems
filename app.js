@@ -1,7 +1,8 @@
+const APP_ID = "1089"; 
 const CLIENT_ID = "349eTg55tt6ZVaefjBIAH";
 const REDIRECT_URI = "https://mwathe-trade-systems.vercel.app/";
 
-// --- Navigation Router ---
+// --- Screen Router ---
 function showScreen(screenId) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     const target = document.getElementById(screenId);
@@ -15,43 +16,16 @@ function generateHexState(length = 32) {
     return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
-// --- PKCE Code Helpers ---
-function generateCodeVerifier() {
-    const array = new Uint8Array(32);
-    window.crypto.getRandomValues(array);
-    return btoa(String.fromCharCode.apply(null, array))
-        .replace(/\+/g, '-')
-        .replace(/\//g, '_')
-        .replace(/=+$/, '');
-}
-
-async function generateCodeChallenge(verifier) {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(verifier);
-    const digest = await window.crypto.subtle.digest('SHA-256', data);
-    return btoa(String.fromCharCode.apply(null, new Uint8Array(digest)))
-        .replace(/\+/g, '-')
-        .replace(/\//g, '_')
-        .replace(/=+$/, '');
-}
-
 // --- Deriv OAuth Redirect ---
-async function loginToDeriv() {
+function loginToDeriv() {
     try {
-        const verifier = generateCodeVerifier();
         const state = generateHexState(32);
-
-        sessionStorage.setItem('code_verifier', verifier);
         sessionStorage.setItem('oauth_state', state);
 
-        const challenge = await generateCodeChallenge(verifier);
-        
-        const authUrl = `https://auth.deriv.com/oauth2/auth?` +
-            `response_type=code&` +
+        const authUrl = `https://oauth.deriv.com/oauth2/authorize?` +
+            `app_id=${APP_ID}&` +
             `client_id=${CLIENT_ID}&` +
             `redirect_uri=${encodeURIComponent(REDIRECT_URI)}&` +
-            `code_challenge=${challenge}&` +
-            `code_challenge_method=S256&` +
             `state=${encodeURIComponent(state)}&` +
             `scope=trade+account_manage`;
 
@@ -80,10 +54,10 @@ function connectWithToken() {
     initializeSocketWithToken(token, connectBtn);
 }
 
-// --- WebSocket Balance & Account Session ---
+// --- WebSocket Connection ---
 function initializeSocketWithToken(token, buttonEl = null) {
     if (!token || typeof token !== 'string') {
-        alert("Invalid access token received.");
+        alert("Invalid access token.");
         if (buttonEl) {
             buttonEl.innerText = "Connect API";
             buttonEl.disabled = false;
@@ -91,7 +65,7 @@ function initializeSocketWithToken(token, buttonEl = null) {
         return;
     }
 
-    const wsUrl = `wss://ws.derivws.com/websockets/v3?app_id=1089`;
+    const wsUrl = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`;
     const socket = new WebSocket(wsUrl);
 
     const timeout = setTimeout(() => {
@@ -155,39 +129,26 @@ function initializeSocketWithToken(token, buttonEl = null) {
     };
 }
 
-// --- Exchange OAuth Return Code ---
-async function handleOAuthReturn() {
+// --- Handle Direct OAuth Parameters Return ---
+function handleOAuthReturn() {
     const urlParams = new URLSearchParams(window.location.search);
-    const code = urlParams.get('code');
     const returnedState = urlParams.get('state');
+    
+    // Deriv returns tokens in token1, token2... query params
+    const token = urlParams.get('token1') || urlParams.get('token');
 
-    if (code) {
+    if (token) {
         const storedState = sessionStorage.getItem('oauth_state');
         if (returnedState && storedState && returnedState !== storedState) {
             alert("Security Error: Invalid state parameter (CSRF detected)");
             return;
         }
 
-        const codeVerifier = sessionStorage.getItem('code_verifier');
+        // Clean up query string from browser URL address bar
         window.history.replaceState({}, document.title, window.location.pathname);
 
-        try {
-            const res = await fetch('/api/oauth-token', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ code, codeVerifier, redirectUri: REDIRECT_URI })
-            });
-
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.error || "Token exchange failed");
-
-            const accessToken = data.access_token || data.token;
-            if (!accessToken) throw new Error("No token returned from authentication server");
-
-            initializeSocketWithToken(accessToken);
-        } catch (err) {
-            alert("OAuth Exchange Error: " + err.message);
-        }
+        // Connect directly to WebSocket with returned session token
+        initializeSocketWithToken(token);
     }
 }
 
