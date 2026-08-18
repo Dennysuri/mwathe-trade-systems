@@ -1,21 +1,58 @@
 const CLIENT_ID = "349eTg55tt6ZVaefjBIAH";
-const REDIRECT_URI = window.location.origin + window.location.pathname;
+// Strict URL matching: protocol, domain, path, no trailing slash
+const REDIRECT_URI = "https://mwathe-trade-systems.vercel.app/callback";
 
-// --- Navigation Router ---
+// --- Screen Router ---
 function showScreen(screenId) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     const target = document.getElementById(screenId);
     if (target) target.classList.add('active');
 }
 
-// --- Deriv Modern OAuth Redirect ---
-function loginToDeriv() {
-    // Current Deriv OAuth authorization endpoint structure
-    const authUrl = `https://auth.deriv.com/oauth2/auth?response_type=code&client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=trade+account_manage`;
-    window.location.href = authUrl;
+// --- PKCE Code Helpers ---
+function generateCodeVerifier() {
+    const array = new Uint8Array(32);
+    window.crypto.getRandomValues(array);
+    return btoa(String.fromCharCode.apply(null, array))
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
 }
 
-// --- Manual API Token Authentication ---
+async function generateCodeChallenge(verifier) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(verifier);
+    const digest = await window.crypto.subtle.digest('SHA-256', data);
+    return btoa(String.fromCharCode.apply(null, new Uint8Array(digest)))
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+}
+
+// --- Deriv OAuth Redirect ---
+async function loginToDeriv() {
+    try {
+        const verifier = generateCodeVerifier();
+        sessionStorage.setItem('code_verifier', verifier);
+
+        const challenge = await generateCodeChallenge(verifier);
+        
+        // Endpoint: https://auth.deriv.com/oauth2/auth
+        const authUrl = `https://auth.deriv.com/oauth2/auth?` +
+            `response_type=code&` +
+            `client_id=${CLIENT_ID}&` +
+            `redirect_uri=${encodeURIComponent(REDIRECT_URI)}&` +
+            `code_challenge=${challenge}&` +
+            `code_challenge_method=S256&` +
+            `scope=trade+account_manage`;
+
+        window.location.href = authUrl;
+    } catch (err) {
+        alert("Failed to initialize OAuth request: " + err.message);
+    }
+}
+
+// --- Direct Token Authentication (Option A) ---
 function connectWithToken() {
     const tokenInput = document.getElementById("api-token-input");
     const connectBtn = document.getElementById("btn-connect-token");
@@ -34,16 +71,15 @@ function connectWithToken() {
     initializeSocketWithToken(token, connectBtn);
 }
 
-// --- Direct WebSocket Connection ---
+// --- WebSocket Balance & Account Session ---
 function initializeSocketWithToken(token, buttonEl = null) {
-    // Standard persistent WebSocket connection
-    const wsUrl = `wss://ws.derivws.com/websockets/v3?app_id=1089`; 
+    const wsUrl = `wss://ws.derivws.com/websockets/v3?app_id=1089`;
     const socket = new WebSocket(wsUrl);
 
     const timeout = setTimeout(() => {
         if (socket.readyState !== WebSocket.OPEN) {
             socket.close();
-            alert("Connection timed out. Check your token or network connection.");
+            alert("Connection timed out.");
             if (buttonEl) {
                 buttonEl.innerText = "Connect API";
                 buttonEl.disabled = false;
@@ -54,7 +90,6 @@ function initializeSocketWithToken(token, buttonEl = null) {
     socket.onopen = () => {
         clearTimeout(timeout);
         if (buttonEl) buttonEl.innerText = "Authorizing...";
-        // Direct Authorization Payload
         socket.send(JSON.stringify({ authorize: token }));
     };
 
@@ -64,7 +99,7 @@ function initializeSocketWithToken(token, buttonEl = null) {
 
             if (data.msg_type === 'authorize') {
                 if (data.error) {
-                    alert("API Connection Error: " + data.error.message);
+                    alert("Authorization failed: " + data.error.message);
                     if (buttonEl) {
                         buttonEl.innerText = "Connect API";
                         buttonEl.disabled = false;
@@ -79,7 +114,6 @@ function initializeSocketWithToken(token, buttonEl = null) {
                 const bal = data.authorize.balance ? parseFloat(data.authorize.balance).toFixed(2) : "0.00";
                 document.getElementById('account-balance').innerText = bal;
 
-                // Subscribe to live balance stream
                 socket.send(JSON.stringify({ balance: 1, subscribe: 1 }));
             }
 
@@ -87,13 +121,13 @@ function initializeSocketWithToken(token, buttonEl = null) {
                 document.getElementById('account-balance').innerText = parseFloat(data.balance.balance).toFixed(2);
             }
         } catch (err) {
-            console.error("Payload error:", err);
+            console.error("Payload parse error:", err);
         }
     };
 
-    socket.onerror = (err) => {
+    socket.onerror = () => {
         clearTimeout(timeout);
-        alert("WebSocket Connection Failed. Ensure your network permits WebSocket traffic.");
+        alert("WebSocket connection failed.");
         if (buttonEl) {
             buttonEl.innerText = "Connect API";
             buttonEl.disabled = false;
@@ -101,18 +135,34 @@ function initializeSocketWithToken(token, buttonEl = null) {
     };
 }
 
-// --- Process Tokens from OAuth Return ---
-function handleOAuthReturn() {
+// --- Exchange Code via Serverless API Token Endpoint ---
+async function handleOAuthReturn() {
     const urlParams = new URLSearchParams(window.location.search);
-    const token1 = urlParams.get('token1') || urlParams.get('code');
+    const code = urlParams.get('code');
 
-    if (token1) {
+    if (code) {
+        const codeVerifier = sessionStorage.getItem('code_verifier');
         window.history.replaceState({}, document.title, window.location.pathname);
-        initializeSocketWithToken(token1);
+
+        try {
+            const res = await fetch('/api/oauth-token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code, codeVerifier, redirectUri: REDIRECT_URI })
+            });
+
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || "Token exchange failed");
+
+            // Initialize connection with returned access token
+            initializeSocketWithToken(data.access_token);
+        } catch (err) {
+            alert("OAuth Exchange Error: " + err.message);
+        }
     }
 }
 
-// Attach Event Handlers
+// Attach UI Listeners
 document.addEventListener("DOMContentLoaded", () => {
     const btnGotoNav = document.getElementById("btn-goto-nav");
     if (btnGotoNav) btnGotoNav.onclick = () => showScreen('navigation-screen');

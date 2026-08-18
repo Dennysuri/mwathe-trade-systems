@@ -1,41 +1,33 @@
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
-  const { code, codeVerifier } = req.body;
-
-  if (!code || !codeVerifier) {
-    return res.status(400).json({ error: 'Authorization code and code_verifier are required.' });
-  }
-
-  const DERIV_OAUTH_TOKEN_URL = 'https://auth.deriv.com/oauth2/token';
-  const CLIENT_ID = process.env.DERIV_CLIENT_ID || '349eTg55tt6ZVaefjBIAH';
-  const REDIRECT_URI = process.env.DERIV_REDIRECT_URI || 'https://mwathe-trade-systems.vercel.app/callback';
-
-  try {
-    const payload = new URLSearchParams({
-      grant_type: 'authorization_code',
-      client_id: CLIENT_ID,
-      code: code,
-      code_verifier: codeVerifier,
-      redirect_uri: REDIRECT_URI
-    });
-
-    const response = await fetch(DERIV_OAUTH_TOKEN_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: payload.toString()
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      return res.status(response.status).json(data);
+    if (req.method !== 'POST') {
+        return res.status(405).json({ error: 'Method not allowed' });
     }
 
-    return res.status(200).json(data);
-  } catch (err) {
-    return res.status(500).json({ error: 'Server error during token exchange: ' + err.message });
-  }
+    const { code, codeVerifier, redirectUri } = req.body;
+
+    try {
+        const response = await fetch('https://auth.deriv.com/oauth2/token', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({
+                grant_type: 'authorization_code',
+                client_id: process.env.DERIV_CLIENT_ID || '349eTg55tt6ZVaefjBIAH',
+                code: code,
+                redirect_uri: redirectUri || 'https://mwathe-trade-systems.vercel.app/callback',
+                code_verifier: codeVerifier
+            })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            return res.status(response.status).json({ error: data.error_description || data.error || 'Failed to exchange token' });
+        }
+
+        return res.status(200).json(data);
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
 }
