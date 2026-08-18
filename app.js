@@ -34,8 +34,9 @@ async function redirectToDerivLogin() {
         sessionStorage.setItem('code_verifier', verifier);
 
         const challenge = await generateCodeChallenge(verifier);
-        const authUrl = `https://auth.deriv.com/oauth2/authorize?` +
-            `client_id=${CLIENT_ID}&` +
+        // Corrected URL: oauth.deriv.com
+        const authUrl = `https://oauth.deriv.com/oauth2/authorize?` +
+            `app_id=${CLIENT_ID}&` +
             `redirect_uri=${encodeURIComponent(REDIRECT_URI)}&` +
             `code_challenge=${challenge}&` +
             `code_challenge_method=S256`;
@@ -138,23 +139,10 @@ function initializeTradingSocket(wsUrl) {
 
 // Attach Event Listeners on Load
 document.addEventListener("DOMContentLoaded", () => {
-    // Bind by ID or button text fallback
     const btnLogin = document.getElementById("btn-login");
     if (btnLogin) {
         btnLogin.addEventListener("click", redirectToDerivLogin);
     }
-
-    // Fallback: search for any button containing "Get Started" or "Login"
-    const buttons = document.querySelectorAll("button, a");
-    buttons.forEach((btn) => {
-        const txt = btn.innerText.trim().toLowerCase();
-        if (txt.includes("get started") || txt.includes("login")) {
-            btn.addEventListener("click", (e) => {
-                e.preventDefault();
-                redirectToDerivLogin();
-            });
-        }
-    });
 
     handleOAuthCallback();
 });
