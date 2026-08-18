@@ -1,15 +1,14 @@
 const CLIENT_ID = "349eTg55tt6ZVaefjBIAH";
-// Strict URL matching: protocol, domain, path, no trailing slash
-const REDIRECT_URI = "https://mwathe-trade-systems.vercel.app/callback";
+const REDIRECT_URI = "https://mwathe-trade-systems.vercel.app";
 
-// --- Screen Router ---
+// --- Screen Navigation Router ---
 function showScreen(screenId) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     const target = document.getElementById(screenId);
     if (target) target.classList.add('active');
 }
 
-// --- PKCE Code Helpers ---
+// --- PKCE Helpers ---
 function generateCodeVerifier() {
     const array = new Uint8Array(32);
     window.crypto.getRandomValues(array);
@@ -37,7 +36,6 @@ async function loginToDeriv() {
 
         const challenge = await generateCodeChallenge(verifier);
         
-        // Endpoint: https://auth.deriv.com/oauth2/auth
         const authUrl = `https://auth.deriv.com/oauth2/auth?` +
             `response_type=code&` +
             `client_id=${CLIENT_ID}&` +
@@ -52,7 +50,7 @@ async function loginToDeriv() {
     }
 }
 
-// --- Direct Token Authentication (Option A) ---
+// --- Direct Token Authentication ---
 function connectWithToken() {
     const tokenInput = document.getElementById("api-token-input");
     const connectBtn = document.getElementById("btn-connect-token");
@@ -71,7 +69,7 @@ function connectWithToken() {
     initializeSocketWithToken(token, connectBtn);
 }
 
-// --- WebSocket Balance & Account Session ---
+// --- WebSocket Connection ---
 function initializeSocketWithToken(token, buttonEl = null) {
     const wsUrl = `wss://ws.derivws.com/websockets/v3?app_id=1089`;
     const socket = new WebSocket(wsUrl);
@@ -135,7 +133,7 @@ function initializeSocketWithToken(token, buttonEl = null) {
     };
 }
 
-// --- Exchange Code via Serverless API Token Endpoint ---
+// --- Handle OAuth Code Return directly on Home Page ---
 async function handleOAuthReturn() {
     const urlParams = new URLSearchParams(window.location.search);
     const code = urlParams.get('code');
@@ -154,7 +152,6 @@ async function handleOAuthReturn() {
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || "Token exchange failed");
 
-            // Initialize connection with returned access token
             initializeSocketWithToken(data.access_token);
         } catch (err) {
             alert("OAuth Exchange Error: " + err.message);
@@ -162,7 +159,7 @@ async function handleOAuthReturn() {
     }
 }
 
-// Attach UI Listeners
+// Attach UI Event Handlers
 document.addEventListener("DOMContentLoaded", () => {
     const btnGotoNav = document.getElementById("btn-goto-nav");
     if (btnGotoNav) btnGotoNav.onclick = () => showScreen('navigation-screen');
