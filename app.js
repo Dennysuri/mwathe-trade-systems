@@ -171,13 +171,21 @@ async function handleOAuthReturn() {
                 body: JSON.stringify({ code, codeVerifier, redirectUri: REDIRECT_URI })
             });
 
-            const data = await res.json();
+            // Safely parse text first to check for HTML error responses
+            const textResponse = await res.text();
+            let data;
+            try {
+                data = JSON.parse(textResponse);
+            } catch (e) {
+                throw new Error("Server returned non-JSON response (404/500 page).");
+            }
+
             if (!res.ok) throw new Error(data.error || "Token exchange failed");
 
-            const wsToken = data.ws_token;
-            if (!wsToken) throw new Error("No WebSocket token returned from backend");
+            const accessToken = data.access_token;
+            if (!accessToken) throw new Error("No access token returned from backend");
 
-            initializeSocketWithToken(wsToken);
+            initializeSocketWithToken(accessToken);
         } catch (err) {
             alert("OAuth Exchange Error: " + err.message);
         }

@@ -1,16 +1,18 @@
 export default async function handler(req, res) {
+    // Force JSON content type header
+    res.setHeader('Content-Type', 'application/json');
+
     if (req.method !== 'POST') {
         return res.status(405).json({ error: 'Method not allowed' });
     }
 
-    const { code, codeVerifier, redirectUri } = req.body;
+    const { code, codeVerifier, redirectUri } = req.body || {};
 
     if (!code || !codeVerifier) {
         return res.status(400).json({ error: 'Missing code or code verifier' });
     }
 
     try {
-        // 1. Exchange PKCE authorization code for OAuth JWT access_token
         const bodyParams = new URLSearchParams({
             grant_type: 'authorization_code',
             client_id: '349eTg55tt6ZVaefjBIAH',
@@ -25,7 +27,7 @@ export default async function handler(req, res) {
             body: bodyParams.toString()
         });
 
-        const tokenData = await tokenRes.json();
+        const tokenData = await tokenRes.json().catch(() => ({ error: 'Invalid JSON from auth server' }));
 
         if (!tokenRes.ok) {
             return res.status(tokenRes.status).json({
@@ -36,25 +38,12 @@ export default async function handler(req, res) {
 
         const accessToken = tokenData.access_token;
         if (!accessToken) {
-            return res.status(500).json({ error: 'No access token in payload', raw: tokenData });
+            return res.status(500).json({ error: 'No access token received from Deriv', raw: tokenData });
         }
 
-        // 2. Fetch WebSocket OTP using the OAuth JWT access_token
-        const otpRes = await fetch('https://api.deriv.com/trading/v1/options/accounts/me/otp', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${accessToken}`,
-                'Content-Type': 'application/json'
-            }
-        });
-
-        const otpData = await otpRes.json();
-
-        // If OTP endpoint returns valid token/otp, pass it to frontend
-        const wsToken = otpData.otp || otpData.token || accessToken;
-
-        return res.status(200).json({ ws_token: wsToken });
+        // Return the access token directly to the client
+        return res.status(200).json({ access_token: accessToken });
     } catch (err) {
-        return res.status(500).json({ error: err.message });
+        return res.status(500).json({ error: err.message || 'Internal server error' });
     }
 }
