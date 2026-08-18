@@ -28,17 +28,23 @@ async function generateCodeChallenge(verifier) {
 // --- OAuth Trigger ---
 
 async function redirectToDerivLogin() {
-    const verifier = generateCodeVerifier();
-    sessionStorage.setItem('code_verifier', verifier);
+    console.log("Redirecting to Deriv OAuth...");
+    try {
+        const verifier = generateCodeVerifier();
+        sessionStorage.setItem('code_verifier', verifier);
 
-    const challenge = await generateCodeChallenge(verifier);
-    const authUrl = `https://auth.deriv.com/oauth2/authorize?` +
-        `client_id=${CLIENT_ID}&` +
-        `redirect_uri=${encodeURIComponent(REDIRECT_URI)}&` +
-        `code_challenge=${challenge}&` +
-        `code_challenge_method=S256`;
+        const challenge = await generateCodeChallenge(verifier);
+        const authUrl = `https://auth.deriv.com/oauth2/authorize?` +
+            `client_id=${CLIENT_ID}&` +
+            `redirect_uri=${encodeURIComponent(REDIRECT_URI)}&` +
+            `code_challenge=${challenge}&` +
+            `code_challenge_method=S256`;
 
-    window.location.href = authUrl;
+        window.location.href = authUrl;
+    } catch (err) {
+        console.error("Error building OAuth URL:", err);
+        alert("Failed to start login flow: " + err.message);
+    }
 }
 
 // --- Token Exchange via Vercel Serverless Endpoint ---
@@ -64,7 +70,7 @@ async function handleOAuthCallback() {
     const urlParams = new URLSearchParams(window.location.search);
     const code = urlParams.get('code');
 
-    if (!code) return; // No callback code found, standard app load
+    if (!code) return;
 
     const codeVerifier = sessionStorage.getItem('code_verifier');
     if (!codeVerifier) {
@@ -72,7 +78,6 @@ async function handleOAuthCallback() {
         return;
     }
 
-    // Clean URL query parameters from browser address bar
     window.history.replaceState({}, document.title, window.location.pathname);
 
     try {
@@ -80,7 +85,6 @@ async function handleOAuthCallback() {
         const tokenData = await exchangeOAuthCode(code, codeVerifier);
         const accessToken = tokenData.access_token;
 
-        // Fetch User Accounts
         const accountsRes = await fetch(`${REST_BASE}/accounts`, {
             headers: {
                 "Deriv-App-ID": CLIENT_ID,
@@ -90,7 +94,6 @@ async function handleOAuthCallback() {
         const accounts = await accountsRes.json();
         const demoAccount = accounts.find(acc => acc.type === 'demo') || accounts[0];
 
-        // Fetch WebSocket OTP
         const otpRes = await fetch(`${REST_BASE}/accounts/${demoAccount.id}/otp`, {
             method: "POST",
             headers: {
@@ -100,7 +103,6 @@ async function handleOAuthCallback() {
         });
         const otpData = await otpRes.json();
 
-        // Launch WebSocket Engine Connection
         initializeTradingSocket(otpData.url);
 
     } catch (err) {
@@ -115,15 +117,17 @@ function initializeTradingSocket(wsUrl) {
 
     socket.onopen = () => {
         console.log("WebSocket connected. Initializing Trading Engine...");
-        engineInstance = new DerivTradingEngine(socket);
+        if (typeof DerivTradingEngine !== 'undefined') {
+            engineInstance = new DerivTradingEngine(socket);
+        }
 
         const btnStart = document.getElementById("btn-start-bot");
         const btnStop = document.getElementById("btn-stop-bot");
         const btnLogin = document.getElementById("btn-login");
 
         if (btnLogin) btnLogin.style.display = "none";
-        if (btnStart) btnStart.onclick = () => engineInstance.startEngine();
-        if (btnStop) btnStop.onclick = () => engineInstance.stopEngine("User manual stop");
+        if (btnStart) btnStart.onclick = () => engineInstance && engineInstance.startEngine();
+        if (btnStop) btnStop.onclick = () => engineInstance && engineInstance.stopEngine("User manual stop");
     };
 
     socket.onerror = (err) => console.error("WS Error:", err);
@@ -132,11 +136,25 @@ function initializeTradingSocket(wsUrl) {
     };
 }
 
-// Initialize on page load
+// Attach Event Listeners on Load
 document.addEventListener("DOMContentLoaded", () => {
+    // Bind by ID or button text fallback
     const btnLogin = document.getElementById("btn-login");
-    if (btnLogin) btnLogin.onclick = redirectToDerivLogin;
+    if (btnLogin) {
+        btnLogin.addEventListener("click", redirectToDerivLogin);
+    }
 
-    // Check if returning from Deriv OAuth redirect
+    // Fallback: search for any button containing "Get Started" or "Login"
+    const buttons = document.querySelectorAll("button, a");
+    buttons.forEach((btn) => {
+        const txt = btn.innerText.trim().toLowerCase();
+        if (txt.includes("get started") || txt.includes("login")) {
+            btn.addEventListener("click", (e) => {
+                e.preventDefault();
+                redirectToDerivLogin();
+            });
+        }
+    });
+
     handleOAuthCallback();
 });
