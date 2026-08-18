@@ -72,10 +72,10 @@ function connectWithToken() {
         connectBtn.disabled = true;
     }
 
-    initializeSocketWithToken(token, connectBtn);
+    initializeSocketWithToken(token, null, connectBtn);
 }
 
-function initializeSocketWithToken(token, buttonEl = null) {
+function initializeSocketWithToken(token, customWsUrl = null, buttonEl = null) {
     if (!token || typeof token !== 'string') {
         alert("Invalid access token.");
         if (buttonEl) {
@@ -85,8 +85,7 @@ function initializeSocketWithToken(token, buttonEl = null) {
         return;
     }
 
-    // Pass CLIENT_ID as app_id query parameter required by the WS handshake
-    const wsUrl = `wss://ws.derivws.com/websockets/v3?app_id=${CLIENT_ID}`;
+    const wsUrl = customWsUrl || `wss://ws.derivws.com/websockets/v3?app_id=1089`;
     const socket = new WebSocket(wsUrl);
 
     const timeout = setTimeout(() => {
@@ -183,9 +182,11 @@ async function handleOAuthReturn() {
             if (!res.ok) throw new Error(data.error || "Token exchange failed");
 
             const accessToken = data.access_token;
+            const wsUrl = data.websocket_url;
+
             if (!accessToken) throw new Error("No access token returned from backend");
 
-            initializeSocketWithToken(accessToken);
+            initializeSocketWithToken(accessToken, wsUrl);
         } catch (err) {
             alert("OAuth Exchange Error: " + err.message);
         }
