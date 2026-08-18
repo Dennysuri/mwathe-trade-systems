@@ -8,9 +8,16 @@ function showScreen(screenId) {
     if (target) target.classList.add('active');
 }
 
-// --- PKCE & State Helpers ---
-function generateRandomString(length = 32) {
-    const array = new Uint8Array(length);
+// --- Hex Generator for URL-Safe State ---
+function generateHexState(length = 32) {
+    const array = new Uint8Array(length / 2);
+    window.crypto.getRandomValues(array);
+    return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+// --- PKCE Code Helpers ---
+function generateCodeVerifier() {
+    const array = new Uint8Array(32);
     window.crypto.getRandomValues(array);
     return btoa(String.fromCharCode.apply(null, array))
         .replace(/\+/g, '-')
@@ -31,9 +38,9 @@ async function generateCodeChallenge(verifier) {
 // --- Deriv OAuth Redirect ---
 async function loginToDeriv() {
     try {
-        const verifier = generateRandomString(32);
-        // Generate a random state string (16 chars minimum requirement)
-        const state = generateRandomString(16);
+        const verifier = generateCodeVerifier();
+        // Generate a 32-character pure hex string (guaranteed URL-safe, high entropy)
+        const state = generateHexState(32);
 
         sessionStorage.setItem('code_verifier', verifier);
         sessionStorage.setItem('oauth_state', state);
@@ -46,7 +53,7 @@ async function loginToDeriv() {
             `redirect_uri=${encodeURIComponent(REDIRECT_URI)}&` +
             `code_challenge=${challenge}&` +
             `code_challenge_method=S256&` +
-            `state=${state}&` +
+            `state=${encodeURIComponent(state)}&` +
             `scope=trade+account_manage`;
 
         window.location.href = authUrl;
