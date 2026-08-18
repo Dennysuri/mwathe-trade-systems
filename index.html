@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Mwathe Trade Systems</title>
 
-    <!-- Browser Favicon / App Icon (SVG) -->
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%230f172a'/><path d='M20 70 L35 45 L50 55 L65 30 L80 40' stroke='%2322c55e' stroke-width='6' fill='none' stroke-linecap='round'/><line x1='35' y1='35' x2='35' y2='60' stroke='%2338bdf8' stroke-width='2'/><line x1='65' y1='20' x2='65' y2='45' stroke='%2338bdf8' stroke-width='2'/><path d='M25 75 L40 35 L50 52 L60 35 L75 75' stroke='%23f97316' stroke-width='5' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
+    <!-- App Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%230f172a'/><path d='M20 70 L35 45 L50 55 L65 30 L80 40' stroke='%2322c55e' stroke-width='6' fill='none'/><path d='M25 75 L40 35 L50 52 L60 35 L75 75' stroke='%23f97316' stroke-width='5' fill='none'/></svg>">
 
     <style>
         :root {
@@ -14,8 +14,8 @@
             --card-bg: #111827;
             --text-primary: #f9fafb;
             --text-secondary: #9ca3af;
-            --accent-green: #22c55e;
             --accent-orange: #f97316;
+            --accent-green: #22c55e;
             --accent-blue: #38bdf8;
         }
 
@@ -23,129 +23,293 @@
             box-sizing: border-box;
             margin: 0;
             padding: 0;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
         }
 
         body {
             background-color: var(--bg-color);
             color: var(--text-primary);
             min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            justify-content: space-between;
-            align-items: center;
+        }
+
+        .screen {
+            display: none;
+            min-height: 100vh;
             padding: 2rem 1.5rem;
+            flex-direction: column;
+            align-items: center;
         }
 
-        .container {
+        .screen.active {
+            display: flex;
+        }
+
+        /* ---------------- DASHBOARD ---------------- */
+        #dashboard-screen {
+            justify-content: space-between;
+            text-align: center;
+        }
+
+        .logo-container {
+            margin-top: auto;
+            margin-bottom: auto;
             display: flex;
             flex-direction: column;
             align-items: center;
-            text-align: center;
-            max-width: 480px;
-            width: 100%;
-            margin: auto;
         }
 
-        /* Dynamic Trading Logo */
-        .logo-wrapper {
-            position: relative;
-            width: 120px;
-            height: 120px;
-            margin-bottom: 1.5rem;
+        .brand-logo-large {
+            width: 150px;
+            height: 150px;
+            margin-bottom: 1rem;
+            filter: drop-shadow(0 0 25px rgba(34, 197, 94, 0.25));
         }
 
-        .logo-svg {
-            width: 100%;
-            height: 100%;
-            filter: drop-shadow(0 0 20px rgba(34, 197, 94, 0.35));
-        }
-
-        .brand-title {
-            font-size: 2rem;
-            font-weight: 800;
+        .brand-title-large {
+            font-size: 2.2rem;
+            font-weight: 900;
             letter-spacing: 2px;
-            background: linear-gradient(90deg, var(--accent-orange), var(--accent-blue));
+            background: linear-gradient(90deg, var(--accent-orange), var(--accent-green), var(--accent-blue));
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-            margin-bottom: 0.25rem;
+            margin-bottom: 0.5rem;
         }
 
-        .brand-subtitle {
-            font-size: 0.85rem;
-            letter-spacing: 4px;
-            color: var(--accent-blue);
-            text-transform: uppercase;
-            font-weight: 600;
-            margin-bottom: 1.5rem;
-        }
-
-        .description {
+        .power-statement {
             color: var(--text-secondary);
-            font-size: 0.95rem;
-            line-height: 1.6;
-            margin-bottom: 2rem;
+            font-size: 1rem;
+            line-height: 1.5;
+            max-width: 400px;
+            margin-top: 1rem;
         }
 
-        /* Action Button */
-        .btn-action {
+        .btn-bottom {
             width: 100%;
+            max-width: 400px;
             padding: 1rem;
             border: none;
             border-radius: 12px;
             background: linear-gradient(90deg, var(--accent-orange), var(--accent-green));
             color: #000;
-            font-weight: 700;
-            font-size: 1rem;
+            font-weight: 800;
+            font-size: 1.1rem;
             letter-spacing: 1px;
             cursor: pointer;
-            box-shadow: 0 4px 20px rgba(34, 197, 94, 0.3);
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            margin-top: auto;
         }
 
-        .btn-action:active {
-            transform: scale(0.98);
-            box-shadow: 0 2px 10px rgba(34, 197, 94, 0.2);
+        /* ---------------- NAVIGATION PAGE ---------------- */
+        #navigation-screen {
+            justify-content: center;
+            max-width: 450px;
+            margin: auto;
+            width: 100%;
+        }
+
+        .nav-title {
+            font-size: 1.5rem;
+            margin-bottom: 2rem;
+            color: var(--accent-blue);
+            text-align: center;
+        }
+
+        .auth-section {
+            background: var(--card-bg);
+            padding: 1.5rem;
+            border-radius: 12px;
+            width: 100%;
+            margin-bottom: 1.5rem;
+            border: 1px solid #1f2937;
+        }
+
+        .auth-section h3 {
+            font-size: 1rem;
+            margin-bottom: 1rem;
+            color: var(--text-primary);
+        }
+
+        .token-input {
+            width: 100%;
+            padding: 0.8rem;
+            border-radius: 8px;
+            border: 1px solid #374151;
+            background: #0b0f19;
+            color: #fff;
+            margin-bottom: 1rem;
+            font-size: 0.9rem;
+        }
+
+        .btn-connect {
+            width: 100%;
+            padding: 0.8rem;
+            border-radius: 8px;
+            border: none;
+            background: var(--accent-green);
+            color: #000;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .btn-deriv-login {
+            width: 100%;
+            padding: 0.8rem;
+            border-radius: 8px;
+            border: none;
+            background: var(--accent-orange);
+            color: #000;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .divider {
+            text-align: center;
+            margin: 1rem 0;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+        }
+
+        /* ---------------- TRADING PAGE ---------------- */
+        #trading-screen {
+            padding: 1rem;
+            width: 100%;
+        }
+
+        .top-bar {
+            width: 100%;
+            display: flex;
+            justify-content: flex-end;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid #1f2937;
+            margin-bottom: 1.5rem;
+        }
+
+        .balance-badge {
+            background: #1e293b;
+            padding: 0.6rem 1.2rem;
+            border-radius: 20px;
+            border: 1px solid var(--accent-green);
+            font-weight: 700;
+            color: var(--accent-green);
+            font-size: 1.1rem;
+        }
+
+        .menu-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 1rem;
+            width: 100%;
+            max-width: 500px;
+            margin: 0 auto;
+        }
+
+        .menu-item {
+            background: var(--card-bg);
+            padding: 1.2rem;
+            border-radius: 10px;
+            border: 1px solid #1f2937;
+            font-weight: 600;
+            font-size: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+        }
+
+        .menu-item.locked {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .lock-icon {
+            font-size: 0.85rem;
+            color: var(--accent-orange);
         }
     </style>
 </head>
 <body>
 
-    <div class="container">
-        <!-- Modern Trading M Logo -->
-        <div class="logo-wrapper">
-            <svg class="logo-svg" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <!-- Outer Glow Container -->
+    <!-- SCREEN 1: DASHBOARD -->
+    <div id="dashboard-screen" class="screen active">
+        <div class="logo-container">
+            <svg class="brand-logo-large" viewBox="0 0 100 100" fill="none">
                 <rect width="100" height="100" rx="24" fill="#131d31" stroke="#1e293b" stroke-width="2"/>
-                
-                <!-- Candlestick Wicks -->
                 <line x1="30" y1="20" x2="30" y2="80" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="2 2"/>
                 <line x1="50" y1="15" x2="50" y2="85" stroke="#22c55e" stroke-width="1.5" stroke-dasharray="2 2"/>
                 <line x1="70" y1="25" x2="70" y2="75" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="2 2"/>
-
-                <!-- Chart Trend Overlay -->
-                <path d="M 15 65 L 35 40 L 50 55 L 68 25 L 85 35" stroke="#22c55e" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-                
-                <!-- Bold "M" Trading Structure -->
-                <path d="M 22 75 L 38 32 L 50 52 L 62 32 L 78 75" stroke="#f97316" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-
-                <!-- Pulse Dot -->
-                <circle cx="68" cy="25" r="4" fill="#22c55e"/>
+                <path d="M 15 65 L 35 40 L 50 55 L 68 25 L 85 35" stroke="#22c55e" stroke-width="3" stroke-linecap="round"/>
+                <path d="M 22 75 L 38 32 L 50 52 L 62 32 L 78 75" stroke="#f97316" stroke-width="6" stroke-linecap="round"/>
             </svg>
+            <h1 class="brand-title-large">MWATHE TRADE SYSTEMS</h1>
+            <p class="power-statement">
+                High-frequency algorithmic execution hub powered by real-time Markov probability state validation and automated volatility routing.
+            </p>
         </div>
 
-        <h1 class="brand-title">MWATHE</h1>
-        <div class="brand-subtitle">TRADE SYSTEMS</div>
-
-        <p class="description">
-            Next-generation algorithmic trading hub powered by 5th-order Markov probability state validation, real-time Shannon Entropy analysis, and sub-millisecond execution engines.
-        </p>
-
-        <!-- Properly Bound Target Button -->
-        <button id="btn-login" class="btn-action">GET STARTED &rarr;</button>
+        <button id="btn-goto-nav" class="btn-bottom">GET STARTED &rarr;</button>
     </div>
 
-    <!-- Script loading at bottom of body to ensure DOM ready -->
+    <!-- SCREEN 2: NAVIGATION PAGE -->
+    <div id="navigation-screen" class="screen">
+        <h2 class="nav-title">Select Authentication</h2>
+
+        <!-- Option 1: API Token -->
+        <div class="auth-section">
+            <h3>Option A: Enter API Token</h3>
+            <input type="text" id="api-token-input" class="token-input" placeholder="Paste Demo or Live API Token...">
+            <button id="btn-connect-token" class="btn-connect">Connect API</button>
+        </div>
+
+        <div class="divider">--- OR ---</div>
+
+        <!-- Option 2: OAuth Login -->
+        <div class="auth-section">
+            <h3>Option B: Deriv OAuth</h3>
+            <button id="btn-login-deriv" class="btn-deriv-login">Login to Deriv</button>
+        </div>
+    </div>
+
+    <!-- SCREEN 3: TRADING PAGE -->
+    <div id="trading-screen" class="screen">
+        <!-- Account Balance Top Right Bar -->
+        <div class="top-bar">
+            <div class="balance-badge">
+                Balance: $<span id="account-balance">0.00</span>
+            </div>
+        </div>
+
+        <!-- System Menu -->
+        <div class="menu-grid">
+            <div class="menu-item" id="menu-analysis">
+                <span>Analysis Tool</span>
+                <span>&rarr;</span>
+            </div>
+            <div class="menu-item locked" id="menu-signals">
+                <span>Signals</span>
+                <span class="lock-icon">🔒 Locked (Run Analysis First)</span>
+            </div>
+            <div class="menu-item">
+                <span>Denny Bots</span>
+                <span>&rarr;</span>
+            </div>
+            <div class="menu-item">
+                <span>Automated Trading Bot</span>
+                <span>&rarr;</span>
+            </div>
+            <div class="menu-item">
+                <span>The AutoD AI</span>
+                <span>&rarr;</span>
+            </div>
+            <div class="menu-item">
+                <span>Settings</span>
+                <span>&rarr;</span>
+            </div>
+            <div class="menu-item">
+                <span>Admin Panel</span>
+                <span>&rarr;</span>
+            </div>
+        </div>
+    </div>
+
     <script src="app.js"></script>
 </body>
 </html>

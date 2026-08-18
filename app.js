@@ -1,148 +1,89 @@
-const REST_BASE = "https://api.derivws.com/trading/v1/options";
 const CLIENT_ID = "349eTg55tt6ZVaefjBIAH";
 const REDIRECT_URI = "https://mwathe-trade-systems.vercel.app/callback";
 
-let engineInstance = null;
-
-// --- PKCE Helpers ---
-
-function generateCodeVerifier() {
-    const array = new Uint8Array(32);
-    window.crypto.getRandomValues(array);
-    return btoa(String.fromCharCode.apply(null, array))
-        .replace(/\+/g, '-')
-        .replace(/\//g, '_')
-        .replace(/=+$/, '');
+// --- Screen Navigation Engine ---
+function showScreen(screenId) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    const target = document.getElementById(screenId);
+    if (target) target.classList.add('active');
 }
 
-async function generateCodeChallenge(verifier) {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(verifier);
-    const digest = await window.crypto.subtle.digest('SHA-256', data);
-    return btoa(String.fromCharCode.apply(null, new Uint8Array(digest)))
-        .replace(/\+/g, '-')
-        .replace(/\//g, '_')
-        .replace(/=+$/, '');
+// --- Deriv OAuth Redirect ---
+function loginToDeriv() {
+    const authUrl = `https://oauth.deriv.com/oauth2/authorize?` +
+        `app_id=${CLIENT_ID}&` +
+        `redirect_uri=${encodeURIComponent(REDIRECT_URI)}`;
+    window.location.href = authUrl;
 }
 
-// --- OAuth Trigger ---
-
-async function redirectToDerivLogin() {
-    console.log("Redirecting to Deriv OAuth...");
-    try {
-        const verifier = generateCodeVerifier();
-        sessionStorage.setItem('code_verifier', verifier);
-
-        const challenge = await generateCodeChallenge(verifier);
-        // Corrected URL: oauth.deriv.com
-        const authUrl = `https://oauth.deriv.com/oauth2/authorize?` +
-            `app_id=${CLIENT_ID}&` +
-            `redirect_uri=${encodeURIComponent(REDIRECT_URI)}&` +
-            `code_challenge=${challenge}&` +
-            `code_challenge_method=S256`;
-
-        window.location.href = authUrl;
-    } catch (err) {
-        console.error("Error building OAuth URL:", err);
-        alert("Failed to start login flow: " + err.message);
-    }
-}
-
-// --- Token Exchange via Vercel Serverless Endpoint ---
-
-async function exchangeOAuthCode(code, codeVerifier) {
-    const res = await fetch('/api/oauth-token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, codeVerifier })
-    });
-
-    if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'OAuth exchange failed');
-    }
-
-    return await res.json();
-}
-
-// --- Full Handshake Flow ---
-
-async function handleOAuthCallback() {
-    const urlParams = new URLSearchParams(window.location.search);
-    const code = urlParams.get('code');
-
-    if (!code) return;
-
-    const codeVerifier = sessionStorage.getItem('code_verifier');
-    if (!codeVerifier) {
-        console.error("Missing PKCE code_verifier in session storage.");
+// --- Connect via API Token ---
+function connectWithToken() {
+    const token = document.getElementById("api-token-input").value.trim();
+    if (!token) {
+        alert("Please enter a valid API token.");
         return;
     }
-
-    window.history.replaceState({}, document.title, window.location.pathname);
-
-    try {
-        console.log("Exchanging auth code for access token...");
-        const tokenData = await exchangeOAuthCode(code, codeVerifier);
-        const accessToken = tokenData.access_token;
-
-        const accountsRes = await fetch(`${REST_BASE}/accounts`, {
-            headers: {
-                "Deriv-App-ID": CLIENT_ID,
-                "Authorization": `Bearer ${accessToken}`
-            }
-        });
-        const accounts = await accountsRes.json();
-        const demoAccount = accounts.find(acc => acc.type === 'demo') || accounts[0];
-
-        const otpRes = await fetch(`${REST_BASE}/accounts/${demoAccount.id}/otp`, {
-            method: "POST",
-            headers: {
-                "Deriv-App-ID": CLIENT_ID,
-                "Authorization": `Bearer ${accessToken}`
-            }
-        });
-        const otpData = await otpRes.json();
-
-        initializeTradingSocket(otpData.url);
-
-    } catch (err) {
-        console.error("Auth Handshake Failed:", err.message);
-    }
+    
+    // Connect WebSocket using raw token
+    initializeSocketWithToken(token);
 }
 
-// --- Engine Instantiation ---
-
-function initializeTradingSocket(wsUrl) {
-    const socket = new WebSocket(wsUrl);
+// --- WebSocket Balance Stream ---
+function initializeSocketWithToken(token) {
+    const socket = new WebSocket("wss://ws.derivws.com/websockets/v3?app_id=" + CLIENT_ID);
 
     socket.onopen = () => {
-        console.log("WebSocket connected. Initializing Trading Engine...");
-        if (typeof DerivTradingEngine !== 'undefined') {
-            engineInstance = new DerivTradingEngine(socket);
-        }
-
-        const btnStart = document.getElementById("btn-start-bot");
-        const btnStop = document.getElementById("btn-stop-bot");
-        const btnLogin = document.getElementById("btn-login");
-
-        if (btnLogin) btnLogin.style.display = "none";
-        if (btnStart) btnStart.onclick = () => engineInstance && engineInstance.startEngine();
-        if (btnStop) btnStop.onclick = () => engineInstance && engineInstance.stopEngine("User manual stop");
+        // Authorize session
+        socket.send(JSON.stringify({ authorize: token }));
     };
 
-    socket.onerror = (err) => console.error("WS Error:", err);
-    socket.onclose = () => {
-        if (engineInstance) engineInstance.stopEngine("WebSocket Disconnected");
+    socket.onmessage = (msg) => {
+        const data = JSON.parse(msg.data);
+
+        if (data.msg_type === 'authorize') {
+            if (data.error) {
+                alert("Connection failed: " + data.error.message);
+                return;
+            }
+            
+            // On successful authorization, switch directly to Trading Page
+            showScreen('trading-screen');
+            document.getElementById('account-balance').innerText = parseFloat(data.authorize.balance).toFixed(2);
+
+            // Subscribe to real-time balance changes
+            socket.send(JSON.stringify({ balance: 1, subscribe: 1 }));
+        }
+
+        if (data.msg_type === 'balance') {
+            if (data.balance) {
+                document.getElementById('account-balance').innerText = parseFloat(data.balance.balance).toFixed(2);
+            }
+        }
     };
 }
 
-// Attach Event Listeners on Load
-document.addEventListener("DOMContentLoaded", () => {
-    const btnLogin = document.getElementById("btn-login");
-    if (btnLogin) {
-        btnLogin.addEventListener("click", redirectToDerivLogin);
-    }
+// --- OAuth Return Callback Handler ---
+function handleOAuthReturn() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const token1 = urlParams.get('token1');
 
-    handleOAuthCallback();
+    if (token1) {
+        // Clean URL bar parameters
+        window.history.replaceState({}, document.title, window.location.pathname);
+        // Directly connect and switch to Trading Page
+        initializeSocketWithToken(token1);
+    }
+}
+
+// Attach Event Handlers
+document.addEventListener("DOMContentLoaded", () => {
+    // 1. Dashboard "Get Started" moves to Navigation Page
+    document.getElementById("btn-goto-nav").onclick = () => showScreen('navigation-screen');
+
+    // 2. Navigation Page Actions
+    document.getElementById("btn-connect-token").onclick = connectWithToken;
+    document.getElementById("btn-login-deriv").onclick = loginToDeriv;
+
+    // Check if returning from OAuth
+    handleOAuthReturn();
 });
