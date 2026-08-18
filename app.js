@@ -1,5 +1,4 @@
 const CLIENT_ID = "349eTg55tt6ZVaefjBIAH";
-// Include the trailing slash to match the Deriv portal setting exactly
 const REDIRECT_URI = "https://mwathe-trade-systems.vercel.app/";
 
 // --- Navigation Router ---
@@ -9,9 +8,9 @@ function showScreen(screenId) {
     if (target) target.classList.add('active');
 }
 
-// --- PKCE Code Helpers ---
-function generateCodeVerifier() {
-    const array = new Uint8Array(32);
+// --- PKCE & State Helpers ---
+function generateRandomString(length = 32) {
+    const array = new Uint8Array(length);
     window.crypto.getRandomValues(array);
     return btoa(String.fromCharCode.apply(null, array))
         .replace(/\+/g, '-')
@@ -32,8 +31,12 @@ async function generateCodeChallenge(verifier) {
 // --- Deriv OAuth Redirect ---
 async function loginToDeriv() {
     try {
-        const verifier = generateCodeVerifier();
+        const verifier = generateRandomString(32);
+        // Generate a random state string (16 chars minimum requirement)
+        const state = generateRandomString(16);
+
         sessionStorage.setItem('code_verifier', verifier);
+        sessionStorage.setItem('oauth_state', state);
 
         const challenge = await generateCodeChallenge(verifier);
         
@@ -43,6 +46,7 @@ async function loginToDeriv() {
             `redirect_uri=${encodeURIComponent(REDIRECT_URI)}&` +
             `code_challenge=${challenge}&` +
             `code_challenge_method=S256&` +
+            `state=${state}&` +
             `scope=trade+account_manage`;
 
         window.location.href = authUrl;
@@ -138,8 +142,15 @@ function initializeSocketWithToken(token, buttonEl = null) {
 async function handleOAuthReturn() {
     const urlParams = new URLSearchParams(window.location.search);
     const code = urlParams.get('code');
+    const returnedState = urlParams.get('state');
 
     if (code) {
+        const storedState = sessionStorage.getItem('oauth_state');
+        if (returnedState && storedState && returnedState !== storedState) {
+            alert("Security Error: Invalid state parameter (CSRF detected)");
+            return;
+        }
+
         const codeVerifier = sessionStorage.getItem('code_verifier');
         window.history.replaceState({}, document.title, window.location.pathname);
 
