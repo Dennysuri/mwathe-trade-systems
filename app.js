@@ -1,59 +1,60 @@
-// Set your numeric Deriv App ID registered on developers.deriv.com
-const APP_ID = "63749"; // Replace with your numeric App ID if different
+const CLIENT_ID = "349eTg55tt6ZVaefjBIAH";
 const REDIRECT_URI = window.location.origin + window.location.pathname;
 
-// --- Screen Router ---
+// --- Navigation Router ---
 function showScreen(screenId) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     const target = document.getElementById(screenId);
     if (target) target.classList.add('active');
 }
 
-// --- Deriv OAuth Flow ---
+// --- Deriv Modern OAuth Redirect ---
 function loginToDeriv() {
-    const authUrl = `https://oauth.deriv.com/oauth2/authorize?app_id=${APP_ID}&l=EN&brand=deriv`;
+    // Current Deriv OAuth authorization endpoint structure
+    const authUrl = `https://auth.deriv.com/oauth2/auth?response_type=code&client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=trade+account_manage`;
     window.location.href = authUrl;
 }
 
-// --- Direct Token Authentication ---
+// --- Manual API Token Authentication ---
 function connectWithToken() {
     const tokenInput = document.getElementById("api-token-input");
     const connectBtn = document.getElementById("btn-connect-token");
     const token = tokenInput ? tokenInput.value.trim() : "";
 
     if (!token) {
-        alert("Please paste a valid API token first.");
+        alert("Please enter a valid API token.");
         return;
     }
 
-    connectBtn.innerText = "Connecting...";
-    connectBtn.disabled = true;
+    if (connectBtn) {
+        connectBtn.innerText = "Connecting...";
+        connectBtn.disabled = true;
+    }
 
     initializeSocketWithToken(token, connectBtn);
 }
 
-// --- Deriv WebSocket Connection Handler ---
+// --- Direct WebSocket Connection ---
 function initializeSocketWithToken(token, buttonEl = null) {
-    // Official WebSocket Server
-    const wsUrl = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`;
+    // Standard persistent WebSocket connection
+    const wsUrl = `wss://ws.derivws.com/websockets/v3?app_id=1089`; 
     const socket = new WebSocket(wsUrl);
 
-    // 10 second timeout check
-    const connectionTimeout = setTimeout(() => {
+    const timeout = setTimeout(() => {
         if (socket.readyState !== WebSocket.OPEN) {
             socket.close();
-            alert("Connection timed out. Check your internet connection.");
+            alert("Connection timed out. Check your token or network connection.");
             if (buttonEl) {
                 buttonEl.innerText = "Connect API";
                 buttonEl.disabled = false;
             }
         }
-    }, 10000);
+    }, 8000);
 
     socket.onopen = () => {
-        clearTimeout(connectionTimeout);
+        clearTimeout(timeout);
         if (buttonEl) buttonEl.innerText = "Authorizing...";
-        // Send authorization payload
+        // Direct Authorization Payload
         socket.send(JSON.stringify({ authorize: token }));
     };
 
@@ -61,10 +62,9 @@ function initializeSocketWithToken(token, buttonEl = null) {
         try {
             const data = JSON.parse(msg.data);
 
-            // Response to authorization payload
             if (data.msg_type === 'authorize') {
                 if (data.error) {
-                    alert("Authorization failed: " + data.error.message);
+                    alert("API Connection Error: " + data.error.message);
                     if (buttonEl) {
                         buttonEl.innerText = "Connect API";
                         buttonEl.disabled = false;
@@ -73,20 +73,16 @@ function initializeSocketWithToken(token, buttonEl = null) {
                     return;
                 }
 
-                // Authentication Successful
-                if (buttonEl) {
-                    buttonEl.innerText = "Connected!";
-                }
-
+                if (buttonEl) buttonEl.innerText = "Connected!";
                 showScreen('trading-screen');
+
                 const bal = data.authorize.balance ? parseFloat(data.authorize.balance).toFixed(2) : "0.00";
                 document.getElementById('account-balance').innerText = bal;
 
-                // Subscribe to live balance updates
+                // Subscribe to live balance stream
                 socket.send(JSON.stringify({ balance: 1, subscribe: 1 }));
             }
 
-            // Streamed balance updates
             if (data.msg_type === 'balance' && data.balance) {
                 document.getElementById('account-balance').innerText = parseFloat(data.balance.balance).toFixed(2);
             }
@@ -96,33 +92,27 @@ function initializeSocketWithToken(token, buttonEl = null) {
     };
 
     socket.onerror = (err) => {
-        clearTimeout(connectionTimeout);
-        alert("WebSocket Connection Error. Verify network access.");
+        clearTimeout(timeout);
+        alert("WebSocket Connection Failed. Ensure your network permits WebSocket traffic.");
         if (buttonEl) {
             buttonEl.innerText = "Connect API";
             buttonEl.disabled = false;
         }
     };
-
-    socket.onclose = () => {
-        console.log("WebSocket connection closed.");
-    };
 }
 
-// --- Check for OAuth Return Tokens ---
+// --- Process Tokens from OAuth Return ---
 function handleOAuthReturn() {
     const urlParams = new URLSearchParams(window.location.search);
-    // Deriv OAuth returns tokens as token1, token2, etc., in query parameters
-    const token1 = urlParams.get('token1');
+    const token1 = urlParams.get('token1') || urlParams.get('code');
 
     if (token1) {
-        // Clean URL query string
         window.history.replaceState({}, document.title, window.location.pathname);
         initializeSocketWithToken(token1);
     }
 }
 
-// --- Attach UI Event Listeners ---
+// Attach Event Handlers
 document.addEventListener("DOMContentLoaded", () => {
     const btnGotoNav = document.getElementById("btn-goto-nav");
     if (btnGotoNav) btnGotoNav.onclick = () => showScreen('navigation-screen');
