@@ -85,7 +85,8 @@ function initializeSocketWithToken(token, buttonEl = null) {
         return;
     }
 
-    const wsUrl = `wss://ws.derivws.com/websockets/v3`;
+    // Pass CLIENT_ID as app_id query parameter required by the WS handshake
+    const wsUrl = `wss://ws.derivws.com/websockets/v3?app_id=${CLIENT_ID}`;
     const socket = new WebSocket(wsUrl);
 
     const timeout = setTimeout(() => {
@@ -171,13 +172,12 @@ async function handleOAuthReturn() {
                 body: JSON.stringify({ code, codeVerifier, redirectUri: REDIRECT_URI })
             });
 
-            // Safely parse text first to check for HTML error responses
             const textResponse = await res.text();
             let data;
             try {
                 data = JSON.parse(textResponse);
             } catch (e) {
-                throw new Error("Server returned non-JSON response (404/500 page).");
+                throw new Error("Server returned non-JSON response.");
             }
 
             if (!res.ok) throw new Error(data.error || "Token exchange failed");
