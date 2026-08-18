@@ -1,17 +1,18 @@
-export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+const express = require('express');
+const app = express();
 
+app.use(express.json());
+
+const DERIV_OAUTH_TOKEN_URL = 'https://auth.deriv.com/oauth2/token';
+const CLIENT_ID = process.env.DERIV_CLIENT_ID;
+const REDIRECT_URI = process.env.DERIV_REDIRECT_URI;
+
+app.post('/api/oauth/token', async (req, res) => {
   const { code, codeVerifier } = req.body;
 
   if (!code || !codeVerifier) {
     return res.status(400).json({ error: 'Authorization code and code_verifier are required.' });
   }
-
-  const DERIV_OAUTH_TOKEN_URL = 'https://auth.deriv.com/oauth2/token';
-  const CLIENT_ID = process.env.DERIV_CLIENT_ID || '349eTg55tt6ZVaefjBIAH';
-  const REDIRECT_URI = process.env.DERIV_REDIRECT_URI || 'https://mwathe-trade-systems.vercel.app/callback';
 
   try {
     const payload = new URLSearchParams({
@@ -24,7 +25,9 @@ export default async function handler(req, res) {
 
     const response = await fetch(DERIV_OAUTH_TOKEN_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
       body: payload.toString()
     });
 
@@ -34,8 +37,13 @@ export default async function handler(req, res) {
       return res.status(response.status).json(data);
     }
 
-    return res.status(200).json(data);
+    // Return access_token, expires_in, token_type to client
+    res.json(data);
+
   } catch (err) {
-    return res.status(500).json({ error: 'Server error during token exchange: ' + err.message });
+    res.status(500).json({ error: 'Server error during token exchange: ' + err.message });
   }
-}
+});
+
+app.listen(3000, () => console.log('Auth server running on port 3000'));
+
