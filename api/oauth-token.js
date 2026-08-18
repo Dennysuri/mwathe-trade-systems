@@ -6,7 +6,7 @@ export default async function handler(req, res) {
     const { code, codeVerifier, redirectUri } = req.body;
 
     if (!code || !codeVerifier) {
-        return res.status(400).json({ error: 'Missing required authorization code or verifier' });
+        return res.status(400).json({ error: 'Missing code or code verifier' });
     }
 
     try {
@@ -20,17 +20,14 @@ export default async function handler(req, res) {
 
         const response = await fetch('https://auth.deriv.com/oauth2/token', {
             method: 'POST',
-            headers: { 
-                'Content-Type': 'application/x-www-form-urlencoded' 
-            },
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
             body: bodyParams.toString()
         });
 
         const data = await response.json();
 
         if (!response.ok) {
-            console.error('Deriv token exchange error payload:', data);
-            return res.status(response.status).json({ 
+            return res.status(response.status).json({
                 error: data.error_description || data.error || 'Token exchange failed',
                 details: data
             });
@@ -38,7 +35,7 @@ export default async function handler(req, res) {
 
         const token = data.access_token || data.token;
         if (!token) {
-            return res.status(500).json({ error: 'No token in response', raw: data });
+            return res.status(500).json({ error: 'No access token in payload', raw: data });
         }
 
         return res.status(200).json({ access_token: token });

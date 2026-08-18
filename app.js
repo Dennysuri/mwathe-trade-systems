@@ -1,21 +1,18 @@
 const CLIENT_ID = "349eTg55tt6ZVaefjBIAH";
 const REDIRECT_URI = "https://mwathe-trade-systems.vercel.app/";
 
-// --- Screen Router ---
 function showScreen(screenId) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     const target = document.getElementById(screenId);
     if (target) target.classList.add('active');
 }
 
-// --- Hex Generator for URL-Safe State ---
 function generateHexState(length = 32) {
     const array = new Uint8Array(length / 2);
     window.crypto.getRandomValues(array);
     return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
-// --- PKCE Helpers ---
 function generateCodeVerifier() {
     const array = new Uint8Array(32);
     window.crypto.getRandomValues(array);
@@ -35,7 +32,6 @@ async function generateCodeChallenge(verifier) {
         .replace(/=+$/, '');
 }
 
-// --- Deriv OAuth Redirect ---
 async function loginToDeriv() {
     try {
         const verifier = generateCodeVerifier();
@@ -61,7 +57,6 @@ async function loginToDeriv() {
     }
 }
 
-// --- Direct Token Connect ---
 function connectWithToken() {
     const tokenInput = document.getElementById("api-token-input");
     const connectBtn = document.getElementById("btn-connect-token");
@@ -80,7 +75,6 @@ function connectWithToken() {
     initializeSocketWithToken(token, connectBtn);
 }
 
-// --- WebSocket Connection ---
 function initializeSocketWithToken(token, buttonEl = null) {
     if (!token || typeof token !== 'string') {
         alert("Invalid access token.");
@@ -91,7 +85,8 @@ function initializeSocketWithToken(token, buttonEl = null) {
         return;
     }
 
-    const wsUrl = `wss://ws.derivws.com/websockets/v3?app_id=1089`;
+    // Connect to WebSocket without falling back to legacy app_id hardcodes
+    const wsUrl = `wss://ws.derivws.com/websockets/v3`;
     const socket = new WebSocket(wsUrl);
 
     const timeout = setTimeout(() => {
@@ -127,8 +122,6 @@ function initializeSocketWithToken(token, buttonEl = null) {
                 }
 
                 if (buttonEl) buttonEl.innerText = "Connected!";
-                
-                // Show trading dashboard on valid authorization
                 showScreen('trading-screen');
 
                 const bal = data.authorize.balance ? parseFloat(data.authorize.balance).toFixed(2) : "0.00";
@@ -157,7 +150,6 @@ function initializeSocketWithToken(token, buttonEl = null) {
     };
 }
 
-// --- Exchange OAuth Return Code ---
 async function handleOAuthReturn() {
     const urlParams = new URLSearchParams(window.location.search);
     const code = urlParams.get('code');
@@ -166,7 +158,7 @@ async function handleOAuthReturn() {
     if (code) {
         const storedState = sessionStorage.getItem('oauth_state');
         if (returnedState && storedState && returnedState !== storedState) {
-            alert("Security Error: Invalid state parameter (CSRF detected)");
+            alert("Security Error: State parameter mismatch");
             return;
         }
 
@@ -184,7 +176,7 @@ async function handleOAuthReturn() {
             if (!res.ok) throw new Error(data.error || "Token exchange failed");
 
             const accessToken = data.access_token;
-            if (!accessToken) throw new Error("No token received from backend server");
+            if (!accessToken) throw new Error("No access token returned from backend");
 
             initializeSocketWithToken(accessToken);
         } catch (err) {
@@ -193,7 +185,6 @@ async function handleOAuthReturn() {
     }
 }
 
-// Attach UI Event Listeners
 document.addEventListener("DOMContentLoaded", () => {
     const btnGotoNav = document.getElementById("btn-goto-nav");
     if (btnGotoNav) btnGotoNav.onclick = () => showScreen('navigation-screen');
