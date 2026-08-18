@@ -85,7 +85,6 @@ function initializeSocketWithToken(token, buttonEl = null) {
         return;
     }
 
-    // Connect to WebSocket without falling back to legacy app_id hardcodes
     const wsUrl = `wss://ws.derivws.com/websockets/v3`;
     const socket = new WebSocket(wsUrl);
 
@@ -175,10 +174,10 @@ async function handleOAuthReturn() {
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || "Token exchange failed");
 
-            const accessToken = data.access_token;
-            if (!accessToken) throw new Error("No access token returned from backend");
+            const wsToken = data.ws_token;
+            if (!wsToken) throw new Error("No WebSocket token returned from backend");
 
-            initializeSocketWithToken(accessToken);
+            initializeSocketWithToken(wsToken);
         } catch (err) {
             alert("OAuth Exchange Error: " + err.message);
         }
