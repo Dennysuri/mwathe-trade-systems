@@ -22,8 +22,8 @@ function loginToDeriv() {
         const state = generateHexState(32);
         sessionStorage.setItem('oauth_state', state);
 
-        const authUrl = `https://oauth.deriv.com/oauth2/authorize?` +
-            `app_id=${APP_ID}&` +
+        const authUrl = `https://auth.deriv.com/oauth2/auth?` +
+            `response_type=token&` +
             `client_id=${CLIENT_ID}&` +
             `redirect_uri=${encodeURIComponent(REDIRECT_URI)}&` +
             `state=${encodeURIComponent(state)}&` +
@@ -102,7 +102,6 @@ function initializeSocketWithToken(token, buttonEl = null) {
 
                 if (buttonEl) buttonEl.innerText = "Connected!";
                 
-                // Switch directly to trading screen
                 showScreen('trading-screen');
 
                 const bal = data.authorize.balance ? parseFloat(data.authorize.balance).toFixed(2) : "0.00";
@@ -131,12 +130,12 @@ function initializeSocketWithToken(token, buttonEl = null) {
     };
 }
 
-// --- Direct Query Parameter Parsing ---
+// --- Parse Token Returned in URL ---
 function handleOAuthReturn() {
     const urlParams = new URLSearchParams(window.location.search);
     const returnedState = urlParams.get('state');
     
-    // Parse token1 returned by Deriv
+    // Extracts token1 parameter returned by Deriv on redirect
     const token = urlParams.get('token1') || urlParams.get('token');
 
     if (token) {
@@ -146,10 +145,7 @@ function handleOAuthReturn() {
             return;
         }
 
-        // Clean up URL parameter string from browser address bar
         window.history.replaceState({}, document.title, window.location.pathname);
-
-        // Connect directly to WebSocket using extracted token
         initializeSocketWithToken(token);
     }
 }
