@@ -1,4 +1,3 @@
-const APP_ID = "1089";
 const CLIENT_ID = "349eTg55tt6ZVaefjBIAH";
 const REDIRECT_URI = "https://mwathe-trade-systems.vercel.app/";
 
@@ -16,16 +15,43 @@ function generateHexState(length = 32) {
     return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
-// --- Deriv OAuth Redirect Trigger ---
-function loginToDeriv() {
+// --- PKCE Helpers ---
+function generateCodeVerifier() {
+    const array = new Uint8Array(32);
+    window.crypto.getRandomValues(array);
+    return btoa(String.fromCharCode.apply(null, array))
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+}
+
+async function generateCodeChallenge(verifier) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(verifier);
+    const digest = await window.crypto.subtle.digest('SHA-256', data);
+    return btoa(String.fromCharCode.apply(null, new Uint8Array(digest)))
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+}
+
+// --- Deriv OAuth Redirect ---
+async function loginToDeriv() {
     try {
+        const verifier = generateCodeVerifier();
         const state = generateHexState(32);
+
+        sessionStorage.setItem('code_verifier', verifier);
         sessionStorage.setItem('oauth_state', state);
 
+        const challenge = await generateCodeChallenge(verifier);
+        
         const authUrl = `https://auth.deriv.com/oauth2/auth?` +
-            `response_type=token&` +
+            `response_type=code&` +
             `client_id=${CLIENT_ID}&` +
             `redirect_uri=${encodeURIComponent(REDIRECT_URI)}&` +
+            `code_challenge=${challenge}&` +
+            `code_challenge_method=S256&` +
             `state=${encodeURIComponent(state)}&` +
             `scope=trade+account_manage`;
 
@@ -35,7 +61,7 @@ function loginToDeriv() {
     }
 }
 
-// --- Direct Token Input Connect ---
+// --- Direct Token Connect ---
 function connectWithToken() {
     const tokenInput = document.getElementById("api-token-input");
     const connectBtn = document.getElementById("btn-connect-token");
@@ -54,10 +80,10 @@ function connectWithToken() {
     initializeSocketWithToken(token, connectBtn);
 }
 
-// --- WebSocket Connection & Session Setup ---
+// --- WebSocket Connection ---
 function initializeSocketWithToken(token, buttonEl = null) {
     if (!token || typeof token !== 'string') {
-        alert("Invalid access token provided.");
+        alert("Invalid access token.");
         if (buttonEl) {
             buttonEl.innerText = "Connect API";
             buttonEl.disabled = false;
@@ -65,7 +91,7 @@ function initializeSocketWithToken(token, buttonEl = null) {
         return;
     }
 
-    const wsUrl = `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`;
+    const wsUrl = `wss://ws.derivws.com/websockets/v3?app_id=1089`;
     const socket = new WebSocket(wsUrl);
 
     const timeout = setTimeout(() => {
@@ -102,6 +128,7 @@ function initializeSocketWithToken(token, buttonEl = null) {
 
                 if (buttonEl) buttonEl.innerText = "Connected!";
                 
+                // Show trading dashboard on valid authorization
                 showScreen('trading-screen');
 
                 const bal = data.authorize.balance ? parseFloat(data.authorize.balance).toFixed(2) : "0.00";
@@ -130,23 +157,39 @@ function initializeSocketWithToken(token, buttonEl = null) {
     };
 }
 
-// --- Parse Token Returned in URL ---
-function handleOAuthReturn() {
+// --- Exchange OAuth Return Code ---
+async function handleOAuthReturn() {
     const urlParams = new URLSearchParams(window.location.search);
+    const code = urlParams.get('code');
     const returnedState = urlParams.get('state');
-    
-    // Extracts token1 parameter returned by Deriv on redirect
-    const token = urlParams.get('token1') || urlParams.get('token');
 
-    if (token) {
+    if (code) {
         const storedState = sessionStorage.getItem('oauth_state');
         if (returnedState && storedState && returnedState !== storedState) {
             alert("Security Error: Invalid state parameter (CSRF detected)");
             return;
         }
 
+        const codeVerifier = sessionStorage.getItem('code_verifier');
         window.history.replaceState({}, document.title, window.location.pathname);
-        initializeSocketWithToken(token);
+
+        try {
+            const res = await fetch('/api/oauth-token', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ code, codeVerifier, redirectUri: REDIRECT_URI })
+            });
+
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || "Token exchange failed");
+
+            const accessToken = data.access_token;
+            if (!accessToken) throw new Error("No token received from backend server");
+
+            initializeSocketWithToken(accessToken);
+        } catch (err) {
+            alert("OAuth Exchange Error: " + err.message);
+        }
     }
 }
 
