@@ -1,14 +1,15 @@
 const CLIENT_ID = "349eTg55tt6ZVaefjBIAH";
-const REDIRECT_URI = "https://mwathe-trade-systems.vercel.app";
+// Include the trailing slash to match the Deriv portal setting exactly
+const REDIRECT_URI = "https://mwathe-trade-systems.vercel.app/";
 
-// --- Screen Navigation Router ---
+// --- Navigation Router ---
 function showScreen(screenId) {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     const target = document.getElementById(screenId);
     if (target) target.classList.add('active');
 }
 
-// --- PKCE Helpers ---
+// --- PKCE Code Helpers ---
 function generateCodeVerifier() {
     const array = new Uint8Array(32);
     window.crypto.getRandomValues(array);
@@ -69,7 +70,7 @@ function connectWithToken() {
     initializeSocketWithToken(token, connectBtn);
 }
 
-// --- WebSocket Connection ---
+// --- WebSocket Balance & Account Session ---
 function initializeSocketWithToken(token, buttonEl = null) {
     const wsUrl = `wss://ws.derivws.com/websockets/v3?app_id=1089`;
     const socket = new WebSocket(wsUrl);
@@ -133,7 +134,7 @@ function initializeSocketWithToken(token, buttonEl = null) {
     };
 }
 
-// --- Handle OAuth Code Return directly on Home Page ---
+// --- Exchange OAuth Return Code ---
 async function handleOAuthReturn() {
     const urlParams = new URLSearchParams(window.location.search);
     const code = urlParams.get('code');
@@ -159,7 +160,7 @@ async function handleOAuthReturn() {
     }
 }
 
-// Attach UI Event Handlers
+// Attach UI Event Listeners
 document.addEventListener("DOMContentLoaded", () => {
     const btnGotoNav = document.getElementById("btn-goto-nav");
     if (btnGotoNav) btnGotoNav.onclick = () => showScreen('navigation-screen');
