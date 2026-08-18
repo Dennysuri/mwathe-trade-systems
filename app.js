@@ -39,7 +39,6 @@ async function generateCodeChallenge(verifier) {
 async function loginToDeriv() {
     try {
         const verifier = generateCodeVerifier();
-        // Generate a 32-character pure hex string (guaranteed URL-safe, high entropy)
         const state = generateHexState(32);
 
         sessionStorage.setItem('code_verifier', verifier);
@@ -83,6 +82,15 @@ function connectWithToken() {
 
 // --- WebSocket Balance & Account Session ---
 function initializeSocketWithToken(token, buttonEl = null) {
+    if (!token || typeof token !== 'string') {
+        alert("Invalid access token received.");
+        if (buttonEl) {
+            buttonEl.innerText = "Connect API";
+            buttonEl.disabled = false;
+        }
+        return;
+    }
+
     const wsUrl = `wss://ws.derivws.com/websockets/v3?app_id=1089`;
     const socket = new WebSocket(wsUrl);
 
@@ -122,13 +130,15 @@ function initializeSocketWithToken(token, buttonEl = null) {
                 showScreen('trading-screen');
 
                 const bal = data.authorize.balance ? parseFloat(data.authorize.balance).toFixed(2) : "0.00";
-                document.getElementById('account-balance').innerText = bal;
+                const balEl = document.getElementById('account-balance');
+                if (balEl) balEl.innerText = bal;
 
                 socket.send(JSON.stringify({ balance: 1, subscribe: 1 }));
             }
 
             if (data.msg_type === 'balance' && data.balance) {
-                document.getElementById('account-balance').innerText = parseFloat(data.balance.balance).toFixed(2);
+                const balEl = document.getElementById('account-balance');
+                if (balEl) balEl.innerText = parseFloat(data.balance.balance).toFixed(2);
             }
         } catch (err) {
             console.error("Payload parse error:", err);
@@ -171,7 +181,10 @@ async function handleOAuthReturn() {
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || "Token exchange failed");
 
-            initializeSocketWithToken(data.access_token);
+            const accessToken = data.access_token || data.token;
+            if (!accessToken) throw new Error("No token returned from authentication server");
+
+            initializeSocketWithToken(accessToken);
         } catch (err) {
             alert("OAuth Exchange Error: " + err.message);
         }
