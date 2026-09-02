@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>Mwathe Trade Systems</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,&lt;svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'&gt;&lt;rect width='100' height='100' rx='22' fill='%230f172a'/&gt;&lt;path d='M20 70 L35 45 L50 55 L65 30 L80 40' stroke='%2322c55e' stroke-width='6' fill='none'/&gt;&lt;path d='M25 75 L40 35 L50 52 L60 35 L75 75' stroke='%23f97316' stroke-width='5' fill='none'/&gt;&lt;/svg&gt;" />
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div id="app">
+
+    <!-- ===== DASHBOARD ===== -->
+    <div id="dashboard-screen" class="screen active">
+      <div class="logo-container">
+        <svg class="brand-logo-large" viewBox="0 0 100 100" fill="none">
+          <rect width="100" height="100" rx="24" fill="#131d31" stroke="#1e293b" stroke-width="2"></rect>
+          <line x1="30" y1="20" x2="30" y2="80" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="2 2"></line>
+          <line x1="50" y1="15" x2="50" y2="85" stroke="#22c55e" stroke-width="1.5" stroke-dasharray="2 2"></line>
+          <line x1="70" y1="25" x2="70" y2="75" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="2 2"></line>
+          <path d="M 15 65 L 35 40 L 50 55 L 68 25 L 85 35" stroke="#22c55e" stroke-width="3" stroke-linecap="round"></path>
+          <path d="M 22 75 L 38 32 L 50 52 L 62 32 L 78 75" stroke="#f97316" stroke-width="6" stroke-linecap="round"></path>
+        </svg>
+        <h1 class="brand-title-large">MWATHE TRADE SYSTEMS</h1>
+        <p class="power-statement">
+          High-frequency algorithmic execution hub powered by real-time Markov probability state validation and automated volatility routing.
+        </p>
+      </div>
+      <button id="btn-goto-nav" class="btn-bottom">GET STARTED →</button>
+    </div>
+
+    <!-- ===== NAVIGATION ===== -->
+    <div id="navigation-screen" class="screen">
+      <h2 class="nav-title">Select Authentication</h2>
+      <div class="auth-section">
+        <h3>Option A: Enter API Token</h3>
+        <input type="password" id="api-token-input" class="token-input" placeholder="Paste Demo or Live API Token..." />
+        <button id="btn-connect-token" class="btn-connect">Connect API</button>
+      </div>
+      <div class="divider">--- OR ---</div>
+      <div class="auth-section">
+        <h3>Option B: Deriv OAuth (Recommended)</h3>
+        <button id="btn-login-deriv" class="btn-deriv-login">Login to Deriv</button>
+      </div>
+      <div class="connection-status" id="connectionStatus">
+        <span class="dot off" id="statusDot"></span>
+        <span class="status-text" id="statusText">Not connected</span>
+      </div>
+    </div>
+
+    <!-- ===== TRADING ===== -->
+    <div id="trading-screen" class="screen">
+      <!-- Top Bar -->
+      <div class="top-bar">
+        <div class="left">
+          <span class="page-title" id="pageTitle">Analysis Tool</span>
+        </div>
+        <div class="right">
+          <div class="api-indicator">
+            <span class="dot off" id="tradingApiDot"></span>
+            <span id="tradingApiLabel">API: Off</span>
+          </div>
+          <div class="balance-badge">
+            <i class="fas fa-wallet"></i> Balance: $<span id="account-balance">0.00</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Sidebar + Content -->
+      <div class="trading-layout">
+        <!-- Sidebar -->
+        <nav class="sidebar" id="sidebar">
+          <button class="menu-toggle" onclick="toggleSidebar()" aria-label="Toggle menu">
+            <i class="fas fa-bars"></i>
+          </button>
+          <div class="menu-items">
+            <button class="menu-item active" data-page="analysis" onclick="switchTradingPage('analysis')">
+              <i class="fas fa-chart-line"></i><span class="label">Analysis Tool</span>
+            </button>
+            <button class="menu-item" data-page="signals" onclick="switchTradingPage('signals')">
+              <i class="fas fa-bell"></i><span class="label">Signals</span>
+            </button>
+            <button class="menu-item" data-page="copy" onclick="switchTradingPage('copy')">
+              <i class="fas fa-copy"></i><span class="label">Copy Trading</span>
+            </button>
+            <button class="menu-item" data-page="bot" onclick="switchTradingPage('bot')">
+              <i class="fas fa-robot"></i><span class="label">Auto Bot</span>
+            </button>
+            <button class="menu-item" data-page="ai" onclick="switchTradingPage('ai')">
+              <i class="fas fa-brain"></i><span class="label">AutoD AI</span>
+            </button>
+            <button class="menu-item" data-page="settings" onclick="switchTradingPage('settings')">
+              <i class="fas fa-cog"></i><span class="label">Settings</span>
+            </button>
+            <button class="menu-item" data-page="admin" onclick="switchTradingPage('admin')">
+              <i class="fas fa-user-shield"></i><span class="label">Admin Panel</span>
+            </button>
+          </div>
+          <div class="sidebar-bottom">
+            <button class="menu-item" onclick="disconnectAPI()" style="color:rgba(255,255,255,0.4);font-size:12px;">
+              <i class="fas fa-sign-out-alt"></i><span class="label">Disconnect</span>
+            </button>
+          </div>
+        </nav>
+
+        <!-- Content Area -->
+        <div class="content-area" id="contentArea">
+          <div id="page-container"></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- AI Password Overlay -->
+  <div class="ai-password-overlay" id="aiPasswordOverlay">
+    <div class="ai-password-box">
+      <h3><i class="fas fa-brain" style="color:var(--accent-orange);"></i> AutoD AI</h3>
+      <p>Enter the password to unlock the AI engine.</p>
+      <input type="password" id="aiPasswordInput" placeholder="Enter password..." />
+      <button class="btn-primary" onclick="verifyAIPassword()" style="margin-top:12px;">
+        <i class="fas fa-unlock"></i> Unlock AI
+      </button>
+      <div class="error-msg" id="aiPasswordError">Incorrect password. Try again.</div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="app.js"></script>
+  <script src="analysis.js"></script>
+  <script src="signals.js"></script>
+  <script src="copy-trading.js"></script>
+  <script src="bot.js"></script>
+  <script src="ai.js"></script>
+  <script src="settings.js"></script>
+  <script src="admin.js"></script>
+</body>
+</html>
