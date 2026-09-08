@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Menu, X, Cpu, Bot, ShieldCheck, Settings as SettingsIcon,
-  BarChart2, Zap, Lock, Play, Square, ExternalLink, Home
+  Menu, X, Bot, ShieldCheck, Settings as SettingsIcon,
+  BarChart2, Home
 } from 'lucide-react';
 import { derivService } from './derivService';
-import { tradingEngine, type StrategyResult } from './tradingEngine';
+import { tradingEngine } from './tradingEngine';
 
 type PageView = 'dashboard' | 'analysis' | 'signals' | 'denny' | 'automated' | 'autod' | 'settings';
 
@@ -13,22 +13,10 @@ export default function App() {
   const [currentPage, setCurrentPage] = useState<PageView>('dashboard');
   const [isConnected, setIsConnected] = useState(false);
   const [balance, setBalance] = useState(0);
-  const [customAppId, setCustomAppId] = useState('1089');
 
   const [autodUnlocked, setAutodUnlocked] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
-  const [passwordError, setPasswordError] = useState(false);
-
-  const [selectedSymbol, setSelectedSymbol] = useState('R_100');
-  const [selectedTradeType, setSelectedTradeType] = useState('Digits');
-  const [selectedSubType, setSelectedSubType] = useState('Over/Under');
-  const [selectedOption, setSelectedOption] = useState('Over 2');
-  const [analysisResult, setAnalysisResult] = useState<StrategyResult | null>(null);
-
-  const [stake, setStake] = useState(10);
-  const [martingaleFactor, setMartingaleFactor] = useState(2.1);
   const [isBotRunning, setIsBotRunning] = useState(false);
-  const [botLogs, setBotLogs] = useState<string[]>([]);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -49,7 +37,6 @@ export default function App() {
   }, []);
 
   const handleConnectDeriv = () => {
-    derivService.setAppId(customAppId);
     window.location.href = derivService.getAuthUrl();
   };
 
@@ -57,20 +44,16 @@ export default function App() {
     e.preventDefault();
     if (passwordInput === 'Denny@1249') {
       setAutodUnlocked(true);
-      setPasswordError(false);
-    } else {
-      setPasswordError(true);
     }
   };
 
   const runAnalysis = () => {
-    derivService.subscribeTicks(selectedSymbol);
-    setAnalysisResult(tradingEngine.analyzeMarket(selectedSymbol, selectedTradeType, selectedSubType, selectedOption));
+    derivService.subscribeTicks('R_100');
+    tradingEngine.analyzeMarket('R_100', 'Digits', 'Over/Under', 'Over 2');
   };
 
-  const toggleBot = (botName: string) => {
+  const toggleBot = () => {
     setIsBotRunning(!isBotRunning);
-    setBotLogs(prev => [`[SYSTEM] ${botName} state updated at ${new Date().toLocaleTimeString()}`, ...prev]);
   };
 
   const navigateTo = (page: PageView) => {
@@ -142,7 +125,7 @@ export default function App() {
           {currentPage === 'denny' && (
             <div className="bg-brand-card p-4 rounded-xl border border-brand-border">
               <div className="font-bold text-base mb-2 text-brand-green flex items-center gap-2"><Bot size={18} /> Denny Bots Page</div>
-              <button onClick={() => toggleBot('Denny Bot')} className="w-full py-2.5 bg-brand-green text-black font-bold text-xs rounded-lg">{isBotRunning ? 'Stop' : 'Start'} Denny Bot</button>
+              <button onClick={toggleBot} className="w-full py-2.5 bg-brand-green text-black font-bold text-xs rounded-lg">{isBotRunning ? 'Stop' : 'Start'} Denny Bot</button>
             </div>
           )}
 
@@ -154,7 +137,7 @@ export default function App() {
                   <button type="submit" className="py-2 bg-brand-orange text-black font-bold text-xs rounded">Authenticate</button>
                 </form>
               ) : (
-                <div><div className="font-bold text-brand-orange mb-2"><ShieldCheck size={18} /> AutoD AI Iron Recovery Page</div><button onClick={() => toggleBot('AutoD AI')} className="w-full py-2 bg-brand-orange text-black font-bold text-xs rounded">Run Iron Recovery Bot</button></div>
+                <div><div className="font-bold text-brand-orange mb-2"><ShieldCheck size={18} /> AutoD AI Iron Recovery Page</div><button onClick={toggleBot} className="w-full py-2 bg-brand-orange text-black font-bold text-xs rounded">Run Iron Recovery Bot</button></div>
               )}
             </div>
           )}
