@@ -5,17 +5,18 @@ import { Shield, Lock } from 'lucide-react'
 export default function Navigation() {
   const navigate = useNavigate()
 
-  // Your real Deriv Client ID
+  // Your exact Deriv Client ID
   const CLIENT_ID = '349eTg55tt6ZVaefjBIAH'
   
-  // Dynamically get the current domain (works on localhost and Vercel)
+  // Dynamically get the exact live URL (e.g., https://mwathe-trade-systems-gamma.vercel.app)
   const REDIRECT_URI = window.location.origin
 
   const handleConnect = () => {
-    // Construct the official Deriv OAuth 2.0 URL
-    const oauthUrl = `https://oauth.deriv.com/oauth2/authorize?app_id=${CLIENT_ID}&l=EN&brand=deriv&redirect_uri=${encodeURIComponent(REDIRECT_URI)}`
+    // Construct the strict Deriv OAuth 2.0 Authorization URL
+    // This forces Deriv to show the "Mwathe Trade Systems" consent screen
+    const oauthUrl = `https://oauth.deriv.com/oauth2/authorize?app_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&l=EN&brand=deriv&scope=read%20trade%20admin`
     
-    // Redirect the user to Deriv's secure login page
+    // Redirect to Deriv's OAuth Consent Screen
     window.location.href = oauthUrl
   }
 
@@ -39,14 +40,14 @@ export default function Navigation() {
         >
           <div className="text-center">
             <h1 className="text-2xl font-bold text-mwathe-white mb-2">Connect Your Account</h1>
-            <p className="text-mwathe-gray text-sm">Securely link your Deriv account via OAuth 2.0</p>
+            <p className="text-mwathe-gray text-sm">Authorize Mwathe Trade Systems to access your Deriv account</p>
           </div>
 
           {/* Security Badges */}
           <div className="flex flex-col gap-2 w-full">
             <div className="flex items-center gap-3 bg-mwathe-darkgray px-4 py-3 rounded-lg border border-gray-800">
               <Shield className="text-mwathe-green" size={20} />
-              <span className="text-mwathe-green text-xs font-medium">256-bit Encrypted Connection</span>
+              <span className="text-mwathe-green text-xs font-medium">Secure OAuth 2.0 Connection</span>
             </div>
             <div className="flex items-center gap-3 bg-mwathe-darkgray px-4 py-3 rounded-lg border border-gray-800">
               <Lock className="text-mwathe-skyblue" size={20} />
@@ -66,7 +67,7 @@ export default function Navigation() {
           </button>
 
           <p className="text-mwathe-gray text-xs text-center max-w-xs">
-            You will be redirected to Deriv's official authorization page. Approve the access to continue.
+            You will be redirected to Deriv's official authorization screen to approve Mwathe Trade Systems.
           </p>
 
           <button onClick={() => navigate('/')} className="text-mwathe-gray text-sm underline mt-2">← Back to Dashboard</button>
