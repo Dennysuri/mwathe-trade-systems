@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Menu, X, BarChart3, Signal, Bot, Cpu, Settings, Zap } from 'lucide-react'
+import { Menu, X, BarChart3, Signal, Bot, Cpu, Settings, Zap, RefreshCw } from 'lucide-react'
 import AnalysisTool from '../components/AnalysisTool'
 import Signals from '../components/Signals'
 import DennyBots from '../components/DennyBots'
@@ -25,76 +25,144 @@ export default function TradingPage() {
   const [accountType, setAccountType] = useState('real')
   const [accountId, setAccountId] = useState('')
   const [isConnected, setIsConnected] = useState(false)
-  const [connectionStatus, setConnectionStatus] = useState('Connecting to Deriv...')
   const [errorMessage, setErrorMessage] = useState('')
+  const [connectionStatus, setConnectionStatus] = useState('Initializing...')
+  const [ws, setWs] = useState(null)
 
-  useEffect(() => {
+  const connectToDeriv = () => {
     const token = localStorage.getItem('deriv_access_token')
     
     if (!token) {
-      setErrorMessage('No access token found in storage. Please reconnect.')
+      setErrorMessage('No access token found. Please reconnect via Navigation page.')
       setConnectionStatus('Failed')
       return
     }
 
     if (token.length < 20) {
-      setErrorMessage(`Token is too short (${token.length} chars). It might be an invalid code.`)
+      setErrorMessage(`Invalid token (too short: ${token.length} chars). Please reconnect.`)
       setConnectionStatus('Failed')
       return
     }
 
-    const wsUrl = 'wss://ws.derivws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH'
-    const websocket = new WebSocket(wsUrl)
+    setErrorMessage('')
+    setConnectionStatus('Connecting to Deriv...')
 
-    websocket.onopen = () => {
-      setConnectionStatus('WebSocket Open. Authorizing...')
-      websocket.send(JSON.stringify({ authorize: token }))
+    // Close existing connection if any
+    if (ws) {
+      ws.close()
     }
 
-    websocket.onmessage = (message) => {
-      try {
-        const data = JSON.parse(message.data)
-        
-        if (data.error) {
-          setErrorMessage(`Deriv API Error: ${data.error.message || data.error.code}`)
-          setConnectionStatus('Failed')
-          return
-        }
+    // Try multiple WebSocket endpoints
+    const endpoints = [
+      'wss://ws.derivws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH',
+      'wss://ws.binaryws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH',
+      'wss://ws.deriv.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH'
+    ]
 
-        if (data.msg_type === 'authorize' && data.authorize) {
-          setAccountId(data.authorize.loginid || 'N/A')
-          setAccountType(data.authorize.is_virtual ? 'demo' : 'real')
-          setCurrency(data.authorize.currency || 'USD')
-          setConnectionStatus('Authorized! Fetching balance...')
-          websocket.send(JSON.stringify({ balance: 1, subscribe: 1 }))
-        }
+    let currentEndpoint = 0
 
-        if (data.msg_type === 'balance' && data.balance) {
-          setBalance(parseFloat(data.balance.balance))
-          setCurrency(data.balance.currency)
-          setIsConnected(true)
-          setConnectionStatus('Connected')
-          setErrorMessage('')
-        }
-      } catch (e) {
-        setErrorMessage('Failed to parse server response.')
+    const tryConnect = () => {
+      if (currentEndpoint >= endpoints.length) {
+        setErrorMessage('All connection attempts failed. Please check your internet and try again.')
+        setConnectionStatus('Failed')
+        return
       }
+
+      const wsUrl = endpoints[currentEndpoint]
+      console.log(`Trying endpoint ${currentEndpoint + 1}: ${wsUrl}`)
+      setConnectionStatus(`Trying connection ${currentEndpoint + 1}/3...`)
+
+      const websocket = new WebSocket(wsUrl)
+
+      websocket.onopen = () => {
+        console.log('✅ WebSocket connected!')
+        setConnectionStatus('Connected! Authorizing...')
+        websocket.send(JSON.stringify({ authorize: token }))
+      }
+
+      websocket.onmessage = (message) => {
+        try {
+          const data = JSON.parse(message.data)
+          
+          if (data.error) {
+            console.error('API Error:', data.error)
+            setErrorMessage(`Deriv API Error: ${data.error.message || data.error.code}`)
+            setConnectionStatus('Failed')
+            return
+          }
+
+          if (data.msg_type === 'authorize' && data.authorize) {
+            console.log('✅ Authorized! Account:', data.authorize)
+            setAccountId(data.authorize.loginid || 'N/A')
+            setAccountType(data.authorize.is_virtual ? 'demo' : 'real')
+            setCurrency(data.authorize.currency || 'USD')
+            setConnectionStatus('Authorized! Fetching balance...')
+            websocket.send(JSON.stringify({ balance: 1, subscribe: 1 }))
+          }
+
+          if (data.msg_type === 'balance' && data.balance) {
+            console.log(' Balance:', data.balance)
+            setBalance(parseFloat(data.balance.balance))
+            setCurrency(data.balance.currency)
+            setIsConnected(true)
+            setConnectionStatus('Connected')
+            setErrorMessage('')
+          }
+        } catch (e) {
+          console.error('Parse error:', e)
+        }
+      }
+
+      websocket.onerror = (error) => {
+        console.error('WebSocket error:', error)
+        currentEndpoint++
+        if (currentEndpoint < endpoints.length) {
+          tryConnect()
+        } else {
+          setErrorMessage('WebSocket connection failed. Check internet or Deriv API status.')
+          setConnectionStatus('Failed')
+        }
+      }
+
+      websocket.onclose = () => {
+        console.log('WebSocket closed')
+        setIsConnected(false)
+        setConnectionStatus('Disconnected')
+      }
+
+      setWs(websocket)
+
+      // Timeout after 10 seconds
+      setTimeout(() => {
+        if (!isConnected && websocket.readyState !== WebSocket.OPEN) {
+          websocket.close()
+          currentEndpoint++
+          if (currentEndpoint < endpoints.length) {
+            tryConnect()
+          }
+        }
+      }, 10000)
     }
 
-    websocket.onerror = () => {
-      setErrorMessage('WebSocket connection failed. Check internet or Deriv API status.')
-      setConnectionStatus('Failed')
-    }
+    tryConnect()
+  }
 
-    websocket.onclose = () => {
-      setIsConnected(false)
-      setConnectionStatus('Disconnected')
-    }
+  useEffect(() => {
+    connectToDeriv()
 
     return () => {
-      if (websocket) websocket.close()
+      if (ws) {
+        ws.close()
+      }
     }
   }, [])
+
+  const handleReconnect = () => {
+    setIsConnected(false)
+    setAccountId('')
+    setBalance(0)
+    connectToDeriv()
+  }
 
   const handleSwitchAccount = () => {
     setAccountType(accountType === 'real' ? 'demo' : 'real')
@@ -150,11 +218,18 @@ export default function TradingPage() {
         </div>
       </div>
 
-      {/* ERROR / STATUS DISPLAY (Visible on screen for debugging) */}
+      {/* Error/Status Display */}
       {errorMessage && (
         <div className="bg-red-900/30 border-b border-red-500 p-3 text-center">
-          <p className="text-red-400 text-xs font-bold">ERROR:</p>
-          <p className="text-red-300 text-sm">{errorMessage}</p>
+          <p className="text-red-400 text-xs font-bold mb-1">ERROR:</p>
+          <p className="text-red-300 text-sm mb-2">{errorMessage}</p>
+          <button 
+            onClick={handleReconnect}
+            className="flex items-center gap-2 mx-auto px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-bold"
+          >
+            <RefreshCw size={16} />
+            Try Reconnecting
+          </button>
         </div>
       )}
       {!isConnected && !errorMessage && (
