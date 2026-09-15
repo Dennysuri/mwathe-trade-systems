@@ -26,7 +26,7 @@ export default function Callback() {
           throw new Error('No authorization code received')
         }
 
-        console.log('✅ Code received, exchanging for access token...')
+        console.log('✅ Code received:', code.substring(0, 20) + '...')
 
         // Verify state
         const storedState = sessionStorage.getItem('oauth_state')
@@ -34,24 +34,36 @@ export default function Callback() {
           throw new Error('State mismatch')
         }
 
-        // Exchange code for access token using our serverless function
+        // Get code_verifier from storage
+        const { codeVerifier } = getStoredPKCE()
+        if (!codeVerifier) {
+          throw new Error('PKCE code_verifier not found')
+        }
+
+        console.log('🔄 Exchanging code for token...')
         const REDIRECT_URI = window.location.origin + '/callback'
         
+        // Exchange code for access token
         const tokenResponse = await fetch('/api/exchange-token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code, redirect_uri: REDIRECT_URI }),
+          body: JSON.stringify({ 
+            code, 
+            redirect_uri: REDIRECT_URI,
+            code_verifier: codeVerifier 
+          }),
         })
 
         if (!tokenResponse.ok) {
           const errorData = await tokenResponse.json()
+          console.error('❌ Token exchange error:', errorData)
           throw new Error(errorData.error || 'Token exchange failed')
         }
 
         const tokenData = await tokenResponse.json()
-        console.log('✅ Access token received!')
+        console.log('✅ Access token received successfully!')
 
-        // Store the REAL access token
+        // Store the access token
         localStorage.setItem('deriv_access_token', tokenData.access_token)
         localStorage.setItem('oauth_connected', 'true')
         clearPKCE()
@@ -85,6 +97,7 @@ export default function Callback() {
           </div>
           <h2 className="text-xl font-bold text-mwathe-white mb-2">Authentication Failed</h2>
           <p className="text-mwathe-gray text-sm mb-4">{error}</p>
+          <p className="text-mwathe-gray text-xs">Redirecting back...</p>
         </div>
       </div>
     )

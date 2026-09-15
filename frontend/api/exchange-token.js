@@ -1,17 +1,19 @@
 export default async function handler(req, res) {
-  // Only allow POST requests
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' })
   }
 
-  const { code, redirect_uri } = req.body
+  const { code, redirect_uri, code_verifier } = req.body
 
   if (!code) {
     return res.status(400).json({ error: 'Authorization code required' })
   }
 
   try {
-    // Exchange authorization code for access token
+    console.log('🔄 Exchanging code for token...')
+    console.log('Redirect URI:', redirect_uri)
+    console.log('Code:', code.substring(0, 20) + '...')
+
     const tokenResponse = await fetch('https://auth.deriv.com/oauth2/token', {
       method: 'POST',
       headers: {
@@ -22,17 +24,21 @@ export default async function handler(req, res) {
         client_id: '349eTg55tt6ZVaefjBIAH',
         code: code,
         redirect_uri: redirect_uri,
+        ...(code_verifier && { code_verifier: code_verifier }),
       }),
     })
 
     const tokenData = await tokenResponse.json()
 
     if (!tokenResponse.ok) {
-      console.error('Token exchange failed:', tokenData)
-      return res.status(400).json({ error: 'Token exchange failed', details: tokenData })
+      console.error('❌ Token exchange failed:', tokenData)
+      return res.status(400).json({ 
+        error: 'Token exchange failed', 
+        details: tokenData 
+      })
     }
 
-    // Return the access token
+    console.log('✅ Token exchange successful!')
     res.status(200).json({
       access_token: tokenData.access_token,
       token_type: tokenData.token_type,
@@ -40,7 +46,7 @@ export default async function handler(req, res) {
     })
 
   } catch (error) {
-    console.error('Error exchanging token:', error)
+    console.error('❌ Error exchanging token:', error)
     res.status(500).json({ error: 'Internal server error', message: error.message })
   }
 }
