@@ -9,7 +9,8 @@ export default function Navigation() {
   const [isLoading, setIsLoading] = useState(false)
 
   const CLIENT_ID = '349eTg55tt6ZVaefjBIAH'
-  const REDIRECT_URI = window.location.origin
+  // CRITICAL FIX: Explicitly add /callback to the redirect URI
+  const REDIRECT_URI = `${window.location.origin}/callback`
 
   const handleConnect = async () => {
     setIsLoading(true)
@@ -20,13 +21,6 @@ export default function Navigation() {
       console.log('Redirect URI:', REDIRECT_URI)
       
       const { codeChallenge, state } = await generatePKCE()
-      
-      console.log('PKCE Generated')
-      console.log('Code Challenge:', codeChallenge.substring(0, 20) + '...')
-      console.log('State:', state)
-      
-      // EXACT OAuth 2.0 endpoint - NOT deriv.com
-      const AUTH_ENDPOINT = 'https://auth.deriv.com/oauth2/auth'
       
       const params = new URLSearchParams({
         response_type: 'code',
@@ -40,18 +34,14 @@ export default function Navigation() {
         brand: 'deriv'
       })
       
-      const oauthUrl = `${AUTH_ENDPOINT}?${params.toString()}`
-      
+      const oauthUrl = `https://auth.deriv.com/oauth2/auth?${params.toString()}`
       console.log('🚀 Redirecting to:', oauthUrl)
       
-      // Small delay to see console logs
       await new Promise(resolve => setTimeout(resolve, 500))
-      
       window.location.href = oauthUrl
     } catch (error) {
-      console.error(' OAuth initiation failed:', error)
+      console.error('❌ OAuth initiation failed:', error)
       setIsLoading(false)
-      alert('Failed to initiate OAuth. Check console for details.')
     }
   }
 
@@ -91,29 +81,15 @@ export default function Navigation() {
             onClick={handleConnect}
             disabled={isLoading}
             className={`w-full py-4 rounded-xl text-lg font-bold shadow-lg active:scale-95 transition-transform flex items-center justify-center gap-3 ${
-              isLoading 
-                ? 'bg-gray-700 text-gray-400' 
-                : 'bg-gradient-to-r from-mwathe-green to-mwathe-skyblue text-white shadow-mwathe-green/30'
+              isLoading ? 'bg-gray-700 text-gray-400' : 'bg-gradient-to-r from-mwathe-green to-mwathe-skyblue text-white shadow-mwathe-green/30'
             }`}
           >
             {isLoading ? (
-              <>
-                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                Redirecting...
-              </>
+              <><div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> Redirecting...</>
             ) : (
-              <>
-                <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-                </svg>
-                Connect with Deriv
-              </>
+              <><svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg> Connect with Deriv</>
             )}
           </button>
-
-          <p className="text-mwathe-gray text-xs text-center max-w-xs">
-            Opens Deriv OAuth consent screen → Approve → Redirects back to Trading Page
-          </p>
 
           <button onClick={() => navigate('/')} className="text-mwathe-gray text-sm underline mt-2">← Back to Dashboard</button>
         </motion.div>
