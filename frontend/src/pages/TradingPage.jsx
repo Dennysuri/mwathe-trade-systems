@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Menu, X, BarChart3, Signal, Bot, Cpu, Settings, Zap, RefreshCw } from 'lucide-react'
+import { Menu, X, BarChart3, Signal, Bot, Cpu, Settings, Zap, RefreshCw, LogOut } from 'lucide-react'
 import AnalysisTool from '../components/AnalysisTool'
 import Signals from '../components/Signals'
 import DennyBots from '../components/DennyBots'
@@ -33,13 +33,14 @@ export default function TradingPage() {
     const token = localStorage.getItem('deriv_access_token')
     
     if (!token) {
-      setErrorMessage('No access token found. Please reconnect via Navigation page.')
+      setErrorMessage('No access token found. Please reconnect.')
       setConnectionStatus('Failed')
       return
     }
 
-    if (token.length < 20) {
-      setErrorMessage(`Invalid token (too short: ${token.length} chars). Please reconnect.`)
+    // Check if it looks like an auth code (starts with ory_ac_) instead of access token (ory_at_)
+    if (token.startsWith('ory_ac_')) {
+      setErrorMessage('Invalid token type (Authorization Code detected). Please clear data and reconnect.')
       setConnectionStatus('Failed')
       return
     }
@@ -47,114 +48,72 @@ export default function TradingPage() {
     setErrorMessage('')
     setConnectionStatus('Connecting to Deriv...')
 
-    // Close existing connection if any
     if (ws) {
       ws.close()
     }
 
-    // Try multiple WebSocket endpoints
-    const endpoints = [
-      'wss://ws.derivws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH',
-      'wss://ws.binaryws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH',
-      'wss://ws.deriv.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH'
-    ]
+    const wsUrl = 'wss://ws.derivws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH'
+    const websocket = new WebSocket(wsUrl)
 
-    let currentEndpoint = 0
-
-    const tryConnect = () => {
-      if (currentEndpoint >= endpoints.length) {
-        setErrorMessage('All connection attempts failed. Please check your internet and try again.')
-        setConnectionStatus('Failed')
-        return
-      }
-
-      const wsUrl = endpoints[currentEndpoint]
-      console.log(`Trying endpoint ${currentEndpoint + 1}: ${wsUrl}`)
-      setConnectionStatus(`Trying connection ${currentEndpoint + 1}/3...`)
-
-      const websocket = new WebSocket(wsUrl)
-
-      websocket.onopen = () => {
-        console.log('✅ WebSocket connected!')
-        setConnectionStatus('Connected! Authorizing...')
-        websocket.send(JSON.stringify({ authorize: token }))
-      }
-
-      websocket.onmessage = (message) => {
-        try {
-          const data = JSON.parse(message.data)
-          
-          if (data.error) {
-            console.error('API Error:', data.error)
-            setErrorMessage(`Deriv API Error: ${data.error.message || data.error.code}`)
-            setConnectionStatus('Failed')
-            return
-          }
-
-          if (data.msg_type === 'authorize' && data.authorize) {
-            console.log('✅ Authorized! Account:', data.authorize)
-            setAccountId(data.authorize.loginid || 'N/A')
-            setAccountType(data.authorize.is_virtual ? 'demo' : 'real')
-            setCurrency(data.authorize.currency || 'USD')
-            setConnectionStatus('Authorized! Fetching balance...')
-            websocket.send(JSON.stringify({ balance: 1, subscribe: 1 }))
-          }
-
-          if (data.msg_type === 'balance' && data.balance) {
-            console.log(' Balance:', data.balance)
-            setBalance(parseFloat(data.balance.balance))
-            setCurrency(data.balance.currency)
-            setIsConnected(true)
-            setConnectionStatus('Connected')
-            setErrorMessage('')
-          }
-        } catch (e) {
-          console.error('Parse error:', e)
-        }
-      }
-
-      websocket.onerror = (error) => {
-        console.error('WebSocket error:', error)
-        currentEndpoint++
-        if (currentEndpoint < endpoints.length) {
-          tryConnect()
-        } else {
-          setErrorMessage('WebSocket connection failed. Check internet or Deriv API status.')
-          setConnectionStatus('Failed')
-        }
-      }
-
-      websocket.onclose = () => {
-        console.log('WebSocket closed')
-        setIsConnected(false)
-        setConnectionStatus('Disconnected')
-      }
-
-      setWs(websocket)
-
-      // Timeout after 10 seconds
-      setTimeout(() => {
-        if (!isConnected && websocket.readyState !== WebSocket.OPEN) {
-          websocket.close()
-          currentEndpoint++
-          if (currentEndpoint < endpoints.length) {
-            tryConnect()
-          }
-        }
-      }, 10000)
+    websocket.onopen = () => {
+      setConnectionStatus('Connected! Authorizing...')
+      websocket.send(JSON.stringify({ authorize: token }))
     }
 
-    tryConnect()
+    websocket.onmessage = (message) => {
+      try {
+        const data = JSON.parse(message.data)
+        
+        if (data.error) {
+          setErrorMessage(`Deriv rejected the token: ${data.error.message || data.error.code}`)
+          setConnectionStatus('Failed')
+          return
+        }
+
+        if (data.msg_type === 'authorize' && data.authorize) {
+          setAccountId(data.authorize.loginid || 'N/A')
+          setAccountType(data.authorize.is_virtual ? 'demo' : 'real')
+          setCurrency(data.authorize.currency || 'USD')
+          setConnectionStatus('Authorized! Fetching balance...')
+          websocket.send(JSON.stringify({ balance: 1, subscribe: 1 }))
+        }
+
+        if (data.msg_type === 'balance' && data.balance) {
+          setBalance(parseFloat(data.balance.balance))
+          setCurrency(data.balance.currency)
+          setIsConnected(true)
+          setConnectionStatus('Connected')
+          setErrorMessage('')
+        }
+      } catch (e) {
+        setErrorMessage('Failed to parse server response.')
+      }
+    }
+
+    websocket.onerror = () => {
+      setErrorMessage('WebSocket connection failed. Check internet or Deriv API status.')
+      setConnectionStatus('Failed')
+    }
+
+    websocket.onclose = () => {
+      setIsConnected(false)
+      setConnectionStatus('Disconnected')
+    }
+
+    setWs(websocket)
+
+    setTimeout(() => {
+      if (!isConnected && websocket.readyState !== WebSocket.OPEN) {
+        websocket.close()
+        setErrorMessage('Connection timed out. Tap "Try Reconnecting" or "Clear Data".')
+        setConnectionStatus('Failed')
+      }
+    }, 10000)
   }
 
   useEffect(() => {
     connectToDeriv()
-
-    return () => {
-      if (ws) {
-        ws.close()
-      }
-    }
+    return () => { if (ws) ws.close() }
   }, [])
 
   const handleReconnect = () => {
@@ -162,6 +121,13 @@ export default function TradingPage() {
     setAccountId('')
     setBalance(0)
     connectToDeriv()
+  }
+
+  const handleClearData = () => {
+    localStorage.removeItem('deriv_access_token')
+    localStorage.removeItem('oauth_connected')
+    if (ws) ws.close()
+    window.location.href = '/navigation'
   }
 
   const handleSwitchAccount = () => {
@@ -182,7 +148,6 @@ export default function TradingPage() {
 
   return (
     <div className="h-screen w-screen bg-mwathe-black flex flex-col overflow-hidden">
-      {/* Header */}
       <div className="h-14 bg-mwathe-darkgray flex items-center justify-between px-4 border-b border-gray-800 shrink-0">
         <div className="flex items-center gap-3">
           <button onClick={() => setMenuOpen(!menuOpen)} className="text-mwathe-white">
@@ -191,21 +156,15 @@ export default function TradingPage() {
           <div className="flex items-center gap-2">
             <img src="/logo.svg" alt="Logo" className="w-7 h-7" />
             <span className="text-sm font-bold hidden sm:block">
-              <span className="text-mwathe-orange">M</span>
-              <span className="text-mwathe-green">W</span>
-              <span className="text-mwathe-skyblue">A</span>
-              <span className="text-mwathe-white">THE</span>
+              <span className="text-mwathe-orange">M</span><span className="text-mwathe-green">W</span>
+              <span className="text-mwathe-skyblue">A</span><span className="text-mwathe-white">THE</span>
             </span>
           </div>
         </div>
-
         <div className="flex flex-col items-center">
           <span className="text-mwathe-gray text-xs">Account</span>
-          <span className="text-mwathe-white font-mono font-bold text-sm">
-            {accountId || 'Loading...'}
-          </span>
+          <span className="text-mwathe-white font-mono font-bold text-sm">{accountId || 'Loading...'}</span>
         </div>
-
         <div className="flex items-center gap-3">
           <button onClick={handleSwitchAccount} className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold ${accountType === 'demo' ? 'bg-mwathe-skyblue/20 text-mwathe-skyblue' : 'bg-mwathe-green/20 text-mwathe-green'}`}>
             <span>{accountType === 'demo' ? 'DEMO' : 'REAL'}</span>
@@ -218,18 +177,18 @@ export default function TradingPage() {
         </div>
       </div>
 
-      {/* Error/Status Display */}
       {errorMessage && (
         <div className="bg-red-900/30 border-b border-red-500 p-3 text-center">
-          <p className="text-red-400 text-xs font-bold mb-1">ERROR:</p>
-          <p className="text-red-300 text-sm mb-2">{errorMessage}</p>
-          <button 
-            onClick={handleReconnect}
-            className="flex items-center gap-2 mx-auto px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-bold"
-          >
-            <RefreshCw size={16} />
-            Try Reconnecting
-          </button>
+          <p className="text-red-400 text-xs font-bold mb-1">CONNECTION ERROR:</p>
+          <p className="text-red-300 text-sm mb-3">{errorMessage}</p>
+          <div className="flex gap-2 justify-center">
+            <button onClick={handleReconnect} className="flex items-center gap-2 px-4 py-2 bg-mwathe-skyblue hover:bg-sky-600 text-white rounded-lg text-sm font-bold">
+              <RefreshCw size={16} /> Try Reconnecting
+            </button>
+            <button onClick={handleClearData} className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-bold">
+              <LogOut size={16} /> Clear Data & Reconnect
+            </button>
+          </div>
         </div>
       )}
       {!isConnected && !errorMessage && (
@@ -238,7 +197,6 @@ export default function TradingPage() {
         </div>
       )}
 
-      {/* Main Content */}
       <div className="flex-1 overflow-auto">
         <AnimatePresence mode="wait">
           <motion.div key={activeSection} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }} className="h-full">
@@ -247,7 +205,6 @@ export default function TradingPage() {
         </AnimatePresence>
       </div>
 
-      {/* Side Menu */}
       <AnimatePresence>
         {menuOpen && (
           <>
