@@ -1,23 +1,48 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { Shield, Lock } from 'lucide-react'
+import { generatePKCE } from '../utils/oauth'
 
 export default function Navigation() {
   const navigate = useNavigate()
+  const [isLoading, setIsLoading] = useState(false)
 
-  // Your exact Deriv Client ID
+  // Your Deriv OAuth 2.0 Client ID
   const CLIENT_ID = '349eTg55tt6ZVaefjBIAH'
   
-  // Dynamically get the exact live URL (e.g., https://mwathe-trade-systems-gamma.vercel.app)
+  // Get current origin for redirect (works on localhost and Vercel)
   const REDIRECT_URI = window.location.origin
 
-  const handleConnect = () => {
-    // Construct the strict Deriv OAuth 2.0 Authorization URL
-    // This forces Deriv to show the "Mwathe Trade Systems" consent screen
-    const oauthUrl = `https://oauth.deriv.com/oauth2/authorize?app_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&l=EN&brand=deriv&scope=read%20trade%20admin`
+  const handleConnect = async () => {
+    setIsLoading(true)
     
-    // Redirect to Deriv's OAuth Consent Screen
-    window.location.href = oauthUrl
+    try {
+      // Step 1: Generate PKCE parameters
+      const { codeChallenge, state } = await generatePKCE()
+      
+      // Step 2: Build the OAuth 2.0 authorization URL
+      const params = new URLSearchParams({
+        response_type: 'code',
+        client_id: CLIENT_ID,
+        redirect_uri: REDIRECT_URI,
+        scope: 'trade account_manage',
+        state: state,
+        code_challenge: codeChallenge,
+        code_challenge_method: 'S256',
+        l: 'EN',
+        brand: 'deriv'
+      })
+      
+      // Step 3: Redirect to Deriv OAuth 2.0 endpoint
+      const oauthUrl = `https://auth.deriv.com/oauth2/auth?${params.toString()}`
+      
+      // Redirect user to Deriv's consent screen
+      window.location.href = oauthUrl
+    } catch (error) {
+      console.error('OAuth initiation failed:', error)
+      setIsLoading(false)
+    }
   }
 
   return (
@@ -40,34 +65,48 @@ export default function Navigation() {
         >
           <div className="text-center">
             <h1 className="text-2xl font-bold text-mwathe-white mb-2">Connect Your Account</h1>
-            <p className="text-mwathe-gray text-sm">Authorize Mwathe Trade Systems to access your Deriv account</p>
+            <p className="text-mwathe-gray text-sm">Authorize Mwathe Trade Systems via OAuth 2.0</p>
           </div>
 
           {/* Security Badges */}
           <div className="flex flex-col gap-2 w-full">
             <div className="flex items-center gap-3 bg-mwathe-darkgray px-4 py-3 rounded-lg border border-gray-800">
               <Shield className="text-mwathe-green" size={20} />
-              <span className="text-mwathe-green text-xs font-medium">Secure OAuth 2.0 Connection</span>
+              <span className="text-mwathe-green text-xs font-medium">OAuth 2.0 with PKCE</span>
             </div>
             <div className="flex items-center gap-3 bg-mwathe-darkgray px-4 py-3 rounded-lg border border-gray-800">
               <Lock className="text-mwathe-skyblue" size={20} />
-              <span className="text-mwathe-skyblue text-xs font-medium">No API Tokens Stored or Shared</span>
+              <span className="text-mwathe-skyblue text-xs font-medium">256-bit Encrypted</span>
             </div>
           </div>
 
           {/* Connect Button */}
           <button
             onClick={handleConnect}
-            className="w-full py-4 rounded-xl text-lg font-bold text-white bg-gradient-to-r from-mwathe-green to-mwathe-skyblue shadow-lg shadow-mwathe-green/30 active:scale-95 transition-transform flex items-center justify-center gap-3"
+            disabled={isLoading}
+            className={`w-full py-4 rounded-xl text-lg font-bold shadow-lg active:scale-95 transition-transform flex items-center justify-center gap-3 ${
+              isLoading 
+                ? 'bg-gray-700 text-gray-400' 
+                : 'bg-gradient-to-r from-mwathe-green to-mwathe-skyblue text-white shadow-mwathe-green/30'
+            }`}
           >
-            <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-            </svg>
-            Connect with Deriv
+            {isLoading ? (
+              <>
+                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                Redirecting...
+              </>
+            ) : (
+              <>
+                <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                </svg>
+                Connect with Deriv
+              </>
+            )}
           </button>
 
           <p className="text-mwathe-gray text-xs text-center max-w-xs">
-            You will be redirected to Deriv's official authorization screen to approve Mwathe Trade Systems.
+            You'll be redirected to Deriv's secure authorization page to approve Mwathe Trade Systems access.
           </p>
 
           <button onClick={() => navigate('/')} className="text-mwathe-gray text-sm underline mt-2">← Back to Dashboard</button>
