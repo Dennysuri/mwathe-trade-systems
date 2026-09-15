@@ -1,12 +1,22 @@
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
+import { Shield, Lock } from 'lucide-react'
 
 export default function Navigation() {
   const navigate = useNavigate()
 
+  // Your real Deriv Client ID
+  const CLIENT_ID = '349eTg55tt6ZVaefjBIAH'
+  
+  // Dynamically get the current domain (works on localhost and Vercel)
+  const REDIRECT_URI = window.location.origin
+
   const handleConnect = () => {
-    // We will update this with the real OAuth URL once deployed
-    navigate('/trading')
+    // Construct the official Deriv OAuth 2.0 URL
+    const oauthUrl = `https://oauth.deriv.com/oauth2/authorize?app_id=${CLIENT_ID}&l=EN&brand=deriv&redirect_uri=${encodeURIComponent(REDIRECT_URI)}`
+    
+    // Redirect the user to Deriv's secure login page
+    window.location.href = oauthUrl
   }
 
   return (
@@ -22,7 +32,7 @@ export default function Navigation() {
       {/* Main Content */}
       <div className="flex-1 flex items-center justify-center px-6">
         <motion.div 
-          className="flex flex-col items-center gap-8"
+          className="flex flex-col items-center gap-8 w-full max-w-sm"
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ duration: 0.6 }}
@@ -32,14 +42,22 @@ export default function Navigation() {
             <p className="text-mwathe-gray text-sm">Securely link your Deriv account via OAuth 2.0</p>
           </div>
 
-          <div className="flex items-center gap-2 bg-mwathe-darkgray px-4 py-2 rounded-lg">
-            <div className="w-3 h-3 rounded-full bg-mwathe-green animate-pulse"></div>
-            <span className="text-mwathe-green text-xs font-medium">256-bit Encrypted Connection</span>
+          {/* Security Badges */}
+          <div className="flex flex-col gap-2 w-full">
+            <div className="flex items-center gap-3 bg-mwathe-darkgray px-4 py-3 rounded-lg border border-gray-800">
+              <Shield className="text-mwathe-green" size={20} />
+              <span className="text-mwathe-green text-xs font-medium">256-bit Encrypted Connection</span>
+            </div>
+            <div className="flex items-center gap-3 bg-mwathe-darkgray px-4 py-3 rounded-lg border border-gray-800">
+              <Lock className="text-mwathe-skyblue" size={20} />
+              <span className="text-mwathe-skyblue text-xs font-medium">No API Tokens Stored or Shared</span>
+            </div>
           </div>
 
+          {/* Connect Button */}
           <button
             onClick={handleConnect}
-            className="w-72 py-4 rounded-xl text-lg font-bold text-white bg-gradient-to-r from-mwathe-green to-mwathe-skyblue shadow-lg shadow-mwathe-green/30 active:scale-95 transition-transform flex items-center justify-center gap-3"
+            className="w-full py-4 rounded-xl text-lg font-bold text-white bg-gradient-to-r from-mwathe-green to-mwathe-skyblue shadow-lg shadow-mwathe-green/30 active:scale-95 transition-transform flex items-center justify-center gap-3"
           >
             <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
               <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
@@ -47,7 +65,11 @@ export default function Navigation() {
             Connect with Deriv
           </button>
 
-          <button onClick={() => navigate('/')} className="text-mwathe-gray text-sm underline mt-4">← Back to Dashboard</button>
+          <p className="text-mwathe-gray text-xs text-center max-w-xs">
+            You will be redirected to Deriv's official authorization page. Approve the access to continue.
+          </p>
+
+          <button onClick={() => navigate('/')} className="text-mwathe-gray text-sm underline mt-2">← Back to Dashboard</button>
         </motion.div>
       </div>
     </div>
