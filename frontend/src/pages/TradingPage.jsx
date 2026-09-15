@@ -25,95 +25,79 @@ export default function TradingPage() {
   const [accountType, setAccountType] = useState('real')
   const [accountId, setAccountId] = useState('')
   const [isConnected, setIsConnected] = useState(false)
-  const [ws, setWs] = useState(null)
+  const [connectionStatus, setConnectionStatus] = useState('Connecting to Deriv...')
+  const [errorMessage, setErrorMessage] = useState('')
 
   useEffect(() => {
-    // Check if OAuth is connected
-    const oauthConnected = localStorage.getItem('oauth_connected')
     const token = localStorage.getItem('deriv_access_token')
     
-    console.log('🔍 Trading Page Mount - OAuth:', oauthConnected, 'Token:', token ? 'YES' : 'NO')
-
     if (!token) {
-      console.error('❌ No token found!')
+      setErrorMessage('No access token found in storage. Please reconnect.')
+      setConnectionStatus('Failed')
       return
     }
 
-    // Connect to Deriv WebSocket
+    if (token.length < 20) {
+      setErrorMessage(`Token is too short (${token.length} chars). It might be an invalid code.`)
+      setConnectionStatus('Failed')
+      return
+    }
+
     const wsUrl = 'wss://ws.derivws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH'
-    console.log(' Connecting to WebSocket:', wsUrl)
-    
     const websocket = new WebSocket(wsUrl)
 
     websocket.onopen = () => {
-      console.log('✅ WebSocket Connected!')
-      setIsConnected(true)
-      
-      // Authorize with token
-      console.log('📤 Sending authorize request...')
+      setConnectionStatus('WebSocket Open. Authorizing...')
       websocket.send(JSON.stringify({ authorize: token }))
     }
 
     websocket.onmessage = (message) => {
       try {
         const data = JSON.parse(message.data)
-        console.log(' Received:', data.msg_type)
         
         if (data.error) {
-          console.error(' API Error:', data.error)
+          setErrorMessage(`Deriv API Error: ${data.error.message || data.error.code}`)
+          setConnectionStatus('Failed')
           return
         }
 
         if (data.msg_type === 'authorize' && data.authorize) {
-          console.log('✅ Authorized! Account:', data.authorize)
-          
-          const accId = data.authorize.loginid || 'N/A'
-          const isVirtual = data.authorize.is_virtual
-          const curr = data.authorize.currency || 'USD'
-          
-          setAccountId(accId)
-          setAccountType(isVirtual ? 'demo' : 'real')
-          setCurrency(curr)
-          
-          // Request balance
-          console.log('📤 Requesting balance...')
+          setAccountId(data.authorize.loginid || 'N/A')
+          setAccountType(data.authorize.is_virtual ? 'demo' : 'real')
+          setCurrency(data.authorize.currency || 'USD')
+          setConnectionStatus('Authorized! Fetching balance...')
           websocket.send(JSON.stringify({ balance: 1, subscribe: 1 }))
         }
 
         if (data.msg_type === 'balance' && data.balance) {
-          console.log('💰 Balance received:', data.balance)
           setBalance(parseFloat(data.balance.balance))
           setCurrency(data.balance.currency)
+          setIsConnected(true)
+          setConnectionStatus('Connected')
+          setErrorMessage('')
         }
       } catch (e) {
-        console.error('❌ Parse error:', e)
+        setErrorMessage('Failed to parse server response.')
       }
     }
 
-    websocket.onerror = (error) => {
-      console.error('❌ WebSocket Error:', error)
-      setIsConnected(false)
+    websocket.onerror = () => {
+      setErrorMessage('WebSocket connection failed. Check internet or Deriv API status.')
+      setConnectionStatus('Failed')
     }
 
     websocket.onclose = () => {
-      console.log('🔌 WebSocket Closed')
       setIsConnected(false)
+      setConnectionStatus('Disconnected')
     }
 
-    setWs(websocket)
-
-    // Cleanup
     return () => {
-      if (websocket) {
-        websocket.close()
-      }
+      if (websocket) websocket.close()
     }
   }, [])
 
   const handleSwitchAccount = () => {
-    // TODO: Implement account switching
-    const newType = accountType === 'real' ? 'demo' : 'real'
-    setAccountType(newType)
+    setAccountType(accountType === 'real' ? 'demo' : 'real')
   }
 
   const renderSection = () => {
@@ -130,14 +114,12 @@ export default function TradingPage() {
 
   return (
     <div className="h-screen w-screen bg-mwathe-black flex flex-col overflow-hidden">
-      {/* Header with Account Info */}
+      {/* Header */}
       <div className="h-14 bg-mwathe-darkgray flex items-center justify-between px-4 border-b border-gray-800 shrink-0">
-        {/* Left: Menu Button + Logo */}
         <div className="flex items-center gap-3">
           <button onClick={() => setMenuOpen(!menuOpen)} className="text-mwathe-white">
             {menuOpen ? <X size={24} /> : <Menu size={24} />}
           </button>
-          
           <div className="flex items-center gap-2">
             <img src="/logo.svg" alt="Logo" className="w-7 h-7" />
             <span className="text-sm font-bold hidden sm:block">
@@ -149,88 +131,56 @@ export default function TradingPage() {
           </div>
         </div>
 
-        {/* Center: Account ID */}
         <div className="flex flex-col items-center">
           <span className="text-mwathe-gray text-xs">Account</span>
           <span className="text-mwathe-white font-mono font-bold text-sm">
-            {accountId || 'Connecting...'}
+            {accountId || 'Loading...'}
           </span>
         </div>
 
-        {/* Right: Balance + Account Toggle */}
         <div className="flex items-center gap-3">
-          {/* Account Type Toggle */}
-          <button
-            onClick={handleSwitchAccount}
-            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold transition-colors ${
-              accountType === 'demo' 
-                ? 'bg-mwathe-skyblue/20 text-mwathe-skyblue' 
-                : 'bg-mwathe-green/20 text-mwathe-green'
-            }`}
-          >
+          <button onClick={handleSwitchAccount} className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold ${accountType === 'demo' ? 'bg-mwathe-skyblue/20 text-mwathe-skyblue' : 'bg-mwathe-green/20 text-mwathe-green'}`}>
             <span>{accountType === 'demo' ? 'DEMO' : 'REAL'}</span>
-            <div className={`w-2 h-2 rounded-full ${isConnected ? 'animate-pulse' : ''} ${
-              accountType === 'demo' ? 'bg-mwathe-skyblue' : 'bg-mwathe-green'
-            }`}></div>
+            <div className={`w-2 h-2 rounded-full ${isConnected ? 'animate-pulse' : ''} ${accountType === 'demo' ? 'bg-mwathe-skyblue' : 'bg-mwathe-green'}`}></div>
           </button>
-
-          {/* Balance Display */}
           <div className="text-right">
             <p className="text-mwathe-gray text-xs">Balance</p>
-            <p className="text-mwathe-green font-bold font-mono">
-              {currency} {balance.toFixed(2)}
-            </p>
+            <p className="text-mwathe-green font-bold font-mono">{currency} {balance.toFixed(2)}</p>
           </div>
         </div>
       </div>
 
+      {/* ERROR / STATUS DISPLAY (Visible on screen for debugging) */}
+      {errorMessage && (
+        <div className="bg-red-900/30 border-b border-red-500 p-3 text-center">
+          <p className="text-red-400 text-xs font-bold">ERROR:</p>
+          <p className="text-red-300 text-sm">{errorMessage}</p>
+        </div>
+      )}
+      {!isConnected && !errorMessage && (
+        <div className="bg-mwathe-orange/10 border-b border-mwathe-orange p-2 text-center">
+          <p className="text-mwathe-orange text-xs">Status: {connectionStatus}</p>
+        </div>
+      )}
+
       {/* Main Content */}
       <div className="flex-1 overflow-auto">
         <AnimatePresence mode="wait">
-          <motion.div
-            key={activeSection}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            transition={{ duration: 0.2 }}
-            className="h-full"
-          >
+          <motion.div key={activeSection} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }} className="h-full">
             {renderSection()}
           </motion.div>
         </AnimatePresence>
       </div>
 
-      {/* Side Menu Overlay */}
+      {/* Side Menu */}
       <AnimatePresence>
         {menuOpen && (
           <>
-            <motion.div 
-              initial={{ opacity: 0 }} 
-              animate={{ opacity: 1 }} 
-              exit={{ opacity: 0 }}
-              onClick={() => setMenuOpen(false)}
-              className="absolute inset-0 bg-black/50 z-40"
-            />
-            <motion.div
-              initial={{ x: -280 }}
-              animate={{ x: 0 }}
-              exit={{ x: -280 }}
-              transition={{ type: 'spring', damping: 25 }}
-              className="absolute top-0 left-0 h-full w-64 bg-mwathe-darkgray z-50 shadow-2xl flex flex-col pt-4 border-r border-gray-800"
-            >
-              <div className="px-5 pb-4 border-b border-gray-800 mb-2">
-                <h3 className="text-mwathe-white font-bold">Menu</h3>
-              </div>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setMenuOpen(false)} className="absolute inset-0 bg-black/50 z-40" />
+            <motion.div initial={{ x: -280 }} animate={{ x: 0 }} exit={{ x: -280 }} transition={{ type: 'spring', damping: 25 }} className="absolute top-0 left-0 h-full w-64 bg-mwathe-darkgray z-50 shadow-2xl flex flex-col pt-4 border-r border-gray-800">
+              <div className="px-5 pb-4 border-b border-gray-800 mb-2"><h3 className="text-mwathe-white font-bold">Menu</h3></div>
               {menuItems.map((item) => (
-                <button
-                  key={item.id}
-                  onClick={() => { setActiveSection(item.id); setMenuOpen(false) }}
-                  className={`flex items-center gap-3 px-5 py-4 text-left transition-colors ${
-                    activeSection === item.id
-                      ? 'bg-mwathe-orange/10 text-mwathe-orange border-r-2 border-mwathe-orange'
-                      : 'text-mwathe-gray hover:bg-mwathe-black hover:text-mwathe-white'
-                  }`}
-                >
+                <button key={item.id} onClick={() => { setActiveSection(item.id); setMenuOpen(false) }} className={`flex items-center gap-3 px-5 py-4 text-left transition-colors ${activeSection === item.id ? 'bg-mwathe-orange/10 text-mwathe-orange border-r-2 border-mwathe-orange' : 'text-mwathe-gray hover:bg-mwathe-black hover:text-mwathe-white'}`}>
                   <item.icon size={20} />
                   <span className="text-sm font-medium">{item.name}</span>
                 </button>
