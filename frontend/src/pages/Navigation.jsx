@@ -8,20 +8,26 @@ export default function Navigation() {
   const navigate = useNavigate()
   const [isLoading, setIsLoading] = useState(false)
 
-  // Your Deriv OAuth 2.0 Client ID
   const CLIENT_ID = '349eTg55tt6ZVaefjBIAH'
-  
-  // Get current origin for redirect (works on localhost and Vercel)
   const REDIRECT_URI = window.location.origin
 
   const handleConnect = async () => {
     setIsLoading(true)
     
     try {
-      // Step 1: Generate PKCE parameters
+      console.log('🔐 Starting OAuth 2.0 flow...')
+      console.log('Client ID:', CLIENT_ID)
+      console.log('Redirect URI:', REDIRECT_URI)
+      
       const { codeChallenge, state } = await generatePKCE()
       
-      // Step 2: Build the OAuth 2.0 authorization URL
+      console.log('PKCE Generated')
+      console.log('Code Challenge:', codeChallenge.substring(0, 20) + '...')
+      console.log('State:', state)
+      
+      // EXACT OAuth 2.0 endpoint - NOT deriv.com
+      const AUTH_ENDPOINT = 'https://auth.deriv.com/oauth2/auth'
+      
       const params = new URLSearchParams({
         response_type: 'code',
         client_id: CLIENT_ID,
@@ -34,20 +40,23 @@ export default function Navigation() {
         brand: 'deriv'
       })
       
-      // Step 3: Redirect to Deriv OAuth 2.0 endpoint
-      const oauthUrl = `https://auth.deriv.com/oauth2/auth?${params.toString()}`
+      const oauthUrl = `${AUTH_ENDPOINT}?${params.toString()}`
       
-      // Redirect user to Deriv's consent screen
+      console.log('🚀 Redirecting to:', oauthUrl)
+      
+      // Small delay to see console logs
+      await new Promise(resolve => setTimeout(resolve, 500))
+      
       window.location.href = oauthUrl
     } catch (error) {
-      console.error('OAuth initiation failed:', error)
+      console.error(' OAuth initiation failed:', error)
       setIsLoading(false)
+      alert('Failed to initiate OAuth. Check console for details.')
     }
   }
 
   return (
     <div className="h-screen w-screen bg-mwathe-black flex flex-col overflow-hidden">
-      {/* Header with Logo */}
       <div className="h-14 bg-mwathe-darkgray flex items-center px-4 border-b border-gray-800 shrink-0">
         <div className="flex items-center gap-2">
           <img src="/logo.svg" alt="Logo" className="w-8 h-8" />
@@ -55,7 +64,6 @@ export default function Navigation() {
         </div>
       </div>
 
-      {/* Main Content */}
       <div className="flex-1 flex items-center justify-center px-6">
         <motion.div 
           className="flex flex-col items-center gap-8 w-full max-w-sm"
@@ -65,22 +73,20 @@ export default function Navigation() {
         >
           <div className="text-center">
             <h1 className="text-2xl font-bold text-mwathe-white mb-2">Connect Your Account</h1>
-            <p className="text-mwathe-gray text-sm">Authorize Mwathe Trade Systems via OAuth 2.0</p>
+            <p className="text-mwathe-gray text-sm">OAuth 2.0 Secure Authorization</p>
           </div>
 
-          {/* Security Badges */}
           <div className="flex flex-col gap-2 w-full">
             <div className="flex items-center gap-3 bg-mwathe-darkgray px-4 py-3 rounded-lg border border-gray-800">
               <Shield className="text-mwathe-green" size={20} />
-              <span className="text-mwathe-green text-xs font-medium">OAuth 2.0 with PKCE</span>
+              <span className="text-mwathe-green text-xs font-medium">Endpoint: auth.deriv.com</span>
             </div>
             <div className="flex items-center gap-3 bg-mwathe-darkgray px-4 py-3 rounded-lg border border-gray-800">
               <Lock className="text-mwathe-skyblue" size={20} />
-              <span className="text-mwathe-skyblue text-xs font-medium">256-bit Encrypted</span>
+              <span className="text-mwathe-skyblue text-xs font-medium">PKCE + State Protection</span>
             </div>
           </div>
 
-          {/* Connect Button */}
           <button
             onClick={handleConnect}
             disabled={isLoading}
@@ -106,7 +112,7 @@ export default function Navigation() {
           </button>
 
           <p className="text-mwathe-gray text-xs text-center max-w-xs">
-            You'll be redirected to Deriv's secure authorization page to approve Mwathe Trade Systems access.
+            Opens Deriv OAuth consent screen → Approve → Redirects back to Trading Page
           </p>
 
           <button onClick={() => navigate('/')} className="text-mwathe-gray text-sm underline mt-2">← Back to Dashboard</button>
