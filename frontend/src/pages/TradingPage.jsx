@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Menu, X, BarChart3, Signal, Bot, Cpu, Settings, Zap } from 'lucide-react'
-import derivService from '../services/derivService'
 import AnalysisTool from '../components/AnalysisTool'
 import Signals from '../components/Signals'
 import DennyBots from '../components/DennyBots'
@@ -26,47 +25,95 @@ export default function TradingPage() {
   const [accountType, setAccountType] = useState('real')
   const [accountId, setAccountId] = useState('')
   const [isConnected, setIsConnected] = useState(false)
+  const [ws, setWs] = useState(null)
 
   useEffect(() => {
-    // Connect to Deriv API on mount
-    const initializeConnection = async () => {
-      try {
-        await derivService.connect()
-        setIsConnected(true)
-        
-        // Set initial values
-        setBalance(derivService.balance)
-        setCurrency(derivService.currency)
-        setAccountType(derivService.accountType)
-        setAccountId(derivService.getAccountId())
+    // Check if OAuth is connected
+    const oauthConnected = localStorage.getItem('oauth_connected')
+    const token = localStorage.getItem('deriv_access_token')
+    
+    console.log('🔍 Trading Page Mount - OAuth:', oauthConnected, 'Token:', token ? 'YES' : 'NO')
 
-        // Listen for updates
-        derivService.addListener((data) => {
-          setBalance(data.balance)
-          setCurrency(data.currency)
-          setAccountType(data.accountType)
-          setAccountId(derivService.getAccountId())
-        })
-      } catch (error) {
-        console.error('Failed to connect to Deriv:', error)
-        setIsConnected(false)
+    if (!token) {
+      console.error('❌ No token found!')
+      return
+    }
+
+    // Connect to Deriv WebSocket
+    const wsUrl = 'wss://ws.derivws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH'
+    console.log(' Connecting to WebSocket:', wsUrl)
+    
+    const websocket = new WebSocket(wsUrl)
+
+    websocket.onopen = () => {
+      console.log('✅ WebSocket Connected!')
+      setIsConnected(true)
+      
+      // Authorize with token
+      console.log('📤 Sending authorize request...')
+      websocket.send(JSON.stringify({ authorize: token }))
+    }
+
+    websocket.onmessage = (message) => {
+      try {
+        const data = JSON.parse(message.data)
+        console.log(' Received:', data.msg_type)
+        
+        if (data.error) {
+          console.error(' API Error:', data.error)
+          return
+        }
+
+        if (data.msg_type === 'authorize' && data.authorize) {
+          console.log('✅ Authorized! Account:', data.authorize)
+          
+          const accId = data.authorize.loginid || 'N/A'
+          const isVirtual = data.authorize.is_virtual
+          const curr = data.authorize.currency || 'USD'
+          
+          setAccountId(accId)
+          setAccountType(isVirtual ? 'demo' : 'real')
+          setCurrency(curr)
+          
+          // Request balance
+          console.log('📤 Requesting balance...')
+          websocket.send(JSON.stringify({ balance: 1, subscribe: 1 }))
+        }
+
+        if (data.msg_type === 'balance' && data.balance) {
+          console.log('💰 Balance received:', data.balance)
+          setBalance(parseFloat(data.balance.balance))
+          setCurrency(data.balance.currency)
+        }
+      } catch (e) {
+        console.error('❌ Parse error:', e)
       }
     }
 
-    initializeConnection()
+    websocket.onerror = (error) => {
+      console.error('❌ WebSocket Error:', error)
+      setIsConnected(false)
+    }
 
-    // Cleanup on unmount
+    websocket.onclose = () => {
+      console.log('🔌 WebSocket Closed')
+      setIsConnected(false)
+    }
+
+    setWs(websocket)
+
+    // Cleanup
     return () => {
-      derivService.disconnect()
+      if (websocket) {
+        websocket.close()
+      }
     }
   }, [])
 
-  const handleSwitchAccount = async () => {
-    // TODO: Implement account switching logic
-    // For now, just toggle between demo/real
+  const handleSwitchAccount = () => {
+    // TODO: Implement account switching
     const newType = accountType === 'real' ? 'demo' : 'real'
     setAccountType(newType)
-    // In production, this would call derivService.switchAccount()
   }
 
   const renderSection = () => {
@@ -105,7 +152,9 @@ export default function TradingPage() {
         {/* Center: Account ID */}
         <div className="flex flex-col items-center">
           <span className="text-mwathe-gray text-xs">Account</span>
-          <span className="text-mwathe-white font-mono font-bold text-sm">{accountId || 'Loading...'}</span>
+          <span className="text-mwathe-white font-mono font-bold text-sm">
+            {accountId || 'Connecting...'}
+          </span>
         </div>
 
         {/* Right: Balance + Account Toggle */}
