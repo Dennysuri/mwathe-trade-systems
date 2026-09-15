@@ -19,38 +19,51 @@ export default function Callback() {
         const errorParam = params.get('error')
 
         if (errorParam) {
-          throw new Error(params.get('error_description') || 'Authorization denied by user')
+          throw new Error(params.get('error_description') || 'Authorization denied')
         }
 
         if (!code) {
-          console.log('❌ No code found in URL. Params:', Object.fromEntries(params))
-          throw new Error('No authorization code received from Deriv')
+          throw new Error('No authorization code received')
         }
 
-        console.log('✅ Authorization code received:', code.substring(0, 10) + '...')
+        console.log('✅ Code received, exchanging for access token...')
 
-        // Verify state (CSRF protection)
+        // Verify state
         const storedState = sessionStorage.getItem('oauth_state')
         if (state !== storedState) {
-          throw new Error('State mismatch - possible CSRF attack')
+          throw new Error('State mismatch')
         }
 
-        setStatus('Authentication successful! Redirecting to Trading Page...')
+        // Exchange code for access token using our serverless function
+        const REDIRECT_URI = window.location.origin + '/callback'
         
-        // For MVP: Store the code as token (in production, exchange it on backend)
-        // Deriv accepts the authorization code as a temporary token for WebSocket
-        localStorage.setItem('deriv_access_token', code)
+        const tokenResponse = await fetch('/api/exchange-token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code, redirect_uri: REDIRECT_URI }),
+        })
+
+        if (!tokenResponse.ok) {
+          const errorData = await tokenResponse.json()
+          throw new Error(errorData.error || 'Token exchange failed')
+        }
+
+        const tokenData = await tokenResponse.json()
+        console.log('✅ Access token received!')
+
+        // Store the REAL access token
+        localStorage.setItem('deriv_access_token', tokenData.access_token)
         localStorage.setItem('oauth_connected', 'true')
         clearPKCE()
         
-        console.log('✅ Token stored, redirecting to trading...')
+        setStatus('Authentication successful! Redirecting...')
         
         setTimeout(() => {
           navigate('/trading', { replace: true })
         }, 500)
 
       } catch (err) {
-        console.error('❌ OAuth callback error:', err)
+        console.error('❌ OAuth error:', err)
         setError(err.message)
         setTimeout(() => {
           navigate('/navigation', { replace: true })
