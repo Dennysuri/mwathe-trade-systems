@@ -14,6 +14,17 @@ export default function Dashboard() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.8 }}
       >
+        {/* Large Centered Logo */}
+        <motion.div 
+          className="w-40 h-40 mb-4"
+          initial={{ scale: 0.8, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ duration: 0.6, delay: 0.2 }}
+        >
+          <img src="/logo.svg" alt="Mwathe Trade Systems" className="w-full h-full drop-shadow-2xl" />
+        </motion.div>
+
+        {/* App Name */}
         <div className="flex flex-col items-center">
           <h1 className="text-5xl font-black tracking-tight">
             <span className="text-mwathe-orange">M</span>
