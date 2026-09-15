@@ -37,14 +37,17 @@ export default function Callback() {
 
         setStatus('Authentication successful! Redirecting to Trading Page...')
         
-        // For MVP: Save connection status and redirect to trading
-        localStorage.setItem('deriv_auth_code', code)
+        // For MVP: Store the code as token (in production, exchange it on backend)
+        // Deriv accepts the authorization code as a temporary token for WebSocket
+        localStorage.setItem('deriv_access_token', code)
         localStorage.setItem('oauth_connected', 'true')
         clearPKCE()
         
+        console.log('✅ Token stored, redirecting to trading...')
+        
         setTimeout(() => {
           navigate('/trading', { replace: true })
-        }, 1000)
+        }, 500)
 
       } catch (err) {
         console.error('❌ OAuth callback error:', err)
