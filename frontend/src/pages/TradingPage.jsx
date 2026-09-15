@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Menu, X, BarChart3, Signal, Bot, Cpu, Settings, Zap } from 'lucide-react'
+import derivService from '../services/derivService'
 import AnalysisTool from '../components/AnalysisTool'
 import Signals from '../components/Signals'
 import DennyBots from '../components/DennyBots'
@@ -20,6 +21,53 @@ const menuItems = [
 export default function TradingPage() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [activeSection, setActiveSection] = useState('analysis')
+  const [balance, setBalance] = useState(0)
+  const [currency, setCurrency] = useState('USD')
+  const [accountType, setAccountType] = useState('real')
+  const [accountId, setAccountId] = useState('')
+  const [isConnected, setIsConnected] = useState(false)
+
+  useEffect(() => {
+    // Connect to Deriv API on mount
+    const initializeConnection = async () => {
+      try {
+        await derivService.connect()
+        setIsConnected(true)
+        
+        // Set initial values
+        setBalance(derivService.balance)
+        setCurrency(derivService.currency)
+        setAccountType(derivService.accountType)
+        setAccountId(derivService.getAccountId())
+
+        // Listen for updates
+        derivService.addListener((data) => {
+          setBalance(data.balance)
+          setCurrency(data.currency)
+          setAccountType(data.accountType)
+          setAccountId(derivService.getAccountId())
+        })
+      } catch (error) {
+        console.error('Failed to connect to Deriv:', error)
+        setIsConnected(false)
+      }
+    }
+
+    initializeConnection()
+
+    // Cleanup on unmount
+    return () => {
+      derivService.disconnect()
+    }
+  }, [])
+
+  const handleSwitchAccount = async () => {
+    // TODO: Implement account switching logic
+    // For now, just toggle between demo/real
+    const newType = accountType === 'real' ? 'demo' : 'real'
+    setAccountType(newType)
+    // In production, this would call derivService.switchAccount()
+  }
 
   const renderSection = () => {
     switch(activeSection) {
@@ -35,25 +83,55 @@ export default function TradingPage() {
 
   return (
     <div className="h-screen w-screen bg-mwathe-black flex flex-col overflow-hidden">
-      {/* Header */}
-      <div className="h-12 bg-mwathe-darkgray flex items-center justify-between px-4 border-b border-gray-800 shrink-0">
-        <button onClick={() => setMenuOpen(!menuOpen)} className="text-mwathe-white">
-          {menuOpen ? <X size={24} /> : <Menu size={24} />}
-        </button>
-        
-        <div className="flex items-center gap-2">
-          <img src="/logo.svg" alt="Logo" className="w-7 h-7" />
-          <span className="text-sm font-bold">
-            <span className="text-mwathe-orange">M</span>
-            <span className="text-mwathe-green">W</span>
-            <span className="text-mwathe-skyblue">A</span>
-            <span className="text-mwathe-white">THE</span>
-          </span>
+      {/* Header with Account Info */}
+      <div className="h-14 bg-mwathe-darkgray flex items-center justify-between px-4 border-b border-gray-800 shrink-0">
+        {/* Left: Menu Button + Logo */}
+        <div className="flex items-center gap-3">
+          <button onClick={() => setMenuOpen(!menuOpen)} className="text-mwathe-white">
+            {menuOpen ? <X size={24} /> : <Menu size={24} />}
+          </button>
+          
+          <div className="flex items-center gap-2">
+            <img src="/logo.svg" alt="Logo" className="w-7 h-7" />
+            <span className="text-sm font-bold hidden sm:block">
+              <span className="text-mwathe-orange">M</span>
+              <span className="text-mwathe-green">W</span>
+              <span className="text-mwathe-skyblue">A</span>
+              <span className="text-mwathe-white">THE</span>
+            </span>
+          </div>
         </div>
-        
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-mwathe-green animate-pulse"></div>
-          <span className="text-mwathe-green text-sm font-bold">$10,000.00</span>
+
+        {/* Center: Account ID */}
+        <div className="flex flex-col items-center">
+          <span className="text-mwathe-gray text-xs">Account</span>
+          <span className="text-mwathe-white font-mono font-bold text-sm">{accountId || 'Loading...'}</span>
+        </div>
+
+        {/* Right: Balance + Account Toggle */}
+        <div className="flex items-center gap-3">
+          {/* Account Type Toggle */}
+          <button
+            onClick={handleSwitchAccount}
+            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold transition-colors ${
+              accountType === 'demo' 
+                ? 'bg-mwathe-skyblue/20 text-mwathe-skyblue' 
+                : 'bg-mwathe-green/20 text-mwathe-green'
+            }`}
+          >
+            <span>{accountType === 'demo' ? 'DEMO' : 'REAL'}</span>
+            <div className={`w-2 h-2 rounded-full ${isConnected ? 'animate-pulse' : ''} ${
+              accountType === 'demo' ? 'bg-mwathe-skyblue' : 'bg-mwathe-green'
+            }`}></div>
+          </button>
+
+          {/* Balance Display */}
+          <div className="text-right">
+            <p className="text-mwathe-gray text-xs">Balance</p>
+            <p className="text-mwathe-green font-bold font-mono">
+              {currency} {balance.toFixed(2)}
+            </p>
+          </div>
         </div>
       </div>
 
