@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Menu, X, BarChart3, Signal, Bot, Cpu, Settings, Zap } from 'lucide-react'
 import AnalysisTool from '../components/AnalysisTool'
@@ -25,16 +25,11 @@ export default function TradingPage() {
   const [accountType, setAccountType] = useState('real')
   const [accountId, setAccountId] = useState('')
   const [isConnected, setIsConnected] = useState(false)
-  const [errorMessage, setErrorMessage] = useState('')
   const [accounts, setAccounts] = useState([])
   const [selectedAccountId, setSelectedAccountId] = useState('')
   
-  const wsRef = useRef(null)
-
-  // BULLETPROOF Account Type Detection based on Deriv ID prefixes
   const getAccountTypeFromId = (id) => {
     if (!id) return 'real'
-    // Demo accounts usually start with VR, VRT, VRW, or DOT
     if (id.startsWith('VR') || id.startsWith('DOT')) {
       return 'demo'
     }
@@ -42,18 +37,7 @@ export default function TradingPage() {
   }
 
   const connectToAccount = async (accId, token) => {
-    if (!accId) {
-      setErrorMessage('Account ID is missing.')
-      return
-    }
-
-    setErrorMessage('')
-    setIsConnected(false)
-
-    if (wsRef.current) {
-      wsRef.current.close()
-      wsRef.current = null
-    }
+    if (!accId) return
 
     try {
       const response = await fetch(`https://api.derivws.com/trading/v1/options/accounts/${accId}/otp`, {
@@ -64,19 +48,14 @@ export default function TradingPage() {
         }
       })
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`)
-      }
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
 
       const data = await response.json()
       const wsUrl = data.data?.url
 
-      if (!wsUrl) {
-        throw new Error('No WebSocket URL returned')
-      }
+      if (!wsUrl) throw new Error('No WebSocket URL')
 
       const websocket = new WebSocket(wsUrl)
-      wsRef.current = websocket
 
       websocket.onopen = () => {
         websocket.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: 1 }))
@@ -96,7 +75,6 @@ export default function TradingPage() {
       }
 
       websocket.onerror = () => {
-        setErrorMessage('Connection failed.')
         setIsConnected(false)
       }
 
@@ -105,17 +83,14 @@ export default function TradingPage() {
       }
 
     } catch (error) {
-      setErrorMessage(`Failed: ${error.message}`)
+      console.error('Connection error:', error)
     }
   }
 
   useEffect(() => {
     const token = localStorage.getItem('deriv_access_token')
     
-    if (!token) {
-      setErrorMessage('No token found. Please reconnect.')
-      return
-    }
+    if (!token) return
 
     const fetchAccounts = async () => {
       try {
@@ -127,9 +102,7 @@ export default function TradingPage() {
           }
         })
 
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`)
-        }
+        if (!response.ok) throw new Error(`HTTP ${response.status}`)
 
         const data = await response.json()
         const accountList = data.data || []
@@ -139,11 +112,7 @@ export default function TradingPage() {
             const accId = acc.id || acc.loginid || acc.account_id || `account_${idx}`
             const type = getAccountTypeFromId(accId)
             
-            return {
-              ...acc,
-              id: accId,
-              type: type
-            }
+            return { ...acc, id: accId, type }
           })
           
           setAccounts(processedAccounts)
@@ -155,20 +124,13 @@ export default function TradingPage() {
           setCurrency(defaultAcc.currency || 'USD')
           
           connectToAccount(defaultAcc.id, token)
-        } else {
-          setErrorMessage('No accounts found.')
         }
-
       } catch (error) {
-        setErrorMessage('Failed to load accounts.')
+        console.error('Fetch error:', error)
       }
     }
 
     fetchAccounts()
-
-    return () => {
-      if (wsRef.current) wsRef.current.close()
-    }
   }, [])
 
   const handleSwitchAccount = () => {
@@ -184,15 +146,7 @@ export default function TradingPage() {
       
       const token = localStorage.getItem('deriv_access_token')
       connectToAccount(targetAccount.id, token)
-    } else {
-      setErrorMessage(`No ${targetType} account available.`)
     }
-  }
-
-  const handleClearData = () => {
-    localStorage.clear()
-    if (wsRef.current) wsRef.current.close()
-    window.location.href = '/navigation'
   }
 
   const renderSection = () => {
@@ -218,44 +172,54 @@ export default function TradingPage() {
           <div className="flex items-center gap-2">
             <img src="/logo.svg" alt="Logo" className="w-7 h-7" />
             <span className="text-sm font-bold hidden sm:block">
-              <span className="text-mwathe-orange">M</span><span className="text-mwathe-green">W</span>
-              <span className="text-mwathe-skyblue">A</span><span className="text-mwathe-white">THE</span>
+              <span className="text-mwathe-orange">M</span>
+              <span className="text-mwathe-green">W</span>
+              <span className="text-mwathe-skyblue">A</span>
+              <span className="text-mwathe-white">THE</span>
             </span>
           </div>
         </div>
+        
         <div className="flex flex-col items-center">
           <span className="text-mwathe-gray text-[10px]">Account</span>
           <span className="text-mwathe-white font-mono font-bold text-xs">{accountId || '---'}</span>
         </div>
+
         <div className="flex items-center gap-2">
           <button 
             onClick={handleSwitchAccount}
             className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold border ${
-              accountType === 'demo' ? 'bg-mwathe-skyblue/20 text-mwathe-skyblue border-mwathe-skyblue/50' : 'bg-mwathe-green/20 text-mwathe-green border-mwathe-green/50'
+              accountType === 'demo' 
+                ? 'bg-mwathe-skyblue/20 text-mwathe-skyblue border-mwathe-skyblue/50' 
+                : 'bg-mwathe-green/20 text-mwathe-green border-mwathe-green/50'
             }`}
           >
             <span>{accountType === 'demo' ? 'DEMO' : 'REAL'}</span>
-            <div className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'animate-pulse bg-current' : 'bg-gray-500'}`}></div>
+            <div className={`w-1.5 h-1.5 rounded-full ${
+              isConnected ? 'animate-pulse bg-current' : 'bg-gray-500'
+            }`}></div>
           </button>
+          
           <div className="text-right">
             <p className="text-mwathe-gray text-[10px]">Balance</p>
-            <p className="text-mwathe-green font-bold font-mono text-xs">{currency} {balance.toFixed(2)}</p>
+            <p className="text-mwathe-green font-bold font-mono text-xs">
+              {currency} {balance.toFixed(2)}
+            </p>
           </div>
         </div>
       </div>
 
-      {/* Minimal Error Message (Only shows if connection completely fails) */}
-      {errorMessage && (
-        <div className="bg-red-900/30 border-b border-red-500 p-2 text-center flex justify-between items-center px-4">
-          <p className="text-red-400 text-xs flex-1 text-left">{errorMessage}</p>
-          <button onClick={handleClearData} className="text-red-400 text-xs font-bold underline ml-2">Reconnect</button>
-        </div>
-      )}
-
       {/* Main Content */}
       <div className="flex-1 overflow-auto">
         <AnimatePresence mode="wait">
-          <motion.div key={activeSection} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }} className="h-full">
+          <motion.div
+            key={activeSection}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            transition={{ duration: 0.2 }}
+            className="h-full"
+          >
             {renderSection()}
           </motion.div>
         </AnimatePresence>
@@ -265,11 +229,36 @@ export default function TradingPage() {
       <AnimatePresence>
         {menuOpen && (
           <>
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setMenuOpen(false)} className="absolute inset-0 bg-black/50 z-40" />
-            <motion.div initial={{ x: -280 }} animate={{ x: 0 }} exit={{ x: -280 }} transition={{ type: 'spring', damping: 25 }} className="absolute top-0 left-0 h-full w-64 bg-mwathe-darkgray z-50 shadow-2xl flex flex-col pt-4 border-r border-gray-800">
-              <div className="px-5 pb-4 border-b border-gray-800 mb-2"><h3 className="text-mwathe-white font-bold">Menu</h3></div>
+            <motion.div 
+              initial={{ opacity: 0 }} 
+              animate={{ opacity: 1 }} 
+              exit={{ opacity: 0 }}
+              onClick={() => setMenuOpen(false)}
+              className="absolute inset-0 bg-black/50 z-40"
+            />
+            <motion.div
+              initial={{ x: -280 }}
+              animate={{ x: 0 }}
+              exit={{ x: -280 }}
+              transition={{ type: 'spring', damping: 25 }}
+              className="absolute top-0 left-0 h-full w-64 bg-mwathe-darkgray z-50 shadow-2xl flex flex-col pt-4 border-r border-gray-800"
+            >
+              <div className="px-5 pb-4 border-b border-gray-800 mb-2">
+                <h3 className="text-mwathe-white font-bold">Menu</h3>
+              </div>
               {menuItems.map((item) => (
-                <button key={item.id} onClick={() => { setActiveSection(item.id); setMenuOpen(false) }} className={`flex items-center gap-3 px-5 py-4 text-left transition-colors ${activeSection === item.id ? 'bg-mwathe-orange/10 text-mwathe-orange border-r-2 border-mwathe-orange' : 'text-mwathe-gray hover:bg-mwathe-black hover:text-mwathe-white'}`}>
+                <button
+                  key={item.id}
+                  onClick={() => { 
+                    setActiveSection(item.id)
+                    setMenuOpen(false) 
+                  }}
+                  className={`flex items-center gap-3 px-5 py-4 text-left transition-colors ${
+                    activeSection === item.id
+                      ? 'bg-mwathe-orange/10 text-mwathe-orange border-r-2 border-mwathe-orange'
+                      : 'text-mwathe-gray hover:bg-mwathe-black hover:text-mwathe-white'
+                  }`}
+                >
                   <item.icon size={20} />
                   <span className="text-sm font-medium">{item.name}</span>
                 </button>

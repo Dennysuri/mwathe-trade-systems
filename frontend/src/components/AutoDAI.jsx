@@ -12,16 +12,23 @@ export default function AutoDAI() {
   const handleLogin = () => {
     if (password === 'Denny@1249') {
       setIsAuthenticated(true)
-      setLogs(['[System] AutoD AI Core initialized.', '[System] Password verified. Access granted.'])
+      setLogs([
+        '[System] AutoD AI Core initialized.',
+        '[System] Password verified. Access granted.'
+      ])
     } else {
       setError('Invalid Password')
     }
   }
 
-  const addLog = (msg) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`])
+  const addLog = (msg) => {
+    setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`])
+  }
 
   useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight
+    if (logRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight
+    }
   }, [logs])
 
   const handleRun = () => {
@@ -45,12 +52,20 @@ export default function AutoDAI() {
           <input 
             type="password" 
             value={password}
-            onChange={(e) => { setPassword(e.target.value); setError('') }}
+            onChange={(e) => { 
+              setPassword(e.target.value)
+              setError('')
+            }}
             className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-4 py-3 text-mwathe-white text-center text-lg mb-3 focus:border-mwathe-orange outline-none"
             placeholder="Enter Password"
           />
           {error && <p className="text-red-500 text-sm mb-3">{error}</p>}
-          <button onClick={handleLogin} className="w-full py-3 rounded-xl bg-gradient-to-r from-mwathe-orange to-mwathe-green text-white font-bold">Unlock AI</button>
+          <button 
+            onClick={handleLogin}
+            className="w-full py-3 rounded-xl bg-gradient-to-r from-mwathe-orange to-mwathe-green text-white font-bold"
+          >
+            Unlock AI
+          </button>
         </div>
       </div>
     )
@@ -70,18 +85,31 @@ export default function AutoDAI() {
 
       {/* Parameters */}
       <div className="bg-mwathe-darkgray rounded-xl p-4 border border-gray-800 space-y-3">
+        <h3 className="text-mwathe-white font-bold text-sm">Parameters</h3>
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="text-mwathe-gray text-xs block mb-1">Stake ($)</label>
-            <input type="number" defaultValue="0.35" className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-mwathe-white text-sm" />
+            <input 
+              type="number" 
+              defaultValue="0.35"
+              className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-mwathe-white text-sm"
+            />
           </div>
           <div>
             <label className="text-mwathe-gray text-xs block mb-1">Target Profit ($)</label>
-            <input type="number" defaultValue="20" className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-mwathe-white text-sm" />
+            <input 
+              type="number" 
+              defaultValue="20"
+              className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-mwathe-white text-sm"
+            />
           </div>
           <div>
             <label className="text-mwathe-gray text-xs block mb-1">Stop Loss ($)</label>
-            <input type="number" defaultValue="10" className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-mwathe-white text-sm" />
+            <input 
+              type="number" 
+              defaultValue="10"
+              className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-mwathe-white text-sm"
+            />
           </div>
           <div>
             <label className="text-mwathe-gray text-xs block mb-1">Time Frame</label>
@@ -102,9 +130,19 @@ export default function AutoDAI() {
           <Terminal size={14} className="text-mwathe-orange" />
           <span className="text-mwathe-orange text-xs font-bold">AI DECISION LOG</span>
         </div>
-        <div ref={logRef} className="flex-1 p-3 overflow-y-auto font-mono text-xs space-y-1">
+        <div 
+          ref={logRef}
+          className="flex-1 p-3 overflow-y-auto font-mono text-xs space-y-1"
+        >
           {logs.map((log, i) => (
-            <p key={i} className={log.includes('WON') || log.includes('profit') ? 'text-mwathe-green' : log.includes('Decision') ? 'text-mwathe-skyblue' : 'text-mwathe-gray'}>
+            <p 
+              key={i} 
+              className={
+                log.includes('WON') || log.includes('profit') ? 'text-mwathe-green' :
+                log.includes('Decision') ? 'text-mwathe-skyblue' :
+                'text-mwathe-gray'
+              }
+            >
               {log}
             </p>
           ))}
@@ -113,14 +151,36 @@ export default function AutoDAI() {
 
       {/* Controls */}
       <div className="grid grid-cols-3 gap-3">
-        <button onClick={handleRun} disabled={isRunning} className={`py-3 rounded-xl font-bold flex items-center justify-center gap-2 ${isRunning ? 'bg-gray-700 text-gray-400' : 'bg-mwathe-orange text-white'}`}>
-          <Play size={18} /> Run
+        <button 
+          onClick={handleRun}
+          disabled={isRunning}
+          className={`py-3 rounded-xl font-bold flex items-center justify-center gap-2 ${
+            isRunning 
+              ? 'bg-gray-700 text-gray-400' 
+              : 'bg-mwathe-orange text-white'
+          }`}
+        >
+          <Play size={18} />
+          Run
         </button>
-        <button onClick={() => setIsRunning(false)} disabled={!isRunning} className={`py-3 rounded-xl font-bold flex items-center justify-center gap-2 ${!isRunning ? 'bg-gray-700 text-gray-400' : 'bg-red-500 text-white'}`}>
-          <Square size={18} /> Stop
+        <button 
+          onClick={() => setIsRunning(false)}
+          disabled={!isRunning}
+          className={`py-3 rounded-xl font-bold flex items-center justify-center gap-2 ${
+            !isRunning 
+              ? 'bg-gray-700 text-gray-400' 
+              : 'bg-red-500 text-white'
+          }`}
+        >
+          <Square size={18} />
+          Stop
         </button>
-        <button onClick={() => { setIsRunning(false); setLogs([]) }} className="py-3 rounded-xl font-bold flex items-center justify-center gap-2 bg-mwathe-darkgray border border-gray-700 text-mwathe-white">
-          <RefreshCw size={18} /> Reset
+        <button 
+          onClick={() => { setIsRunning(false); setLogs([]) }}
+          className="py-3 rounded-xl font-bold flex items-center justify-center gap-2 bg-mwathe-darkgray border border-gray-700 text-mwathe-white"
+        >
+          <RefreshCw size={18} />
+          Reset
         </button>
       </div>
     </div>

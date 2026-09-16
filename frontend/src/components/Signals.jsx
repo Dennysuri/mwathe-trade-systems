@@ -4,11 +4,31 @@ import { Activity, TrendingUp, RefreshCw, AlertCircle } from 'lucide-react'
 
 export default function Signals() {
   const [signals, setSignals] = useState([
-    { id: 1, asset: 'Volatility 100 (1s)', type: 'Digits', subType: 'Over/Under', option: 'Over', entry: '5', accuracy: '87%', condition: 'Strong Uptrend' },
-    { id: 2, asset: 'Volatility 75', type: 'Ups & Downs', subType: 'Rise/Fall', option: 'Rise', entry: '1245.50', accuracy: '82%', condition: 'Bullish Momentum' }
+    { 
+      id: 1, 
+      asset: 'Volatility 100 (1s)', 
+      type: 'Digits', 
+      subType: 'Over/Under', 
+      option: 'Over', 
+      entry: '5', 
+      accuracy: '87%',
+      condition: 'Strong Uptrend'
+    },
+    { 
+      id: 2, 
+      asset: 'Volatility 75', 
+      type: 'Ups & Downs', 
+      subType: 'Rise/Fall', 
+      option: 'Rise', 
+      entry: '1245.50', 
+      accuracy: '82%',
+      condition: 'Bullish Momentum'
+    }
   ])
 
-  const resetSignals = () => setSignals([])
+  const resetSignals = () => {
+    setSignals([])
+  }
 
   return (
     <div className="p-4 space-y-4">
@@ -21,7 +41,8 @@ export default function Signals() {
           onClick={resetSignals}
           className="flex items-center gap-2 px-4 py-2 rounded-lg bg-mwathe-darkgray border border-gray-700 text-mwathe-orange text-sm font-bold hover:bg-gray-800"
         >
-          <RefreshCw size={16} /> Reset
+          <RefreshCw size={16} />
+          Reset
         </button>
       </div>
 
@@ -44,7 +65,9 @@ export default function Signals() {
                 <div className="flex justify-between items-start mb-3">
                   <div>
                     <h3 className="text-mwathe-white font-bold text-lg">{signal.asset}</h3>
-                    <p className="text-mwathe-gray text-xs">{signal.type} • {signal.subType} • <span className="text-mwathe-skyblue font-medium">{signal.option}</span></p>
+                    <p className="text-mwathe-gray text-xs">
+                      {signal.type} • {signal.subType} • <span className="text-mwathe-skyblue font-medium">{signal.option}</span>
+                    </p>
                   </div>
                   <div className="text-right">
                     <p className="text-mwathe-green font-bold text-lg">{signal.accuracy}</p>
