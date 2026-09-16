@@ -36,7 +36,6 @@ export default function TradingPage() {
   useEffect(() => {
     addDebugStep('1. TradingPage mounted')
     
-    // Step 1: Check localStorage
     const token = localStorage.getItem('deriv_access_token')
     const oauthStatus = localStorage.getItem('oauth_connected')
     
@@ -45,87 +44,100 @@ export default function TradingPage() {
     
     if (!token) {
       setErrorMessage(' NO TOKEN IN STORAGE! Click "Clear & Reconnect" to login.')
-      addDebugStep('ERROR: No token found')
       return
     }
 
-    // Step 2: Validate token
-    if (!token.startsWith('ory_at_') && !token.startsWith('ory_ac_')) {
-      setErrorMessage('⚠️ Token format looks unusual. Might still work...')
-      addDebugStep(`4. Token starts with: ${token.substring(0, 20)}...`)
-    } else {
-      addDebugStep(`4. Token type: ${token.startsWith('ory_at_') ? 'ACCESS_TOKEN' : 'AUTH_CODE'}`)
-    }
-
-    // Step 3: Try WebSocket connection
+    addDebugStep(`4. Token type: ${token.startsWith('ory_at_') ? 'ACCESS_TOKEN' : 'OTHER'}`)
     addDebugStep('5. Attempting WebSocket connection...')
     setErrorMessage('')
     
-    const wsUrl = 'wss://ws.derivws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH'
-    addDebugStep(`6. Connecting to: ${wsUrl}`)
-    
-    try {
-      const websocket = new WebSocket(wsUrl)
-      
-      websocket.onopen = () => {
-        addDebugStep('7. ✅ WebSocket OPEN!')
-        addDebugStep('8. Sending authorize request...')
-        websocket.send(JSON.stringify({ authorize: token }))
+    // Try different Deriv WebSocket endpoints
+    const endpoints = [
+      'wss://ws.derivws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH',
+      'wss://ws.binaryws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH',
+      'wss://ws.deriv.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH'
+    ]
+
+    let currentEndpoint = 0
+
+    const tryConnect = () => {
+      if (currentEndpoint >= endpoints.length) {
+        addDebugStep('ERROR: All endpoints failed')
+        setErrorMessage(' All connection attempts failed. Check internet and click Retry.')
+        return
       }
 
-      websocket.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data)
-          addDebugStep(`9. Received: ${data.msg_type}`)
-          
-          if (data.msg_type === 'authorize') {
-            if (data.error) {
-              addDebugStep(`10. ❌ AUTH FAILED: ${data.error.message}`)
-              setErrorMessage(`Deriv rejected token: ${data.error.message || data.error.code}`)
-              websocket.close()
-            } else if (data.authorize) {
-              addDebugStep('10. ✅ AUTHORIZED!')
-              addDebugStep(`11. Account: ${data.authorize.loginid}`)
-              setAccountId(data.authorize.loginid)
-              setAccountType(data.authorize.is_virtual ? 'demo' : 'real')
-              setCurrency(data.authorize.currency || 'USD')
-              
-              addDebugStep('12. Requesting balance...')
-              websocket.send(JSON.stringify({ balance: 1, subscribe: 1 }))
-            }
-          }
-          
-          if (data.msg_type === 'balance') {
-            if (data.balance) {
-              addDebugStep(`13. 💰 Balance: ${data.balance.balance} ${data.balance.currency}`)
-              setBalance(parseFloat(data.balance.balance))
-              setCurrency(data.balance.currency)
-              setIsConnected(true)
-              setErrorMessage('')
-            }
-          }
-        } catch (e) {
-          addDebugStep(`ERROR parsing message: ${e.message}`)
+      const wsUrl = endpoints[currentEndpoint]
+      addDebugStep(`6. Trying endpoint ${currentEndpoint + 1}: ${wsUrl}`)
+
+      try {
+        const websocket = new WebSocket(wsUrl)
+        
+        websocket.onopen = () => {
+          addDebugStep('7. ✅ WebSocket OPEN!')
+          addDebugStep('8. Sending authorize request...')
+          websocket.send(JSON.stringify({ authorize: token }))
         }
-      }
 
-      websocket.onerror = (error) => {
-        addDebugStep('ERROR: WebSocket connection failed')
-        setErrorMessage('WebSocket failed. Check internet connection.')
-      }
+        websocket.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data)
+            addDebugStep(`9. Received: ${data.msg_type}`)
+            
+            if (data.msg_type === 'authorize') {
+              if (data.error) {
+                addDebugStep(`10. ❌ AUTH FAILED: ${data.error.message}`)
+                setErrorMessage(`Deriv rejected token: ${data.error.message || data.error.code}`)
+                websocket.close()
+              } else if (data.authorize) {
+                addDebugStep('10. ✅ AUTHORIZED!')
+                addDebugStep(`11. Account: ${data.authorize.loginid}`)
+                setAccountId(data.authorize.loginid)
+                setAccountType(data.authorize.is_virtual ? 'demo' : 'real')
+                setCurrency(data.authorize.currency || 'USD')
+                
+                addDebugStep('12. Requesting balance...')
+                websocket.send(JSON.stringify({ balance: 1, subscribe: 1 }))
+              }
+            }
+            
+            if (data.msg_type === 'balance') {
+              if (data.balance) {
+                addDebugStep(`13. 💰 Balance: ${data.balance.balance} ${data.balance.currency}`)
+                setBalance(parseFloat(data.balance.balance))
+                setCurrency(data.balance.currency)
+                setIsConnected(true)
+                setErrorMessage('')
+              }
+            }
+          } catch (e) {
+            addDebugStep(`ERROR parsing: ${e.message}`)
+          }
+        }
 
-      websocket.onclose = () => {
-        addDebugStep('WebSocket CLOSED')
-        setIsConnected(false)
-      }
+        websocket.onerror = (error) => {
+          addDebugStep(`ERROR: WebSocket error on endpoint ${currentEndpoint + 1}`)
+          currentEndpoint++
+          setTimeout(() => tryConnect(), 1000)
+        }
 
-      setWs(websocket)
-      addDebugStep('WebSocket object created')
-      
-    } catch (error) {
-      addDebugStep(`FATAL ERROR: ${error.message}`)
-      setErrorMessage(`Failed to create WebSocket: ${error.message}`)
+        websocket.onclose = () => {
+          addDebugStep('WebSocket CLOSED')
+          setIsConnected(false)
+        }
+
+        setWs(websocket)
+        addDebugStep('WebSocket object created')
+        
+      } catch (error) {
+        addDebugStep(`FATAL ERROR: ${error.message}`)
+        setErrorMessage(`Failed to create WebSocket: ${error.message}`)
+        currentEndpoint++
+        setTimeout(() => tryConnect(), 1000)
+      }
     }
+
+    tryConnect()
 
     return () => {
       if (ws) {
@@ -193,7 +205,7 @@ export default function TradingPage() {
         </div>
       </div>
 
-      {/* Debug Steps - Scrollable */}
+      {/* Debug Steps */}
       <div className="bg-gray-900 border-b border-gray-700 max-h-32 overflow-y-auto p-2 text-xs font-mono">
         <p className="text-gray-400 font-bold mb-1 sticky top-0 bg-gray-900">CONNECTION LOG:</p>
         <div className="space-y-1">
