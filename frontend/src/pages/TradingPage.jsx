@@ -38,9 +38,9 @@ export default function TradingPage() {
 
   // Connect to a specific account using the OTP endpoint
   const connectToAccount = async (accId, token) => {
-    if (!accId || accId === 'undefined' || accId === 'null') {
-      addDebugStep('❌ ERROR: Invalid Account ID!')
-      setErrorMessage('Invalid Account ID. Please clear and reconnect.')
+    if (!accId) {
+      addDebugStep('❌ ERROR: Account ID is missing!')
+      setErrorMessage('Account ID is missing.')
       return
     }
 
@@ -145,45 +145,39 @@ export default function TradingPage() {
         const data = await response.json()
         const accountList = data.data || []
         
-        addDebugStep(`✅ Found ${accountList.length} accounts`)
+        addDebugStep(`✅ Found ${accountList.length} accounts in profile`)
         
         if (accountList.length > 0) {
-          // Log full structure of first account
-          const firstAcc = accountList[0]
-          addDebugStep(`📋 First account keys: ${Object.keys(firstAcc).join(', ')}`)
-          addDebugStep(`📋 Full first account: ${JSON.stringify(firstAcc)}`)
-          
-          // Try to find account ID in various possible fields
-          let foundAccounts = []
-          accountList.forEach((acc, idx) => {
-            // Try different possible ID fields
-            const accId = acc.id || acc.loginid || acc.account_id || acc.accountID || acc.login_id || `account_${idx}`
-            const isDemo = acc.is_virtual || acc.type === 'demo' || accId.startsWith('VR')
-            const accType = isDemo ? 'DEMO' : 'REAL'
+          // CRITICAL FIX: Keep ALL accounts and read type directly from API
+          // DO NOT filter or guess based on account ID
+          const processedAccounts = accountList.map((acc, idx) => {
+            // Read account type DIRECTLY from API response
+            // Deriv API returns: type = 'demo' or type = 'real' (or is_virtual field)
+            const accountType = acc.type === 'demo' || acc.is_virtual ? 'demo' : 'real'
+            const accId = acc.id || acc.loginid || acc.account_id || `account_${idx}`
             
-            foundAccounts.push({
+            addDebugStep(` Account ${idx + 1}: ID=${accId}, Type=${accountType.toUpperCase()} (from API: ${acc.type || 'N/A'})`)
+            
+            return {
               ...acc,
-              extractedId: accId,
-              isDemo: isDemo,
-              type: accType
-            })
-            
-            addDebugStep(`📋 Account ${idx + 1}: ID=${accId}, Type=${accType}`)
+              id: accId,
+              type: accountType
+            }
           })
           
-          setAccounts(foundAccounts)
+          setAccounts(processedAccounts)
 
-          // Select first account
-          const defaultAcc = foundAccounts[0]
-          setSelectedAccountId(defaultAcc.extractedId)
-          setAccountId(defaultAcc.extractedId)
-          setAccountType(defaultAcc.isDemo ? 'demo' : 'real')
+          // Select first account (usually default)
+          const defaultAcc = processedAccounts[0]
+          setSelectedAccountId(defaultAcc.id)
+          setAccountId(defaultAcc.id)
+          setAccountType(defaultAcc.type)
           setCurrency(defaultAcc.currency || 'USD')
           
-          addDebugStep(`🎯 Selected: ${defaultAcc.extractedId} (${defaultAcc.type})`)
+          addDebugStep(`🎯 Selected: ${defaultAcc.id} (${defaultAcc.type.toUpperCase()})`)
           
-          // Connect
-          connectToAccount(defaultAcc.extractedId, token)
+          // Connect to the selected account
+          connectToAccount(defaultAcc.id, token)
         } else {
           setErrorMessage('No accounts found.')
         }
@@ -201,33 +195,32 @@ export default function TradingPage() {
     }
   }, [])
 
-  // Handle switching
+  // Handle switching between accounts
   const handleSwitchAccount = () => {
     if (accounts.length === 0) {
       addDebugStep('❌ No accounts loaded')
       return
     }
 
-    addDebugStep(`🔄 Switching from ${accountType.toUpperCase()}...`)
+    addDebugStep(`🔄 User requested switch from ${accountType.toUpperCase()}...`)
 
+    // Find the OTHER account type (if current is real, find demo, and vice versa)
     const targetType = accountType === 'demo' ? 'real' : 'demo'
-    const targetAccount = accounts.find(acc => {
-      const accType = acc.isDemo ? 'demo' : 'real'
-      return accType === targetType
-    })
+    
+    const targetAccount = accounts.find(acc => acc.type === targetType)
     
     if (targetAccount) {
-      addDebugStep(`✅ Found ${targetType.toUpperCase()}: ${targetAccount.extractedId}`)
-      addDebugStep(`🔄 Connecting to ${targetAccount.extractedId}...`)
+      addDebugStep(`✅ Found ${targetType.toUpperCase()} account: ${targetAccount.id}`)
+      addDebugStep(`🔄 Switching to ${targetAccount.id}...`)
       
-      setSelectedAccountId(targetAccount.extractedId)
-      setAccountId(targetAccount.extractedId)
-      setAccountType(targetType)
+      setSelectedAccountId(targetAccount.id)
+      setAccountId(targetAccount.id)
+      setAccountType(targetAccount.type)
       
       const token = localStorage.getItem('deriv_access_token')
-      connectToAccount(targetAccount.extractedId, token)
+      connectToAccount(targetAccount.id, token)
     } else {
-      addDebugStep(`❌ No ${targetType.toUpperCase()} account found`)
+      addDebugStep(`❌ No ${targetType.toUpperCase()} account found in list`)
       setErrorMessage(`No ${targetType} account available.`)
     }
   }
@@ -289,11 +282,11 @@ export default function TradingPage() {
       </div>
 
       {/* Debug Steps */}
-      <div className="bg-gray-900 border-b border-gray-700 max-h-40 overflow-y-auto p-2 text-[10px] font-mono">
+      <div className="bg-gray-900 border-b border-gray-700 max-h-32 overflow-y-auto p-2 text-[10px] font-mono">
         <p className="text-gray-400 font-bold mb-1">CONNECTION LOG:</p>
         <div className="space-y-0.5">
           {debugSteps.map((step, i) => (
-            <p key={i} className={step.includes('✅') || step.includes('💰') || step.includes('📋') || step.includes('🎯') ? 'text-green-400' : step.includes('❌') || step.includes('Failed') || step.includes('error') ? 'text-red-400' : 'text-gray-300'}>
+            <p key={i} className={step.includes('✅') || step.includes('💰') || step.includes('') || step.includes('🎯') ? 'text-green-400' : step.includes('❌') || step.includes('Failed') || step.includes('error') ? 'text-red-400' : 'text-gray-300'}>
               {step}
             </p>
           ))}
