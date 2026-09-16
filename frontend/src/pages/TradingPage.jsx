@@ -26,37 +26,44 @@ export default function TradingPage() {
   const [accountId, setAccountId] = useState('')
   const [isConnected, setIsConnected] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
-  const [connectionStatus, setConnectionStatus] = useState('Initializing...')
+  const [debugInfo, setDebugInfo] = useState({})
   const [ws, setWs] = useState(null)
 
-  const connectToDeriv = () => {
+  useEffect(() => {
     const token = localStorage.getItem('deriv_access_token')
+    const oauthConnected = localStorage.getItem('oauth_connected')
     
+    setDebugInfo({
+      hasToken: !!token,
+      tokenLength: token ? token.length : 0,
+      tokenStart: token ? token.substring(0, 30) + '...' : 'NONE',
+      oauthConnected: !!oauthConnected,
+      tokenType: token ? (token.startsWith('ory_ac_') ? 'AUTH_CODE (WRONG!)' : token.startsWith('ory_at_') ? 'ACCESS_TOKEN (Correct)' : 'UNKNOWN') : 'NONE'
+    })
+
     if (!token) {
-      setErrorMessage('No access token found. Please reconnect.')
-      setConnectionStatus('Failed')
+      setErrorMessage('❌ NO TOKEN FOUND! Please go back and reconnect.')
       return
     }
 
-    // Check if it looks like an auth code (starts with ory_ac_) instead of access token (ory_at_)
+    // Check if we stored an auth code instead of access token
     if (token.startsWith('ory_ac_')) {
-      setErrorMessage('Invalid token type (Authorization Code detected). Please clear data and reconnect.')
-      setConnectionStatus('Failed')
+      setErrorMessage('❌ WRONG TOKEN TYPE! We stored an authorization code instead of access token. Token exchange failed. Please clear data and try again.')
       return
     }
 
-    setErrorMessage('')
-    setConnectionStatus('Connecting to Deriv...')
-
-    if (ws) {
-      ws.close()
+    if (token.length < 50) {
+      setErrorMessage(` TOKEN TOO SHORT! Expected 100+ chars but got ${token.length}. Token exchange likely failed.`)
+      return
     }
 
+    // Try to connect via WebSocket
+    setErrorMessage('')
     const wsUrl = 'wss://ws.derivws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH'
     const websocket = new WebSocket(wsUrl)
 
     websocket.onopen = () => {
-      setConnectionStatus('Connected! Authorizing...')
+      console.log('✅ WebSocket connected')
       websocket.send(JSON.stringify({ authorize: token }))
     }
 
@@ -65,16 +72,14 @@ export default function TradingPage() {
         const data = JSON.parse(message.data)
         
         if (data.error) {
-          setErrorMessage(`Deriv rejected the token: ${data.error.message || data.error.code}`)
-          setConnectionStatus('Failed')
+          setErrorMessage(`❌ DERIV REJECTED TOKEN: ${data.error.message || data.error.code}. The token is invalid or expired.`)
           return
         }
 
         if (data.msg_type === 'authorize' && data.authorize) {
-          setAccountId(data.authorize.loginid || 'N/A')
+          setAccountId(data.authorize.loginid)
           setAccountType(data.authorize.is_virtual ? 'demo' : 'real')
           setCurrency(data.authorize.currency || 'USD')
-          setConnectionStatus('Authorized! Fetching balance...')
           websocket.send(JSON.stringify({ balance: 1, subscribe: 1 }))
         }
 
@@ -82,52 +87,42 @@ export default function TradingPage() {
           setBalance(parseFloat(data.balance.balance))
           setCurrency(data.balance.currency)
           setIsConnected(true)
-          setConnectionStatus('Connected')
           setErrorMessage('')
         }
       } catch (e) {
-        setErrorMessage('Failed to parse server response.')
+        setErrorMessage('❌ Failed to parse server response')
       }
     }
 
     websocket.onerror = () => {
-      setErrorMessage('WebSocket connection failed. Check internet or Deriv API status.')
-      setConnectionStatus('Failed')
+      setErrorMessage(' WebSocket connection failed. Check your internet connection.')
     }
 
     websocket.onclose = () => {
       setIsConnected(false)
-      setConnectionStatus('Disconnected')
     }
 
     setWs(websocket)
 
+    // Timeout after 15 seconds
     setTimeout(() => {
-      if (!isConnected && websocket.readyState !== WebSocket.OPEN) {
-        websocket.close()
-        setErrorMessage('Connection timed out. Tap "Try Reconnecting" or "Clear Data".')
-        setConnectionStatus('Failed')
+      if (!isConnected) {
+        setErrorMessage('⏱️ Connection timeout. The token might be invalid.')
       }
-    }, 10000)
-  }
+    }, 15000)
 
-  useEffect(() => {
-    connectToDeriv()
-    return () => { if (ws) ws.close() }
+    return () => { if (websocket) websocket.close() }
   }, [])
-
-  const handleReconnect = () => {
-    setIsConnected(false)
-    setAccountId('')
-    setBalance(0)
-    connectToDeriv()
-  }
 
   const handleClearData = () => {
     localStorage.removeItem('deriv_access_token')
     localStorage.removeItem('oauth_connected')
     if (ws) ws.close()
     window.location.href = '/navigation'
+  }
+
+  const handleReconnect = () => {
+    window.location.reload()
   }
 
   const handleSwitchAccount = () => {
@@ -148,6 +143,7 @@ export default function TradingPage() {
 
   return (
     <div className="h-screen w-screen bg-mwathe-black flex flex-col overflow-hidden">
+      {/* Header */}
       <div className="h-14 bg-mwathe-darkgray flex items-center justify-between px-4 border-b border-gray-800 shrink-0">
         <div className="flex items-center gap-3">
           <button onClick={() => setMenuOpen(!menuOpen)} className="text-mwathe-white">
@@ -177,26 +173,33 @@ export default function TradingPage() {
         </div>
       </div>
 
+      {/* Debug Info Box */}
+      <div className="bg-gray-900 border-b border-gray-700 p-2">
+        <p className="text-gray-400 text-xs font-bold mb-1">DEBUG INFO:</p>
+        <div className="text-xs text-gray-300 space-y-1">
+          <p>Has Token: {debugInfo.hasToken ? '✅ YES' : '❌ NO'}</p>
+          <p>Token Length: {debugInfo.tokenLength || 0} chars</p>
+          <p>Token Type: {debugInfo.tokenType || 'UNKNOWN'}</p>
+          <p>Token Start: {debugInfo.tokenStart || 'NONE'}</p>
+        </div>
+      </div>
+
+      {/* Error Message */}
       {errorMessage && (
         <div className="bg-red-900/30 border-b border-red-500 p-3 text-center">
-          <p className="text-red-400 text-xs font-bold mb-1">CONNECTION ERROR:</p>
-          <p className="text-red-300 text-sm mb-3">{errorMessage}</p>
+          <p className="text-red-400 text-sm mb-3">{errorMessage}</p>
           <div className="flex gap-2 justify-center">
-            <button onClick={handleReconnect} className="flex items-center gap-2 px-4 py-2 bg-mwathe-skyblue hover:bg-sky-600 text-white rounded-lg text-sm font-bold">
-              <RefreshCw size={16} /> Try Reconnecting
+            <button onClick={handleReconnect} className="px-4 py-2 bg-mwathe-skyblue text-white rounded-lg text-sm font-bold">
+              <RefreshCw size={16} className="inline mr-1" /> Retry
             </button>
-            <button onClick={handleClearData} className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-bold">
-              <LogOut size={16} /> Clear Data & Reconnect
+            <button onClick={handleClearData} className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-bold">
+              <LogOut size={16} className="inline mr-1" /> Clear & Reconnect
             </button>
           </div>
         </div>
       )}
-      {!isConnected && !errorMessage && (
-        <div className="bg-mwathe-orange/10 border-b border-mwathe-orange p-2 text-center">
-          <p className="text-mwathe-orange text-xs">Status: {connectionStatus}</p>
-        </div>
-      )}
 
+      {/* Main Content */}
       <div className="flex-1 overflow-auto">
         <AnimatePresence mode="wait">
           <motion.div key={activeSection} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }} className="h-full">
@@ -205,6 +208,7 @@ export default function TradingPage() {
         </AnimatePresence>
       </div>
 
+      {/* Side Menu */}
       <AnimatePresence>
         {menuOpen && (
           <>
