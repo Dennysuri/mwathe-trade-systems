@@ -26,68 +26,54 @@ export default function TradingPage() {
   const [accountId, setAccountId] = useState('')
   const [isConnected, setIsConnected] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
-  const [debugInfo, setDebugInfo] = useState({})
+  const [debugInfo, setDebugInfo] = useState({ wsStatus: 'Idle', lastMsg: 'None' })
   const [ws, setWs] = useState(null)
 
   useEffect(() => {
     const token = localStorage.getItem('deriv_access_token')
-    const oauthConnected = localStorage.getItem('oauth_connected')
     
-    setDebugInfo({
-      hasToken: !!token,
-      tokenLength: token ? token.length : 0,
-      tokenStart: token ? token.substring(0, 30) + '...' : 'NONE',
-      oauthConnected: !!oauthConnected,
-      tokenType: token ? (token.startsWith('ory_ac_') ? 'AUTH_CODE (WRONG!)' : token.startsWith('ory_at_') ? 'ACCESS_TOKEN (Correct)' : 'UNKNOWN') : 'NONE'
-    })
-
     if (!token) {
-      setErrorMessage('❌ NO TOKEN FOUND! Please go back and reconnect.')
+      setErrorMessage(' NO TOKEN FOUND! Please go back and reconnect.')
       return
     }
 
-    // Check if we stored an auth code instead of access token
-    if (token.startsWith('ory_ac_')) {
-      setErrorMessage('❌ WRONG TOKEN TYPE! We stored an authorization code instead of access token. Token exchange failed. Please clear data and try again.')
-      return
-    }
-
-    if (token.length < 50) {
-      setErrorMessage(` TOKEN TOO SHORT! Expected 100+ chars but got ${token.length}. Token exchange likely failed.`)
-      return
-    }
-
-    // Try to connect via WebSocket
     setErrorMessage('')
+    setDebugInfo({ wsStatus: 'Connecting...', lastMsg: 'None' })
+
     const wsUrl = 'wss://ws.derivws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH'
     const websocket = new WebSocket(wsUrl)
 
     websocket.onopen = () => {
-      console.log('✅ WebSocket connected')
-      websocket.send(JSON.stringify({ authorize: token }))
+      setDebugInfo(prev => ({ ...prev, wsStatus: 'Connected. Pinging server...' }))
+      websocket.send(JSON.stringify({ ping: 1 }))
     }
 
     websocket.onmessage = (message) => {
       try {
         const data = JSON.parse(message.data)
-        
-        if (data.error) {
-          setErrorMessage(`❌ DERIV REJECTED TOKEN: ${data.error.message || data.error.code}. The token is invalid or expired.`)
-          return
-        }
+        setDebugInfo(prev => ({ ...prev, lastMsg: JSON.stringify(data).substring(0, 120) }))
 
-        if (data.msg_type === 'authorize' && data.authorize) {
-          setAccountId(data.authorize.loginid)
-          setAccountType(data.authorize.is_virtual ? 'demo' : 'real')
-          setCurrency(data.authorize.currency || 'USD')
-          websocket.send(JSON.stringify({ balance: 1, subscribe: 1 }))
-        }
-
-        if (data.msg_type === 'balance' && data.balance) {
+        if (data.msg_type === 'ping') {
+          setDebugInfo(prev => ({ ...prev, wsStatus: 'Ping OK. Authorizing...' }))
+          websocket.send(JSON.stringify({ authorize: token }))
+        } 
+        else if (data.msg_type === 'authorize') {
+          if (data.authorize) {
+            setAccountId(data.authorize.loginid)
+            setAccountType(data.authorize.is_virtual ? 'demo' : 'real')
+            setCurrency(data.authorize.currency || 'USD')
+            setDebugInfo(prev => ({ ...prev, wsStatus: 'Authorized! Fetching balance...' }))
+            websocket.send(JSON.stringify({ balance: 1, subscribe: 1 }))
+          } else if (data.error) {
+            setErrorMessage(`❌ DERIV REJECTED TOKEN: ${data.error.message || data.error.code}`)
+            setDebugInfo(prev => ({ ...prev, wsStatus: 'Authorization Failed' }))
+          }
+        } 
+        else if (data.msg_type === 'balance') {
           setBalance(parseFloat(data.balance.balance))
           setCurrency(data.balance.currency)
           setIsConnected(true)
-          setErrorMessage('')
+          setDebugInfo(prev => ({ ...prev, wsStatus: 'Fully Connected' }))
         }
       } catch (e) {
         setErrorMessage('❌ Failed to parse server response')
@@ -95,21 +81,16 @@ export default function TradingPage() {
     }
 
     websocket.onerror = () => {
-      setErrorMessage(' WebSocket connection failed. Check your internet connection.')
+      setErrorMessage(' WebSocket connection failed. Check internet or Deriv API status.')
+      setDebugInfo(prev => ({ ...prev, wsStatus: 'Connection Error' }))
     }
 
     websocket.onclose = () => {
       setIsConnected(false)
+      setDebugInfo(prev => ({ ...prev, wsStatus: 'Disconnected' }))
     }
 
     setWs(websocket)
-
-    // Timeout after 15 seconds
-    setTimeout(() => {
-      if (!isConnected) {
-        setErrorMessage('⏱️ Connection timeout. The token might be invalid.')
-      }
-    }, 15000)
 
     return () => { if (websocket) websocket.close() }
   }, [])
@@ -121,7 +102,7 @@ export default function TradingPage() {
     window.location.href = '/navigation'
   }
 
-  const handleReconnect = () => {
+  const handleRetry = () => {
     window.location.reload()
   }
 
@@ -175,12 +156,10 @@ export default function TradingPage() {
 
       {/* Debug Info Box */}
       <div className="bg-gray-900 border-b border-gray-700 p-2">
-        <p className="text-gray-400 text-xs font-bold mb-1">DEBUG INFO:</p>
+        <p className="text-gray-400 text-xs font-bold mb-1">LIVE DEBUGGER:</p>
         <div className="text-xs text-gray-300 space-y-1">
-          <p>Has Token: {debugInfo.hasToken ? '✅ YES' : '❌ NO'}</p>
-          <p>Token Length: {debugInfo.tokenLength || 0} chars</p>
-          <p>Token Type: {debugInfo.tokenType || 'UNKNOWN'}</p>
-          <p>Token Start: {debugInfo.tokenStart || 'NONE'}</p>
+          <p>WebSocket: {debugInfo.wsStatus}</p>
+          <p className="break-all">Last Server Msg: {debugInfo.lastMsg}</p>
         </div>
       </div>
 
@@ -189,7 +168,7 @@ export default function TradingPage() {
         <div className="bg-red-900/30 border-b border-red-500 p-3 text-center">
           <p className="text-red-400 text-sm mb-3">{errorMessage}</p>
           <div className="flex gap-2 justify-center">
-            <button onClick={handleReconnect} className="px-4 py-2 bg-mwathe-skyblue text-white rounded-lg text-sm font-bold">
+            <button onClick={handleRetry} className="px-4 py-2 bg-mwathe-skyblue text-white rounded-lg text-sm font-bold">
               <RefreshCw size={16} className="inline mr-1" /> Retry
             </button>
             <button onClick={handleClearData} className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-bold">
