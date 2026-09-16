@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Menu, X, BarChart3, Signal, Bot, Cpu, Settings, Zap, RefreshCw, LogOut } from 'lucide-react'
+import { Menu, X, BarChart3, Signal, Bot, Cpu, Settings, Zap } from 'lucide-react'
 import AnalysisTool from '../components/AnalysisTool'
 import Signals from '../components/Signals'
 import DennyBots from '../components/DennyBots'
@@ -26,15 +26,10 @@ export default function TradingPage() {
   const [accountId, setAccountId] = useState('')
   const [isConnected, setIsConnected] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
-  const [debugSteps, setDebugSteps] = useState([])
   const [accounts, setAccounts] = useState([])
   const [selectedAccountId, setSelectedAccountId] = useState('')
   
   const wsRef = useRef(null)
-
-  const addDebugStep = (step) => {
-    setDebugSteps(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${step}`])
-  }
 
   // BULLETPROOF Account Type Detection based on Deriv ID prefixes
   const getAccountTypeFromId = (id) => {
@@ -43,20 +38,16 @@ export default function TradingPage() {
     if (id.startsWith('VR') || id.startsWith('DOT')) {
       return 'demo'
     }
-    // Real accounts usually start with CR, MF, MLT, ROT, etc.
     return 'real'
   }
 
-  // Connect to a specific account using the OTP endpoint
   const connectToAccount = async (accId, token) => {
     if (!accId) {
-      addDebugStep('❌ ERROR: Account ID is missing!')
       setErrorMessage('Account ID is missing.')
       return
     }
 
-    addDebugStep(`🔌 Requesting WS URL for: ${accId}...`)
-    setErrorMessage('') // Clear previous errors
+    setErrorMessage('')
     setIsConnected(false)
 
     if (wsRef.current) {
@@ -74,8 +65,7 @@ export default function TradingPage() {
       })
 
       if (!response.ok) {
-        const errorText = await response.text()
-        throw new Error(`HTTP ${response.status}: ${errorText}`)
+        throw new Error(`HTTP ${response.status}`)
       }
 
       const data = await response.json()
@@ -85,26 +75,20 @@ export default function TradingPage() {
         throw new Error('No WebSocket URL returned')
       }
 
-      addDebugStep('✅ Got authenticated WS URL')
-      addDebugStep(' Connecting...')
-
       const websocket = new WebSocket(wsUrl)
       wsRef.current = websocket
 
       websocket.onopen = () => {
-        addDebugStep('✅ WebSocket CONNECTED!')
         websocket.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: 1 }))
       }
 
       websocket.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data)
-          
           if (msg.msg_type === 'balance') {
             setBalance(parseFloat(msg.balance.balance))
             setCurrency(msg.balance.currency)
             setIsConnected(true)
-            addDebugStep(`💰 Balance: ${msg.balance.balance} ${msg.balance.currency}`)
           }
         } catch (e) {
           console.error('Parse error:', e)
@@ -112,23 +96,19 @@ export default function TradingPage() {
       }
 
       websocket.onerror = () => {
-        addDebugStep('❌ WebSocket error')
         setErrorMessage('Connection failed.')
         setIsConnected(false)
       }
 
       websocket.onclose = () => {
-        addDebugStep('🔌 WebSocket closed')
         setIsConnected(false)
       }
 
     } catch (error) {
-      addDebugStep(`❌ OTP failed: ${error.message}`)
       setErrorMessage(`Failed: ${error.message}`)
     }
   }
 
-  // Initial load
   useEffect(() => {
     const token = localStorage.getItem('deriv_access_token')
     
@@ -136,8 +116,6 @@ export default function TradingPage() {
       setErrorMessage('No token found. Please reconnect.')
       return
     }
-
-    addDebugStep('📱 App mounted. Fetching accounts...')
 
     const fetchAccounts = async () => {
       try {
@@ -156,16 +134,10 @@ export default function TradingPage() {
         const data = await response.json()
         const accountList = data.data || []
         
-        addDebugStep(`✅ Found ${accountList.length} accounts in profile`)
-        
         if (accountList.length > 0) {
-          // Process accounts using ID prefix detection
           const processedAccounts = accountList.map((acc, idx) => {
             const accId = acc.id || acc.loginid || acc.account_id || `account_${idx}`
-            // Use the bulletproof ID check
             const type = getAccountTypeFromId(accId)
-            
-            addDebugStep(`📋 Account ${idx + 1}: ID=${accId}, Type=${type.toUpperCase()}`)
             
             return {
               ...acc,
@@ -176,23 +148,18 @@ export default function TradingPage() {
           
           setAccounts(processedAccounts)
 
-          // Select first account
           const defaultAcc = processedAccounts[0]
           setSelectedAccountId(defaultAcc.id)
           setAccountId(defaultAcc.id)
           setAccountType(defaultAcc.type)
           setCurrency(defaultAcc.currency || 'USD')
           
-          addDebugStep(` Selected: ${defaultAcc.id} (${defaultAcc.type.toUpperCase()})`)
-          
-          // Connect
           connectToAccount(defaultAcc.id, token)
         } else {
           setErrorMessage('No accounts found.')
         }
 
       } catch (error) {
-        addDebugStep(`❌ Fetch failed: ${error.message}`)
         setErrorMessage('Failed to load accounts.')
       }
     }
@@ -204,22 +171,13 @@ export default function TradingPage() {
     }
   }, [])
 
-  // Handle switching
   const handleSwitchAccount = () => {
-    if (accounts.length === 0) {
-      addDebugStep('❌ No accounts loaded')
-      return
-    }
-
-    addDebugStep(`🔄 User requested switch from ${accountType.toUpperCase()}...`)
+    if (accounts.length === 0) return
 
     const targetType = accountType === 'demo' ? 'real' : 'demo'
     const targetAccount = accounts.find(acc => acc.type === targetType)
     
     if (targetAccount) {
-      addDebugStep(`✅ Found ${targetType.toUpperCase()} account: ${targetAccount.id}`)
-      addDebugStep(`🔄 Switching to ${targetAccount.id}...`)
-      
       setSelectedAccountId(targetAccount.id)
       setAccountId(targetAccount.id)
       setAccountType(targetAccount.type)
@@ -227,7 +185,6 @@ export default function TradingPage() {
       const token = localStorage.getItem('deriv_access_token')
       connectToAccount(targetAccount.id, token)
     } else {
-      addDebugStep(` No ${targetType.toUpperCase()} account found`)
       setErrorMessage(`No ${targetType} account available.`)
     }
   }
@@ -236,10 +193,6 @@ export default function TradingPage() {
     localStorage.clear()
     if (wsRef.current) wsRef.current.close()
     window.location.href = '/navigation'
-  }
-
-  const handleRetry = () => {
-    window.location.reload()
   }
 
   const renderSection = () => {
@@ -264,7 +217,10 @@ export default function TradingPage() {
           </button>
           <div className="flex items-center gap-2">
             <img src="/logo.svg" alt="Logo" className="w-7 h-7" />
-            <span className="text-sm font-bold hidden sm:block">MWATHE</span>
+            <span className="text-sm font-bold hidden sm:block">
+              <span className="text-mwathe-orange">M</span><span className="text-mwathe-green">W</span>
+              <span className="text-mwathe-skyblue">A</span><span className="text-mwathe-white">THE</span>
+            </span>
           </div>
         </div>
         <div className="flex flex-col items-center">
@@ -288,26 +244,11 @@ export default function TradingPage() {
         </div>
       </div>
 
-      {/* Debug Steps */}
-      <div className="bg-gray-900 border-b border-gray-700 max-h-32 overflow-y-auto p-2 text-[10px] font-mono">
-        <p className="text-gray-400 font-bold mb-1">CONNECTION LOG:</p>
-        <div className="space-y-0.5">
-          {debugSteps.map((step, i) => (
-            <p key={i} className={step.includes('✅') || step.includes('') || step.includes('📋') || step.includes('🎯') ? 'text-green-400' : step.includes('❌') || step.includes('Failed') || step.includes('error') ? 'text-red-400' : 'text-gray-300'}>
-              {step}
-            </p>
-          ))}
-        </div>
-      </div>
-
-      {/* Error Message */}
+      {/* Minimal Error Message (Only shows if connection completely fails) */}
       {errorMessage && (
-        <div className="bg-red-900/30 border-b border-red-500 p-2 text-center">
-          <p className="text-red-400 text-xs mb-2">{errorMessage}</p>
-          <div className="flex gap-2 justify-center">
-            <button onClick={handleRetry} className="px-3 py-1 bg-mwathe-skyblue text-white rounded text-xs font-bold">Retry</button>
-            <button onClick={handleClearData} className="px-3 py-1 bg-red-600 text-white rounded text-xs font-bold">Clear & Reconnect</button>
-          </div>
+        <div className="bg-red-900/30 border-b border-red-500 p-2 text-center flex justify-between items-center px-4">
+          <p className="text-red-400 text-xs flex-1 text-left">{errorMessage}</p>
+          <button onClick={handleClearData} className="text-red-400 text-xs font-bold underline ml-2">Reconnect</button>
         </div>
       )}
 
