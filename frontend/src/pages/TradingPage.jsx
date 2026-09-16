@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Menu, X, BarChart3, Signal, Bot, Cpu, Settings, Zap, RefreshCw, LogOut } from 'lucide-react'
 import AnalysisTool from '../components/AnalysisTool'
@@ -27,124 +27,181 @@ export default function TradingPage() {
   const [isConnected, setIsConnected] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
   const [debugSteps, setDebugSteps] = useState([])
-  const [ws, setWs] = useState(null)
+  const [accounts, setAccounts] = useState([])
+  const [selectedAccountId, setSelectedAccountId] = useState('')
+  
+  const wsRef = useRef(null)
 
   const addDebugStep = (step) => {
     setDebugSteps(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${step}`])
   }
 
-  useEffect(() => {
-    addDebugStep('1. TradingPage mounted')
-    
-    const token = localStorage.getItem('deriv_access_token')
-    addDebugStep(`2. Token: ${token ? 'FOUND (' + token.length + ' chars)' : 'MISSING'}`)
-    
-    if (!token) {
-      setErrorMessage(' NO TOKEN! Click "Clear & Reconnect"')
-      return
+  // Connect to a specific account using the OTP endpoint
+  const connectToAccount = async (accId, token) => {
+    addDebugStep(`Requesting authenticated WS URL for: ${accId}...`)
+    setErrorMessage('')
+    setIsConnected(false)
+
+    // Close existing connection
+    if (wsRef.current) {
+      wsRef.current.close()
+      wsRef.current = null
     }
 
-    addDebugStep('3. Testing network connectivity...')
-    
-    // Test if we can reach Deriv servers
-    fetch('https://www.deriv.com', { mode: 'no-cors' })
-      .then(() => {
-        addDebugStep('4. ✅ Internet: CONNECTED')
-        addDebugStep('5. Connecting to Deriv WebSocket...')
-        connectWebSocket(token)
-      })
-      .catch(() => {
-        addDebugStep('4. ❌ Internet: BLOCKED or Deriv unreachable')
-        setErrorMessage(' Network issue. Check internet connection or VPN/firewall.')
-      })
-  }, [])
-
-  const connectWebSocket = (token) => {
-    const wsUrl = 'wss://ws.derivws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH'
-    
     try {
-      addDebugStep(`6. Creating WebSocket...`)
+      // Step 1: Get the authenticated WebSocket URL via OTP endpoint
+      const response = await fetch(`https://api.derivws.com/trading/v1/options/accounts/${accId}/otp`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      }
+
+      const data = await response.json()
+      const wsUrl = data.data?.url
+
+      if (!wsUrl) {
+        throw new Error('No WebSocket URL returned from OTP endpoint')
+      }
+
+      addDebugStep('✅ Received authenticated WebSocket URL')
+      addDebugStep('Connecting to WebSocket...')
+
+      // Step 2: Connect to the pre-authenticated URL
       const websocket = new WebSocket(wsUrl)
-      
+      wsRef.current = websocket
+
       websocket.onopen = () => {
-        addDebugStep('7. ✅ WebSocket CONNECTED!')
-        addDebugStep('8. Sending authorization...')
-        websocket.send(JSON.stringify({ authorize: token }))
+        addDebugStep('✅ WebSocket CONNECTED & AUTHENTICATED!')
+        // Step 3: Request balance (no need to send 'authorize' message)
+        websocket.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: 1 }))
       }
 
       websocket.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data)
-          addDebugStep(`9. Received: ${data.msg_type}`)
+          const msg = JSON.parse(event.data)
           
-          if (data.msg_type === 'authorize') {
-            if (data.error) {
-              addDebugStep(`10. ❌ AUTH REJECTED: ${data.error.message}`)
-              setErrorMessage(`Token rejected: ${data.error.message}. Click "Clear & Reconnect".`)
-              websocket.close()
-            } else if (data.authorize) {
-              addDebugStep('10. ✅ AUTHORIZED!')
-              addDebugStep(`11. Account: ${data.authorize.loginid}`)
-              setAccountId(data.authorize.loginid)
-              setAccountType(data.authorize.is_virtual ? 'demo' : 'real')
-              setCurrency(data.authorize.currency || 'USD')
-              
-              addDebugStep('12. Fetching balance...')
-              websocket.send(JSON.stringify({ balance: 1, subscribe: 1 }))
-            }
-          }
-          
-          if (data.msg_type === 'balance' && data.balance) {
-            addDebugStep(`13. 💰 Balance: ${data.balance.balance} ${data.balance.currency}`)
-            setBalance(parseFloat(data.balance.balance))
-            setCurrency(data.balance.currency)
+          if (msg.msg_type === 'balance') {
+            setBalance(parseFloat(msg.balance.balance))
+            setCurrency(msg.balance.currency)
             setIsConnected(true)
-            setErrorMessage('')
+            addDebugStep(`💰 Balance updated: ${msg.balance.balance} ${msg.balance.currency}`)
           }
         } catch (e) {
           addDebugStep(`Parse error: ${e.message}`)
         }
       }
 
-      websocket.onerror = (error) => {
-        addDebugStep('ERROR: WebSocket connection failed')
-        setErrorMessage(' WebSocket failed. Check internet/firewall. Click Retry.')
-      }
-
-      websocket.onclose = () => {
-        addDebugStep('WebSocket CLOSED')
+      websocket.onerror = () => {
+        addDebugStep('❌ WebSocket connection error')
+        setErrorMessage('Connection failed. Check internet.')
         setIsConnected(false)
       }
 
-      setWs(websocket)
-      addDebugStep('WebSocket object created')
-      
-      // Timeout after 15 seconds
-      setTimeout(() => {
-        if (!isConnected && websocket.readyState !== WebSocket.OPEN) {
-          addDebugStep('TIMEOUT: Connection took too long')
-          websocket.close()
-        }
-      }, 15000)
-      
+      websocket.onclose = () => {
+        addDebugStep('WebSocket closed')
+        setIsConnected(false)
+      }
+
     } catch (error) {
-      addDebugStep(`FATAL: ${error.message}`)
-      setErrorMessage(`Failed to create WebSocket: ${error.message}`)
+      addDebugStep(`❌ OTP request failed: ${error.message}`)
+      setErrorMessage(`Failed to connect: ${error.message}`)
+    }
+  }
+
+  // Initial load: Fetch account list
+  useEffect(() => {
+    const token = localStorage.getItem('deriv_access_token')
+    
+    if (!token) {
+      setErrorMessage('No access token found. Please reconnect.')
+      return
+    }
+
+    addDebugStep('App mounted. Fetching account list...')
+
+    const fetchAccounts = async () => {
+      try {
+        const response = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        })
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`)
+        }
+
+        const data = await response.json()
+        const accountList = data.data || []
+        
+        addDebugStep(`✅ Found ${accountList.length} accounts linked to profile`)
+        setAccounts(accountList)
+
+        if (accountList.length > 0) {
+          // Auto-select the default account, or the first one
+          const defaultAcc = accountList.find(a => a.is_default) || accountList[0]
+          setSelectedAccountId(defaultAcc.id)
+          setAccountId(defaultAcc.id)
+          setAccountType(defaultAcc.type === 'demo' ? 'demo' : 'real')
+          setCurrency(defaultAcc.currency || 'USD')
+          
+          // Connect to the default account
+          connectToAccount(defaultAcc.id, token)
+        } else {
+          setErrorMessage('No accounts found on this Deriv profile.')
+        }
+
+      } catch (error) {
+        addDebugStep(`❌ Failed to fetch accounts: ${error.message}`)
+        setErrorMessage('Failed to load accounts. Token may be invalid.')
+      }
+    }
+
+    fetchAccounts()
+
+    return () => {
+      if (wsRef.current) wsRef.current.close()
+    }
+  }, [])
+
+  // Handle switching between Real and Demo
+  const handleSwitchAccount = () => {
+    if (accounts.length === 0) return
+
+    const currentAcc = accounts.find(a => a.id === selectedAccountId)
+    const targetType = currentAcc?.type === 'demo' ? 'real' : 'demo'
+    const targetAcc = accounts.find(a => a.type === targetType)
+    
+    if (targetAcc) {
+      addDebugStep(`Switching to ${targetType.toUpperCase()} account: ${targetAcc.id}`)
+      setSelectedAccountId(targetAcc.id)
+      setAccountId(targetAcc.id)
+      setAccountType(targetType)
+      
+      const token = localStorage.getItem('deriv_access_token')
+      connectToAccount(targetAcc.id, token)
+    } else {
+      addDebugStep(`❌ No ${targetType} account found`)
+      setErrorMessage(`No ${targetType} account available on this profile.`)
     }
   }
 
   const handleClearData = () => {
     localStorage.clear()
-    if (ws) ws.close()
+    if (wsRef.current) wsRef.current.close()
     window.location.href = '/navigation'
   }
 
   const handleRetry = () => {
     window.location.reload()
-  }
-
-  const handleSwitchAccount = () => {
-    setAccountType(accountType === 'real' ? 'demo' : 'real')
   }
 
   const renderSection = () => {
@@ -173,27 +230,32 @@ export default function TradingPage() {
           </div>
         </div>
         <div className="flex flex-col items-center">
-          <span className="text-mwathe-gray text-xs">Account</span>
-          <span className="text-mwathe-white font-mono font-bold text-sm">{accountId || '---'}</span>
+          <span className="text-mwathe-gray text-[10px]">Account</span>
+          <span className="text-mwathe-white font-mono font-bold text-xs">{accountId || '---'}</span>
         </div>
-        <div className="flex items-center gap-3">
-          <button onClick={handleSwitchAccount} className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold ${accountType === 'demo' ? 'bg-mwathe-skyblue/20 text-mwathe-skyblue' : 'bg-mwathe-green/20 text-mwathe-green'}`}>
+        <div className="flex items-center gap-2">
+          <button 
+            onClick={handleSwitchAccount}
+            className={`flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-bold border ${
+              accountType === 'demo' ? 'bg-mwathe-skyblue/20 text-mwathe-skyblue border-mwathe-skyblue/50' : 'bg-mwathe-green/20 text-mwathe-green border-mwathe-green/50'
+            }`}
+          >
             <span>{accountType === 'demo' ? 'DEMO' : 'REAL'}</span>
-            <div className={`w-2 h-2 rounded-full ${isConnected ? 'animate-pulse bg-green-400' : 'bg-red-500'}`}></div>
+            <div className={`w-1.5 h-1.5 rounded-full ${isConnected ? 'animate-pulse bg-current' : 'bg-gray-500'}`}></div>
           </button>
           <div className="text-right">
-            <p className="text-mwathe-gray text-xs">Balance</p>
-            <p className="text-mwathe-green font-bold font-mono">{currency} {balance.toFixed(2)}</p>
+            <p className="text-mwathe-gray text-[10px]">Balance</p>
+            <p className="text-mwathe-green font-bold font-mono text-xs">{currency} {balance.toFixed(2)}</p>
           </div>
         </div>
       </div>
 
       {/* Debug Steps */}
-      <div className="bg-gray-900 border-b border-gray-700 max-h-32 overflow-y-auto p-2 text-xs font-mono">
-        <p className="text-gray-400 font-bold mb-1">CONNECTION LOG:</p>
-        <div className="space-y-1">
+      <div className="bg-gray-900 border-b border-gray-700 max-h-24 overflow-y-auto p-2 text-[10px] font-mono">
+        <p className="text-gray-400 font-bold mb-1">CONNECTION LOG (V3 API):</p>
+        <div className="space-y-0.5">
           {debugSteps.map((step, i) => (
-            <p key={i} className={step.includes('✅') ? 'text-green-400' : step.includes('❌') || step.includes('ERROR') || step.includes('FAILED') ? 'text-red-400' : 'text-gray-300'}>
+            <p key={i} className={step.includes('✅') || step.includes('💰') ? 'text-green-400' : step.includes('❌') || step.includes('Failed') || step.includes('error') ? 'text-red-400' : 'text-gray-300'}>
               {step}
             </p>
           ))}
@@ -202,15 +264,11 @@ export default function TradingPage() {
 
       {/* Error Message */}
       {errorMessage && (
-        <div className="bg-red-900/30 border-b border-red-500 p-3 text-center">
-          <p className="text-red-400 text-sm mb-3">{errorMessage}</p>
+        <div className="bg-red-900/30 border-b border-red-500 p-2 text-center">
+          <p className="text-red-400 text-xs mb-2">{errorMessage}</p>
           <div className="flex gap-2 justify-center">
-            <button onClick={handleRetry} className="px-4 py-2 bg-mwathe-skyblue text-white rounded-lg text-sm font-bold">
-              <RefreshCw size={16} className="inline mr-1" /> Retry
-            </button>
-            <button onClick={handleClearData} className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-bold">
-              <LogOut size={16} className="inline mr-1" /> Clear & Reconnect
-            </button>
+            <button onClick={handleRetry} className="px-3 py-1 bg-mwathe-skyblue text-white rounded text-xs font-bold">Retry</button>
+            <button onClick={handleClearData} className="px-3 py-1 bg-red-600 text-white rounded text-xs font-bold">Clear & Reconnect</button>
           </div>
         </div>
       )}
