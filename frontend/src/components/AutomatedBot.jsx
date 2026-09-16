@@ -1,15 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal } from 'lucide-react'
 
-const tradeTypes = [
-  'Multipliers',
-  'Ups & Downs',
-  'Touch & No Touch',
-  'Digits',
-  'Accumulators',
-  'Vanillas',
-  'Turbos'
-]
+const tradeTypes = ['Multipliers', 'Ups & Downs', 'Touch & No Touch', 'Digits', 'Accumulators', 'Vanillas', 'Turbos']
+const allowedMarkets = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
 
 export default function AutomatedBot() {
   const [tradeType, setTradeType] = useState('Digits')
@@ -17,22 +10,19 @@ export default function AutomatedBot() {
   const [isRunning, setIsRunning] = useState(false)
   const logRef = useRef(null)
 
-  const addLog = (msg) => {
-    setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`])
-  }
+  const addLog = (msg) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`])
 
-  useEffect(() => {
-    if (logRef.current) {
-      logRef.current.scrollTop = logRef.current.scrollHeight
-    }
-  }, [logs])
+  useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight }, [logs])
 
   const handleStart = () => {
     setIsRunning(true)
-    addLog('Initializing 100+ indicators...')
-    setTimeout(() => addLog('Scanning all Volatility Indices...'), 1000)
-    setTimeout(() => addLog('Volatility 100 (1s) selected. Analyzing entry...'), 2500)
-    setTimeout(() => addLog('Contract purchased. Monitoring...'), 4000)
+    addLog('Initializing 100+ indicators across 13 Volatility Indices...')
+    setTimeout(() => {
+      const market = allowedMarkets[Math.floor(Math.random() * allowedMarkets.length)]
+      addLog(`Scanning complete. ${market} selected for optimal conditions.`)
+    }, 1500)
+    setTimeout(() => addLog('Entry point identified. Calculating martingale safety...'), 3000)
+    setTimeout(() => addLog('Contract purchased. Monitoring for zero consecutive loss protection...'), 4500)
   }
 
   const handleReset = () => {
@@ -41,23 +31,18 @@ export default function AutomatedBot() {
   }
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="p-4 space-y-4 h-full overflow-y-auto">
       <div className="mb-2">
         <h2 className="text-2xl font-bold text-mwathe-white">Automated Trading Bot</h2>
         <p className="text-mwathe-gray text-sm">High-speed execution with zero consecutive losses</p>
       </div>
 
-      {/* Parameters */}
       <div className="bg-mwathe-darkgray rounded-xl p-4 border border-gray-800 space-y-3">
         <h3 className="text-mwathe-white font-bold text-sm">Parameters</h3>
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="text-mwathe-gray text-xs block mb-1">Trade Type</label>
-            <select 
-              value={tradeType}
-              onChange={(e) => setTradeType(e.target.value)}
-              className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-mwathe-white text-sm"
-            >
+            <select value={tradeType} onChange={(e) => setTradeType(e.target.value)} className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-mwathe-white text-sm">
               {tradeTypes.map(t => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>
@@ -71,97 +56,46 @@ export default function AutomatedBot() {
           </div>
           <div>
             <label className="text-mwathe-gray text-xs block mb-1">Stake ($)</label>
-            <input 
-              type="number" 
-              defaultValue="1"
-              className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-mwathe-white text-sm"
-            />
+            <input type="number" defaultValue="1" className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-mwathe-white text-sm" />
           </div>
           <div>
             <label className="text-mwathe-gray text-xs block mb-1">Martingale Factor</label>
-            <input 
-              type="number" 
-              defaultValue="1.5"
-              step="0.1"
-              className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-mwathe-white text-sm"
-            />
+            <input type="number" defaultValue="1.5" step="0.1" className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-mwathe-white text-sm" />
           </div>
           <div>
             <label className="text-mwathe-gray text-xs block mb-1">Target Profit ($)</label>
-            <input 
-              type="number" 
-              defaultValue="100"
-              className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-mwathe-white text-sm"
-            />
+            <input type="number" defaultValue="100" className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-mwathe-white text-sm" />
           </div>
           <div>
             <label className="text-mwathe-gray text-xs block mb-1">Stop Loss ($)</label>
-            <input 
-              type="number" 
-              defaultValue="50"
-              className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-mwathe-white text-sm"
-            />
+            <input type="number" defaultValue="50" className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-mwathe-white text-sm" />
           </div>
         </div>
       </div>
 
-      {/* Display Panel */}
       <div className="bg-black rounded-xl border border-gray-800 overflow-hidden flex flex-col h-64">
         <div className="bg-mwathe-darkgray px-3 py-2 flex items-center gap-2 border-b border-gray-800">
           <Terminal size={14} className="text-mwathe-green" />
           <span className="text-mwathe-gray text-xs font-bold">DISPLAY PANEL</span>
         </div>
-        <div 
-          ref={logRef}
-          className="flex-1 p-3 overflow-y-auto font-mono text-xs space-y-1"
-        >
+        <div ref={logRef} className="flex-1 p-3 overflow-y-auto font-mono text-xs space-y-1">
           {logs.map((log, i) => (
-            <p 
-              key={i} 
-              className={
-                log.includes('won') || log.includes('profit') ? 'text-mwathe-green' :
-                log.includes('lost') || log.includes('loss') ? 'text-red-500' :
-                'text-mwathe-skyblue'
-              }
-            >
+            <p key={i} className={log.includes('won') || log.includes('profit') ? 'text-mwathe-green' : log.includes('lost') || log.includes('loss') ? 'text-red-500' : 'text-mwathe-skyblue'}>
               {log}
             </p>
           ))}
         </div>
       </div>
 
-      {/* Controls */}
       <div className="grid grid-cols-3 gap-3">
-        <button 
-          onClick={handleStart}
-          disabled={isRunning}
-          className={`py-3 rounded-xl font-bold flex items-center justify-center gap-2 ${
-            isRunning 
-              ? 'bg-gray-700 text-gray-400' 
-              : 'bg-mwathe-green text-white'
-          }`}
-        >
-          <Play size={18} />
-          Run
+        <button onClick={handleStart} disabled={isRunning} className={`py-3 rounded-xl font-bold flex items-center justify-center gap-2 ${isRunning ? 'bg-gray-700 text-gray-400' : 'bg-mwathe-green text-white'}`}>
+          <Play size={18} /> Run
         </button>
-        <button 
-          onClick={() => setIsRunning(false)}
-          disabled={!isRunning}
-          className={`py-3 rounded-xl font-bold flex items-center justify-center gap-2 ${
-            !isRunning 
-              ? 'bg-gray-700 text-gray-400' 
-              : 'bg-red-500 text-white'
-          }`}
-        >
-          <Square size={18} />
-          Stop
+        <button onClick={() => setIsRunning(false)} disabled={!isRunning} className={`py-3 rounded-xl font-bold flex items-center justify-center gap-2 ${!isRunning ? 'bg-gray-700 text-gray-400' : 'bg-red-500 text-white'}`}>
+          <Square size={18} /> Stop
         </button>
-        <button 
-          onClick={handleReset}
-          className="py-3 rounded-xl font-bold flex items-center justify-center gap-2 bg-mwathe-darkgray border border-gray-700 text-mwathe-orange"
-        >
-          <RefreshCw size={18} />
-          Reset
+        <button onClick={handleReset} className="py-3 rounded-xl font-bold flex items-center justify-center gap-2 bg-mwathe-darkgray border border-gray-700 text-mwathe-orange">
+          <RefreshCw size={18} /> Reset
         </button>
       </div>
     </div>
