@@ -36,6 +36,17 @@ export default function TradingPage() {
     setDebugSteps(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${step}`])
   }
 
+  // BULLETPROOF Account Type Detection based on Deriv ID prefixes
+  const getAccountTypeFromId = (id) => {
+    if (!id) return 'real'
+    // Demo accounts usually start with VR, VRT, VRW, or DOT
+    if (id.startsWith('VR') || id.startsWith('DOT')) {
+      return 'demo'
+    }
+    // Real accounts usually start with CR, MF, MLT, ROT, etc.
+    return 'real'
+  }
+
   // Connect to a specific account using the OTP endpoint
   const connectToAccount = async (accId, token) => {
     if (!accId) {
@@ -45,7 +56,7 @@ export default function TradingPage() {
     }
 
     addDebugStep(`🔌 Requesting WS URL for: ${accId}...`)
-    setErrorMessage('')
+    setErrorMessage('') // Clear previous errors
     setIsConnected(false)
 
     if (wsRef.current) {
@@ -75,7 +86,7 @@ export default function TradingPage() {
       }
 
       addDebugStep('✅ Got authenticated WS URL')
-      addDebugStep('🌐 Connecting...')
+      addDebugStep(' Connecting...')
 
       const websocket = new WebSocket(wsUrl)
       wsRef.current = websocket
@@ -148,35 +159,33 @@ export default function TradingPage() {
         addDebugStep(`✅ Found ${accountList.length} accounts in profile`)
         
         if (accountList.length > 0) {
-          // CRITICAL FIX: Keep ALL accounts and read type directly from API
-          // DO NOT filter or guess based on account ID
+          // Process accounts using ID prefix detection
           const processedAccounts = accountList.map((acc, idx) => {
-            // Read account type DIRECTLY from API response
-            // Deriv API returns: type = 'demo' or type = 'real' (or is_virtual field)
-            const accountType = acc.type === 'demo' || acc.is_virtual ? 'demo' : 'real'
             const accId = acc.id || acc.loginid || acc.account_id || `account_${idx}`
+            // Use the bulletproof ID check
+            const type = getAccountTypeFromId(accId)
             
-            addDebugStep(` Account ${idx + 1}: ID=${accId}, Type=${accountType.toUpperCase()} (from API: ${acc.type || 'N/A'})`)
+            addDebugStep(`📋 Account ${idx + 1}: ID=${accId}, Type=${type.toUpperCase()}`)
             
             return {
               ...acc,
               id: accId,
-              type: accountType
+              type: type
             }
           })
           
           setAccounts(processedAccounts)
 
-          // Select first account (usually default)
+          // Select first account
           const defaultAcc = processedAccounts[0]
           setSelectedAccountId(defaultAcc.id)
           setAccountId(defaultAcc.id)
           setAccountType(defaultAcc.type)
           setCurrency(defaultAcc.currency || 'USD')
           
-          addDebugStep(`🎯 Selected: ${defaultAcc.id} (${defaultAcc.type.toUpperCase()})`)
+          addDebugStep(` Selected: ${defaultAcc.id} (${defaultAcc.type.toUpperCase()})`)
           
-          // Connect to the selected account
+          // Connect
           connectToAccount(defaultAcc.id, token)
         } else {
           setErrorMessage('No accounts found.')
@@ -195,7 +204,7 @@ export default function TradingPage() {
     }
   }, [])
 
-  // Handle switching between accounts
+  // Handle switching
   const handleSwitchAccount = () => {
     if (accounts.length === 0) {
       addDebugStep('❌ No accounts loaded')
@@ -204,9 +213,7 @@ export default function TradingPage() {
 
     addDebugStep(`🔄 User requested switch from ${accountType.toUpperCase()}...`)
 
-    // Find the OTHER account type (if current is real, find demo, and vice versa)
     const targetType = accountType === 'demo' ? 'real' : 'demo'
-    
     const targetAccount = accounts.find(acc => acc.type === targetType)
     
     if (targetAccount) {
@@ -220,7 +227,7 @@ export default function TradingPage() {
       const token = localStorage.getItem('deriv_access_token')
       connectToAccount(targetAccount.id, token)
     } else {
-      addDebugStep(`❌ No ${targetType.toUpperCase()} account found in list`)
+      addDebugStep(` No ${targetType.toUpperCase()} account found`)
       setErrorMessage(`No ${targetType} account available.`)
     }
   }
@@ -286,7 +293,7 @@ export default function TradingPage() {
         <p className="text-gray-400 font-bold mb-1">CONNECTION LOG:</p>
         <div className="space-y-0.5">
           {debugSteps.map((step, i) => (
-            <p key={i} className={step.includes('✅') || step.includes('💰') || step.includes('') || step.includes('🎯') ? 'text-green-400' : step.includes('❌') || step.includes('Failed') || step.includes('error') ? 'text-red-400' : 'text-gray-300'}>
+            <p key={i} className={step.includes('✅') || step.includes('') || step.includes('📋') || step.includes('🎯') ? 'text-green-400' : step.includes('❌') || step.includes('Failed') || step.includes('error') ? 'text-red-400' : 'text-gray-300'}>
               {step}
             </p>
           ))}
