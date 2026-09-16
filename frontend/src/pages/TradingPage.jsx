@@ -34,116 +34,156 @@ export default function TradingPage() {
   }
 
   useEffect(() => {
-    addDebugStep('1. TradingPage mounted')
-    
-    const token = localStorage.getItem('deriv_access_token')
-    const oauthStatus = localStorage.getItem('oauth_connected')
-    
-    addDebugStep(`2. Token found: ${token ? 'YES (' + token.length + ' chars)' : 'NO'}`)
-    addDebugStep(`3. OAuth status: ${oauthStatus || 'NOT SET'}`)
-    
-    if (!token) {
-      setErrorMessage(' NO TOKEN IN STORAGE! Click "Clear & Reconnect" to login.')
-      return
-    }
-
-    addDebugStep(`4. Token type: ${token.startsWith('ory_at_') ? 'ACCESS_TOKEN' : 'OTHER'}`)
-    addDebugStep('5. Attempting WebSocket connection...')
-    setErrorMessage('')
-    
-    // Try different Deriv WebSocket endpoints
-    const endpoints = [
-      'wss://ws.derivws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH',
-      'wss://ws.binaryws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH',
-      'wss://ws.deriv.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH'
-    ]
-
-    let currentEndpoint = 0
-
-    const tryConnect = () => {
-      if (currentEndpoint >= endpoints.length) {
-        addDebugStep('ERROR: All endpoints failed')
-        setErrorMessage(' All connection attempts failed. Check internet and click Retry.')
+    const initializeConnection = async () => {
+      addDebugStep('1. TradingPage mounted')
+      
+      const token = localStorage.getItem('deriv_access_token')
+      const oauthStatus = localStorage.getItem('oauth_connected')
+      
+      addDebugStep(`2. Token found: ${token ? 'YES (' + token.length + ' chars)' : 'NO'}`)
+      addDebugStep(`3. OAuth status: ${oauthStatus || 'NOT SET'}`)
+      
+      if (!token) {
+        setErrorMessage(' NO TOKEN! Click "Clear & Reconnect" to login.')
         return
       }
 
-      const wsUrl = endpoints[currentEndpoint]
-      addDebugStep(`6. Trying endpoint ${currentEndpoint + 1}: ${wsUrl}`)
-
+      addDebugStep(`4. Token type: ${token.startsWith('ory_at_') ? 'ACCESS_TOKEN' : 'OTHER'}`)
+      
+      // Step 1: Test token validity with HTTP API first
+      addDebugStep('5. Testing token validity via HTTP API...')
+      
       try {
-        const websocket = new WebSocket(wsUrl)
+        const testResponse = await fetch('https://api.derivws.com/websockets/v3/authorize', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            authorize: token
+          })
+        })
         
-        websocket.onopen = () => {
-          addDebugStep('7. ✅ WebSocket OPEN!')
-          addDebugStep('8. Sending authorize request...')
-          websocket.send(JSON.stringify({ authorize: token }))
-        }
-
-        websocket.onmessage = (event) => {
-          try {
-            const data = JSON.parse(event.data)
-            addDebugStep(`9. Received: ${data.msg_type}`)
-            
-            if (data.msg_type === 'authorize') {
-              if (data.error) {
-                addDebugStep(`10. ❌ AUTH FAILED: ${data.error.message}`)
-                setErrorMessage(`Deriv rejected token: ${data.error.message || data.error.code}`)
-                websocket.close()
-              } else if (data.authorize) {
-                addDebugStep('10. ✅ AUTHORIZED!')
-                addDebugStep(`11. Account: ${data.authorize.loginid}`)
-                setAccountId(data.authorize.loginid)
-                setAccountType(data.authorize.is_virtual ? 'demo' : 'real')
-                setCurrency(data.authorize.currency || 'USD')
-                
-                addDebugStep('12. Requesting balance...')
-                websocket.send(JSON.stringify({ balance: 1, subscribe: 1 }))
-              }
-            }
-            
-            if (data.msg_type === 'balance') {
-              if (data.balance) {
-                addDebugStep(`13. 💰 Balance: ${data.balance.balance} ${data.balance.currency}`)
-                setBalance(parseFloat(data.balance.balance))
-                setCurrency(data.balance.currency)
-                setIsConnected(true)
-                setErrorMessage('')
-              }
-            }
-          } catch (e) {
-            addDebugStep(`ERROR parsing: ${e.message}`)
-          }
-        }
-
-        websocket.onerror = (error) => {
-          addDebugStep(`ERROR: WebSocket error on endpoint ${currentEndpoint + 1}`)
-          currentEndpoint++
-          setTimeout(() => tryConnect(), 1000)
-        }
-
-        websocket.onclose = () => {
-          addDebugStep('WebSocket CLOSED')
-          setIsConnected(false)
-        }
-
-        setWs(websocket)
-        addDebugStep('WebSocket object created')
+        addDebugStep(`6. HTTP API response: ${testResponse.status}`)
         
-      } catch (error) {
-        addDebugStep(`FATAL ERROR: ${error.message}`)
-        setErrorMessage(`Failed to create WebSocket: ${error.message}`)
-        currentEndpoint++
-        setTimeout(() => tryConnect(), 1000)
+        if (!testResponse.ok) {
+          const errorData = await testResponse.json()
+          addDebugStep(`ERROR: Token invalid - ${errorData.error?.message || testResponse.statusText}`)
+          setErrorMessage(`❌ TOKEN INVALID: ${errorData.error?.message || 'Please reconnect'}. Click "Clear & Reconnect".`)
+          return
+        }
+        
+        const data = await testResponse.json()
+        if (data.authorize) {
+          addDebugStep('7. ✅ Token is VALID!')
+          addDebugStep(`8. Account: ${data.authorize.loginid}`)
+          setAccountId(data.authorize.loginid)
+          setAccountType(data.authorize.is_virtual ? 'demo' : 'real')
+          setCurrency(data.authorize.currency || 'USD')
+          
+          // Now try WebSocket
+          addDebugStep('9. Attempting WebSocket connection...')
+          connectWebSocket(token)
+        } else {
+          setErrorMessage('Invalid token response. Click "Clear & Reconnect".')
+        }
+      } catch (httpError) {
+        addDebugStep(`HTTP TEST FAILED: ${httpError.message}`)
+        // Even if HTTP fails, try WebSocket
+        addDebugStep('10. Trying WebSocket anyway...')
+        connectWebSocket(token)
       }
     }
 
-    tryConnect()
+    const connectWebSocket = (token) => {
+      const endpoints = [
+        'wss://ws.derivws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH',
+        'wss://ws.binaryws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH'
+      ]
+
+      let currentEndpoint = 0
+
+      const tryConnect = () => {
+        if (currentEndpoint >= endpoints.length) {
+          addDebugStep('ERROR: All WebSocket endpoints failed')
+          setErrorMessage(' WebSocket failed. Check internet/firewall. Click Retry.')
+          return
+        }
+
+        const wsUrl = endpoints[currentEndpoint]
+        addDebugStep(`${10 + currentEndpoint}. Trying endpoint ${currentEndpoint + 1}...`)
+
+        try {
+          const websocket = new WebSocket(wsUrl)
+          
+          websocket.onopen = () => {
+            addDebugStep(`${12 + currentEndpoint}. ✅ WebSocket OPEN!`)
+            addDebugStep(`${13 + currentEndpoint}. Authorizing...`)
+            websocket.send(JSON.stringify({ authorize: token }))
+          }
+
+          websocket.onmessage = (event) => {
+            try {
+              const data = JSON.parse(event.data)
+              addDebugStep(`Received: ${data.msg_type}`)
+              
+              if (data.msg_type === 'authorize') {
+                if (data.error) {
+                  addDebugStep(`❌ AUTH FAILED: ${data.error.message}`)
+                  setErrorMessage(`Deriv rejected: ${data.error.message}`)
+                  websocket.close()
+                } else if (data.authorize) {
+                  addDebugStep('✅ AUTHORIZED!')
+                  setAccountId(data.authorize.loginid)
+                  setAccountType(data.authorize.is_virtual ? 'demo' : 'real')
+                  setCurrency(data.authorize.currency || 'USD')
+                  
+                  websocket.send(JSON.stringify({ balance: 1, subscribe: 1 }))
+                }
+              }
+              
+              if (data.msg_type === 'balance') {
+                if (data.balance) {
+                  addDebugStep(`💰 Balance: ${data.balance.balance} ${data.balance.currency}`)
+                  setBalance(parseFloat(data.balance.balance))
+                  setCurrency(data.balance.currency)
+                  setIsConnected(true)
+                  setErrorMessage('')
+                }
+              }
+            } catch (e) {
+              addDebugStep(`Parse error: ${e.message}`)
+            }
+          }
+
+          websocket.onerror = (error) => {
+            addDebugStep(`ERROR: Endpoint ${currentEndpoint + 1} failed`)
+            currentEndpoint++
+            setTimeout(() => tryConnect(), 1000)
+          }
+
+          websocket.onclose = () => {
+            addDebugStep('WebSocket CLOSED')
+            setIsConnected(false)
+          }
+
+          setWs(websocket)
+          
+        } catch (error) {
+          addDebugStep(`WebSocket creation failed: ${error.message}`)
+          currentEndpoint++
+          setTimeout(() => tryConnect(), 1000)
+        }
+      }
+
+      tryConnect()
+    }
+
+    initializeConnection()
 
     return () => {
-      if (ws) {
-        ws.close()
-        addDebugStep('WebSocket cleanup')
-      }
+      if (ws) ws.close()
     }
   }, [])
 
