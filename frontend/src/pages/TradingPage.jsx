@@ -34,158 +34,104 @@ export default function TradingPage() {
   }
 
   useEffect(() => {
-    const initializeConnection = async () => {
-      addDebugStep('1. TradingPage mounted')
-      
-      const token = localStorage.getItem('deriv_access_token')
-      const oauthStatus = localStorage.getItem('oauth_connected')
-      
-      addDebugStep(`2. Token found: ${token ? 'YES (' + token.length + ' chars)' : 'NO'}`)
-      addDebugStep(`3. OAuth status: ${oauthStatus || 'NOT SET'}`)
-      
-      if (!token) {
-        setErrorMessage(' NO TOKEN! Click "Clear & Reconnect" to login.')
-        return
-      }
-
-      addDebugStep(`4. Token type: ${token.startsWith('ory_at_') ? 'ACCESS_TOKEN' : 'OTHER'}`)
-      
-      // Step 1: Test token validity with HTTP API first
-      addDebugStep('5. Testing token validity via HTTP API...')
-      
-      try {
-        const testResponse = await fetch('https://api.derivws.com/websockets/v3/authorize', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            authorize: token
-          })
-        })
-        
-        addDebugStep(`6. HTTP API response: ${testResponse.status}`)
-        
-        if (!testResponse.ok) {
-          const errorData = await testResponse.json()
-          addDebugStep(`ERROR: Token invalid - ${errorData.error?.message || testResponse.statusText}`)
-          setErrorMessage(`❌ TOKEN INVALID: ${errorData.error?.message || 'Please reconnect'}. Click "Clear & Reconnect".`)
-          return
-        }
-        
-        const data = await testResponse.json()
-        if (data.authorize) {
-          addDebugStep('7. ✅ Token is VALID!')
-          addDebugStep(`8. Account: ${data.authorize.loginid}`)
-          setAccountId(data.authorize.loginid)
-          setAccountType(data.authorize.is_virtual ? 'demo' : 'real')
-          setCurrency(data.authorize.currency || 'USD')
-          
-          // Now try WebSocket
-          addDebugStep('9. Attempting WebSocket connection...')
-          connectWebSocket(token)
-        } else {
-          setErrorMessage('Invalid token response. Click "Clear & Reconnect".')
-        }
-      } catch (httpError) {
-        addDebugStep(`HTTP TEST FAILED: ${httpError.message}`)
-        // Even if HTTP fails, try WebSocket
-        addDebugStep('10. Trying WebSocket anyway...')
-        connectWebSocket(token)
-      }
+    addDebugStep('1. TradingPage mounted')
+    
+    const token = localStorage.getItem('deriv_access_token')
+    addDebugStep(`2. Token: ${token ? 'FOUND (' + token.length + ' chars)' : 'MISSING'}`)
+    
+    if (!token) {
+      setErrorMessage(' NO TOKEN! Click "Clear & Reconnect"')
+      return
     }
 
-    const connectWebSocket = (token) => {
-      const endpoints = [
-        'wss://ws.derivws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH',
-        'wss://ws.binaryws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH'
-      ]
+    addDebugStep('3. Testing network connectivity...')
+    
+    // Test if we can reach Deriv servers
+    fetch('https://www.deriv.com', { mode: 'no-cors' })
+      .then(() => {
+        addDebugStep('4. ✅ Internet: CONNECTED')
+        addDebugStep('5. Connecting to Deriv WebSocket...')
+        connectWebSocket(token)
+      })
+      .catch(() => {
+        addDebugStep('4. ❌ Internet: BLOCKED or Deriv unreachable')
+        setErrorMessage(' Network issue. Check internet connection or VPN/firewall.')
+      })
+  }, [])
 
-      let currentEndpoint = 0
+  const connectWebSocket = (token) => {
+    const wsUrl = 'wss://ws.derivws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH'
+    
+    try {
+      addDebugStep(`6. Creating WebSocket...`)
+      const websocket = new WebSocket(wsUrl)
+      
+      websocket.onopen = () => {
+        addDebugStep('7. ✅ WebSocket CONNECTED!')
+        addDebugStep('8. Sending authorization...')
+        websocket.send(JSON.stringify({ authorize: token }))
+      }
 
-      const tryConnect = () => {
-        if (currentEndpoint >= endpoints.length) {
-          addDebugStep('ERROR: All WebSocket endpoints failed')
-          setErrorMessage(' WebSocket failed. Check internet/firewall. Click Retry.')
-          return
-        }
-
-        const wsUrl = endpoints[currentEndpoint]
-        addDebugStep(`${10 + currentEndpoint}. Trying endpoint ${currentEndpoint + 1}...`)
-
+      websocket.onmessage = (event) => {
         try {
-          const websocket = new WebSocket(wsUrl)
+          const data = JSON.parse(event.data)
+          addDebugStep(`9. Received: ${data.msg_type}`)
           
-          websocket.onopen = () => {
-            addDebugStep(`${12 + currentEndpoint}. ✅ WebSocket OPEN!`)
-            addDebugStep(`${13 + currentEndpoint}. Authorizing...`)
-            websocket.send(JSON.stringify({ authorize: token }))
-          }
-
-          websocket.onmessage = (event) => {
-            try {
-              const data = JSON.parse(event.data)
-              addDebugStep(`Received: ${data.msg_type}`)
+          if (data.msg_type === 'authorize') {
+            if (data.error) {
+              addDebugStep(`10. ❌ AUTH REJECTED: ${data.error.message}`)
+              setErrorMessage(`Token rejected: ${data.error.message}. Click "Clear & Reconnect".`)
+              websocket.close()
+            } else if (data.authorize) {
+              addDebugStep('10. ✅ AUTHORIZED!')
+              addDebugStep(`11. Account: ${data.authorize.loginid}`)
+              setAccountId(data.authorize.loginid)
+              setAccountType(data.authorize.is_virtual ? 'demo' : 'real')
+              setCurrency(data.authorize.currency || 'USD')
               
-              if (data.msg_type === 'authorize') {
-                if (data.error) {
-                  addDebugStep(`❌ AUTH FAILED: ${data.error.message}`)
-                  setErrorMessage(`Deriv rejected: ${data.error.message}`)
-                  websocket.close()
-                } else if (data.authorize) {
-                  addDebugStep('✅ AUTHORIZED!')
-                  setAccountId(data.authorize.loginid)
-                  setAccountType(data.authorize.is_virtual ? 'demo' : 'real')
-                  setCurrency(data.authorize.currency || 'USD')
-                  
-                  websocket.send(JSON.stringify({ balance: 1, subscribe: 1 }))
-                }
-              }
-              
-              if (data.msg_type === 'balance') {
-                if (data.balance) {
-                  addDebugStep(`💰 Balance: ${data.balance.balance} ${data.balance.currency}`)
-                  setBalance(parseFloat(data.balance.balance))
-                  setCurrency(data.balance.currency)
-                  setIsConnected(true)
-                  setErrorMessage('')
-                }
-              }
-            } catch (e) {
-              addDebugStep(`Parse error: ${e.message}`)
+              addDebugStep('12. Fetching balance...')
+              websocket.send(JSON.stringify({ balance: 1, subscribe: 1 }))
             }
           }
-
-          websocket.onerror = (error) => {
-            addDebugStep(`ERROR: Endpoint ${currentEndpoint + 1} failed`)
-            currentEndpoint++
-            setTimeout(() => tryConnect(), 1000)
-          }
-
-          websocket.onclose = () => {
-            addDebugStep('WebSocket CLOSED')
-            setIsConnected(false)
-          }
-
-          setWs(websocket)
           
-        } catch (error) {
-          addDebugStep(`WebSocket creation failed: ${error.message}`)
-          currentEndpoint++
-          setTimeout(() => tryConnect(), 1000)
+          if (data.msg_type === 'balance' && data.balance) {
+            addDebugStep(`13. 💰 Balance: ${data.balance.balance} ${data.balance.currency}`)
+            setBalance(parseFloat(data.balance.balance))
+            setCurrency(data.balance.currency)
+            setIsConnected(true)
+            setErrorMessage('')
+          }
+        } catch (e) {
+          addDebugStep(`Parse error: ${e.message}`)
         }
       }
 
-      tryConnect()
-    }
+      websocket.onerror = (error) => {
+        addDebugStep('ERROR: WebSocket connection failed')
+        setErrorMessage(' WebSocket failed. Check internet/firewall. Click Retry.')
+      }
 
-    initializeConnection()
+      websocket.onclose = () => {
+        addDebugStep('WebSocket CLOSED')
+        setIsConnected(false)
+      }
 
-    return () => {
-      if (ws) ws.close()
+      setWs(websocket)
+      addDebugStep('WebSocket object created')
+      
+      // Timeout after 15 seconds
+      setTimeout(() => {
+        if (!isConnected && websocket.readyState !== WebSocket.OPEN) {
+          addDebugStep('TIMEOUT: Connection took too long')
+          websocket.close()
+        }
+      }, 15000)
+      
+    } catch (error) {
+      addDebugStep(`FATAL: ${error.message}`)
+      setErrorMessage(`Failed to create WebSocket: ${error.message}`)
     }
-  }, [])
+  }
 
   const handleClearData = () => {
     localStorage.clear()
@@ -223,10 +169,7 @@ export default function TradingPage() {
           </button>
           <div className="flex items-center gap-2">
             <img src="/logo.svg" alt="Logo" className="w-7 h-7" />
-            <span className="text-sm font-bold hidden sm:block">
-              <span className="text-mwathe-orange">M</span><span className="text-mwathe-green">W</span>
-              <span className="text-mwathe-skyblue">A</span><span className="text-mwathe-white">THE</span>
-            </span>
+            <span className="text-sm font-bold hidden sm:block">MWATHE</span>
           </div>
         </div>
         <div className="flex flex-col items-center">
@@ -247,14 +190,13 @@ export default function TradingPage() {
 
       {/* Debug Steps */}
       <div className="bg-gray-900 border-b border-gray-700 max-h-32 overflow-y-auto p-2 text-xs font-mono">
-        <p className="text-gray-400 font-bold mb-1 sticky top-0 bg-gray-900">CONNECTION LOG:</p>
+        <p className="text-gray-400 font-bold mb-1">CONNECTION LOG:</p>
         <div className="space-y-1">
           {debugSteps.map((step, i) => (
-            <p key={i} className={step.includes('✅') ? 'text-green-400' : step.includes('❌') || step.includes('ERROR') ? 'text-red-400' : 'text-gray-300'}>
+            <p key={i} className={step.includes('✅') ? 'text-green-400' : step.includes('❌') || step.includes('ERROR') || step.includes('FAILED') ? 'text-red-400' : 'text-gray-300'}>
               {step}
             </p>
           ))}
-          {debugSteps.length === 0 && <p className="text-gray-500">Initializing...</p>}
         </div>
       </div>
 
@@ -263,10 +205,10 @@ export default function TradingPage() {
         <div className="bg-red-900/30 border-b border-red-500 p-3 text-center">
           <p className="text-red-400 text-sm mb-3">{errorMessage}</p>
           <div className="flex gap-2 justify-center">
-            <button onClick={handleRetry} className="px-4 py-2 bg-mwathe-skyblue hover:bg-sky-600 text-white rounded-lg text-sm font-bold">
+            <button onClick={handleRetry} className="px-4 py-2 bg-mwathe-skyblue text-white rounded-lg text-sm font-bold">
               <RefreshCw size={16} className="inline mr-1" /> Retry
             </button>
-            <button onClick={handleClearData} className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-bold">
+            <button onClick={handleClearData} className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-bold">
               <LogOut size={16} className="inline mr-1" /> Clear & Reconnect
             </button>
           </div>
