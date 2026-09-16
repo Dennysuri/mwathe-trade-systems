@@ -26,73 +26,165 @@ export default function TradingPage() {
   const [accountId, setAccountId] = useState('')
   const [isConnected, setIsConnected] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
-  const [debugInfo, setDebugInfo] = useState({ wsStatus: 'Idle', lastMsg: 'None' })
+  const [debugInfo, setDebugInfo] = useState({ wsStatus: 'Initializing', lastMsg: 'None' })
   const [ws, setWs] = useState(null)
+  const [connectionAttempts, setConnectionAttempts] = useState(0)
 
-  useEffect(() => {
+  const connectToDeriv = () => {
     const token = localStorage.getItem('deriv_access_token')
     
+    setDebugInfo(prev => ({ 
+      ...prev, 
+      wsStatus: 'Checking token...',
+      tokenFound: !!token,
+      tokenLength: token ? token.length : 0
+    }))
+
     if (!token) {
-      setErrorMessage(' NO TOKEN FOUND! Please go back and reconnect.')
+      setErrorMessage(' NO TOKEN FOUND! Click "Clear & Reconnect" to login again.')
+      setDebugInfo(prev => ({ ...prev, wsStatus: 'No token' }))
       return
     }
 
-    setErrorMessage('')
-    setDebugInfo({ wsStatus: 'Connecting...', lastMsg: 'None' })
-
-    const wsUrl = 'wss://ws.derivws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH'
-    const websocket = new WebSocket(wsUrl)
-
-    websocket.onopen = () => {
-      setDebugInfo(prev => ({ ...prev, wsStatus: 'Connected. Pinging server...' }))
-      websocket.send(JSON.stringify({ ping: 1 }))
+    if (token.length < 50) {
+      setErrorMessage(` TOKEN TOO SHORT (${token.length} chars). Token exchange failed. Click "Clear & Reconnect".`)
+      setDebugInfo(prev => ({ ...prev, wsStatus: 'Invalid token' }))
+      return
     }
 
-    websocket.onmessage = (message) => {
-      try {
-        const data = JSON.parse(message.data)
-        setDebugInfo(prev => ({ ...prev, lastMsg: JSON.stringify(data).substring(0, 120) }))
+    // Close existing connection
+    if (ws) {
+      ws.close()
+      setWs(null)
+    }
 
-        if (data.msg_type === 'ping') {
-          setDebugInfo(prev => ({ ...prev, wsStatus: 'Ping OK. Authorizing...' }))
-          websocket.send(JSON.stringify({ authorize: token }))
-        } 
-        else if (data.msg_type === 'authorize') {
-          if (data.authorize) {
-            setAccountId(data.authorize.loginid)
-            setAccountType(data.authorize.is_virtual ? 'demo' : 'real')
-            setCurrency(data.authorize.currency || 'USD')
-            setDebugInfo(prev => ({ ...prev, wsStatus: 'Authorized! Fetching balance...' }))
-            websocket.send(JSON.stringify({ balance: 1, subscribe: 1 }))
-          } else if (data.error) {
-            setErrorMessage(`❌ DERIV REJECTED TOKEN: ${data.error.message || data.error.code}`)
-            setDebugInfo(prev => ({ ...prev, wsStatus: 'Authorization Failed' }))
+    setErrorMessage('')
+    setIsConnected(false)
+    setDebugInfo(prev => ({ ...prev, wsStatus: 'Connecting...' }))
+
+    // Try multiple Deriv WebSocket endpoints
+    const endpoints = [
+      'wss://ws.derivws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH',
+      'wss://ws.binaryws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH',
+      'wss://ws.deriv.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH'
+    ]
+
+    const tryEndpoint = (index) => {
+      if (index >= endpoints.length) {
+        setErrorMessage(' All connection attempts failed. Check your internet and click Retry.')
+        setDebugInfo(prev => ({ ...prev, wsStatus: 'All endpoints failed' }))
+        return
+      }
+
+      const wsUrl = endpoints[index]
+      setDebugInfo(prev => ({ ...prev, wsStatus: `Trying endpoint ${index + 1}/3...` }))
+
+      const websocket = new WebSocket(wsUrl)
+
+      websocket.onopen = () => {
+        console.log('✅ WebSocket connected to endpoint', index + 1)
+        setDebugInfo(prev => ({ ...prev, wsStatus: 'Connected! Authorizing...' }))
+        setConnectionAttempts(0)
+        
+        // Send authorize request
+        websocket.send(JSON.stringify({ authorize: token }))
+      }
+
+      websocket.onmessage = (message) => {
+        try {
+          const data = JSON.parse(message.data)
+          const msgPreview = JSON.stringify(data).substring(0, 150)
+          setDebugInfo(prev => ({ ...prev, lastMsg: msgPreview }))
+
+          // Handle ping response
+          if (data.msg_type === 'ping') {
+            setDebugInfo(prev => ({ ...prev, wsStatus: 'Ping OK. Authorizing...' }))
+            websocket.send(JSON.stringify({ authorize: token }))
+            return
           }
-        } 
-        else if (data.msg_type === 'balance') {
-          setBalance(parseFloat(data.balance.balance))
-          setCurrency(data.balance.currency)
-          setIsConnected(true)
-          setDebugInfo(prev => ({ ...prev, wsStatus: 'Fully Connected' }))
+
+          // Handle authorize response
+          if (data.msg_type === 'authorize') {
+            if (data.error) {
+              setErrorMessage(`❌ DERIV REJECTED TOKEN: ${data.error.message || data.error.code}. Click "Clear & Reconnect" to login again.`)
+              setDebugInfo(prev => ({ ...prev, wsStatus: 'Authorization failed' }))
+              websocket.close()
+              return
+            }
+
+            if (data.authorize) {
+              console.log('✅ Authorized! Account:', data.authorize)
+              setAccountId(data.authorize.loginid || 'N/A')
+              setAccountType(data.authorize.is_virtual ? 'demo' : 'real')
+              setCurrency(data.authorize.currency || 'USD')
+              setDebugInfo(prev => ({ ...prev, wsStatus: 'Authorized! Fetching balance...' }))
+              
+              // Request balance
+              websocket.send(JSON.stringify({ balance: 1, subscribe: 1 }))
+            }
+            return
+          }
+
+          // Handle balance response
+          if (data.msg_type === 'balance') {
+            if (data.balance) {
+              console.log('💰 Balance received:', data.balance)
+              setBalance(parseFloat(data.balance.balance))
+              setCurrency(data.balance.currency)
+              setIsConnected(true)
+              setDebugInfo(prev => ({ ...prev, wsStatus: '✅ FULLY CONNECTED' }))
+            }
+            return
+          }
+
+          // Handle other messages
+          if (data.msg_type) {
+            console.log('Received message type:', data.msg_type)
+          }
+        } catch (e) {
+          console.error('Parse error:', e)
+          setErrorMessage('❌ Failed to parse server response')
         }
-      } catch (e) {
-        setErrorMessage('❌ Failed to parse server response')
+      }
+
+      websocket.onerror = (error) => {
+        console.error('WebSocket error on endpoint', index + 1, error)
+        setDebugInfo(prev => ({ ...prev, wsStatus: `Endpoint ${index + 1} failed` }))
+        
+        // Try next endpoint
+        tryEndpoint(index + 1)
+      }
+
+      websocket.onclose = () => {
+        console.log('WebSocket closed')
+        setIsConnected(false)
+        setDebugInfo(prev => ({ ...prev, wsStatus: 'Disconnected' }))
+      }
+
+      setWs(websocket)
+
+      // Timeout after 10 seconds
+      setTimeout(() => {
+        if (websocket.readyState !== WebSocket.OPEN && !isConnected) {
+          console.log('Connection timeout, trying next endpoint...')
+          websocket.close()
+          tryEndpoint(index + 1)
+        }
+      }, 10000)
+    }
+
+    // Start trying endpoints
+    tryEndpoint(0)
+  }
+
+  useEffect(() => {
+    connectToDeriv()
+
+    return () => {
+      if (ws) {
+        ws.close()
       }
     }
-
-    websocket.onerror = () => {
-      setErrorMessage(' WebSocket connection failed. Check internet or Deriv API status.')
-      setDebugInfo(prev => ({ ...prev, wsStatus: 'Connection Error' }))
-    }
-
-    websocket.onclose = () => {
-      setIsConnected(false)
-      setDebugInfo(prev => ({ ...prev, wsStatus: 'Disconnected' }))
-    }
-
-    setWs(websocket)
-
-    return () => { if (websocket) websocket.close() }
   }, [])
 
   const handleClearData = () => {
@@ -103,7 +195,8 @@ export default function TradingPage() {
   }
 
   const handleRetry = () => {
-    window.location.reload()
+    setConnectionAttempts(prev => prev + 1)
+    connectToDeriv()
   }
 
   const handleSwitchAccount = () => {
@@ -145,7 +238,7 @@ export default function TradingPage() {
         <div className="flex items-center gap-3">
           <button onClick={handleSwitchAccount} className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold ${accountType === 'demo' ? 'bg-mwathe-skyblue/20 text-mwathe-skyblue' : 'bg-mwathe-green/20 text-mwathe-green'}`}>
             <span>{accountType === 'demo' ? 'DEMO' : 'REAL'}</span>
-            <div className={`w-2 h-2 rounded-full ${isConnected ? 'animate-pulse' : ''} ${accountType === 'demo' ? 'bg-mwathe-skyblue' : 'bg-mwathe-green'}`}></div>
+            <div className={`w-2 h-2 rounded-full ${isConnected ? 'animate-pulse' : 'bg-gray-500'}`}></div>
           </button>
           <div className="text-right">
             <p className="text-mwathe-gray text-xs">Balance</p>
@@ -155,11 +248,12 @@ export default function TradingPage() {
       </div>
 
       {/* Debug Info Box */}
-      <div className="bg-gray-900 border-b border-gray-700 p-2">
+      <div className="bg-gray-900 border-b border-gray-700 p-2 text-xs">
         <p className="text-gray-400 text-xs font-bold mb-1">LIVE DEBUGGER:</p>
-        <div className="text-xs text-gray-300 space-y-1">
-          <p>WebSocket: {debugInfo.wsStatus}</p>
-          <p className="break-all">Last Server Msg: {debugInfo.lastMsg}</p>
+        <div className="text-gray-300 space-y-1">
+          <p>WebSocket: <span className={isConnected ? 'text-green-400' : 'text-yellow-400'}>{debugInfo.wsStatus}</span></p>
+          <p>Connection Attempts: {connectionAttempts}</p>
+          <p className="break-all text-gray-400">Last Msg: {debugInfo.lastMsg}</p>
         </div>
       </div>
 
@@ -168,11 +262,11 @@ export default function TradingPage() {
         <div className="bg-red-900/30 border-b border-red-500 p-3 text-center">
           <p className="text-red-400 text-sm mb-3">{errorMessage}</p>
           <div className="flex gap-2 justify-center">
-            <button onClick={handleRetry} className="px-4 py-2 bg-mwathe-skyblue text-white rounded-lg text-sm font-bold">
-              <RefreshCw size={16} className="inline mr-1" /> Retry
+            <button onClick={handleRetry} className="px-4 py-2 bg-mwathe-skyblue hover:bg-sky-600 text-white rounded-lg text-sm font-bold flex items-center gap-2">
+              <RefreshCw size={16} /> Retry
             </button>
-            <button onClick={handleClearData} className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-bold">
-              <LogOut size={16} className="inline mr-1" /> Clear & Reconnect
+            <button onClick={handleClearData} className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-bold flex items-center gap-2">
+              <LogOut size={16} /> Clear & Reconnect
             </button>
           </div>
         </div>
