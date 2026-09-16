@@ -22,7 +22,7 @@ export default function TradingPage() {
   const [activeSection, setActiveSection] = useState('analysis')
   const [balance, setBalance] = useState(0)
   const [currency, setCurrency] = useState('USD')
-  const [accountType, setAccountType] = useState('real') // 'real' or 'demo'
+  const [accountType, setAccountType] = useState('real')
   const [accountId, setAccountId] = useState('')
   const [isConnected, setIsConnected] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
@@ -36,42 +36,24 @@ export default function TradingPage() {
     setDebugSteps(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${step}`])
   }
 
-  // Helper to extract account ID
-  const getAccountId = (acc) => {
-    return acc.id || acc.loginid || acc.account_id || ''
-  }
-
-  // BULLETPROOF Helper to check if account is Demo
-  const isDemoAccount = (acc) => {
-    const id = getAccountId(acc)
-    // Deriv Demo accounts ALWAYS start with 'VR' (VRT, VRW, etc.)
-    if (id.startsWith('VR')) return true
-    // Fallback to API fields
-    if (acc.type === 'demo') return true
-    if (acc.is_virtual === true || acc.is_virtual === 1) return true
-    return false
-  }
-
   // Connect to a specific account using the OTP endpoint
   const connectToAccount = async (accId, token) => {
-    if (!accId) {
-      addDebugStep('❌ ERROR: Account ID is missing!')
-      setErrorMessage('Account ID is missing. Please clear and reconnect.')
+    if (!accId || accId === 'undefined' || accId === 'null') {
+      addDebugStep('❌ ERROR: Invalid Account ID!')
+      setErrorMessage('Invalid Account ID. Please clear and reconnect.')
       return
     }
 
-    addDebugStep(` Requesting authenticated WS URL for: ${accId}...`)
+    addDebugStep(`🔌 Requesting WS URL for: ${accId}...`)
     setErrorMessage('')
     setIsConnected(false)
 
-    // Close existing connection
     if (wsRef.current) {
       wsRef.current.close()
       wsRef.current = null
     }
 
     try {
-      // Step 1: Get the authenticated WebSocket URL via OTP endpoint
       const response = await fetch(`https://api.derivws.com/trading/v1/options/accounts/${accId}/otp`, {
         method: 'POST',
         headers: {
@@ -89,19 +71,17 @@ export default function TradingPage() {
       const wsUrl = data.data?.url
 
       if (!wsUrl) {
-        throw new Error('No WebSocket URL returned from OTP endpoint')
+        throw new Error('No WebSocket URL returned')
       }
 
-      addDebugStep('✅ Received authenticated WebSocket URL')
-      addDebugStep('🌐 Connecting to WebSocket...')
+      addDebugStep('✅ Got authenticated WS URL')
+      addDebugStep('🌐 Connecting...')
 
-      // Step 2: Connect to the pre-authenticated URL
       const websocket = new WebSocket(wsUrl)
       wsRef.current = websocket
 
       websocket.onopen = () => {
-        addDebugStep('✅ WebSocket CONNECTED & AUTHENTICATED!')
-        // Step 3: Request balance
+        addDebugStep('✅ WebSocket CONNECTED!')
         websocket.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: 1 }))
       }
 
@@ -113,40 +93,40 @@ export default function TradingPage() {
             setBalance(parseFloat(msg.balance.balance))
             setCurrency(msg.balance.currency)
             setIsConnected(true)
-            addDebugStep(`💰 Balance updated: ${msg.balance.balance} ${msg.balance.currency}`)
+            addDebugStep(`💰 Balance: ${msg.balance.balance} ${msg.balance.currency}`)
           }
         } catch (e) {
-          addDebugStep(`Parse error: ${e.message}`)
+          console.error('Parse error:', e)
         }
       }
 
       websocket.onerror = () => {
-        addDebugStep('❌ WebSocket connection error')
-        setErrorMessage('Connection failed. Check internet.')
+        addDebugStep('❌ WebSocket error')
+        setErrorMessage('Connection failed.')
         setIsConnected(false)
       }
 
       websocket.onclose = () => {
-        addDebugStep(' WebSocket closed')
+        addDebugStep('🔌 WebSocket closed')
         setIsConnected(false)
       }
 
     } catch (error) {
-      addDebugStep(`❌ OTP request failed: ${error.message}`)
-      setErrorMessage(`Failed to connect: ${error.message}`)
+      addDebugStep(`❌ OTP failed: ${error.message}`)
+      setErrorMessage(`Failed: ${error.message}`)
     }
   }
 
-  // Initial load: Fetch account list
+  // Initial load
   useEffect(() => {
     const token = localStorage.getItem('deriv_access_token')
     
     if (!token) {
-      setErrorMessage('No access token found. Please reconnect.')
+      setErrorMessage('No token found. Please reconnect.')
       return
     }
 
-    addDebugStep(' App mounted. Fetching account list...')
+    addDebugStep('📱 App mounted. Fetching accounts...')
 
     const fetchAccounts = async () => {
       try {
@@ -165,39 +145,52 @@ export default function TradingPage() {
         const data = await response.json()
         const accountList = data.data || []
         
-        addDebugStep(`✅ Found ${accountList.length} accounts linked to profile`)
+        addDebugStep(`✅ Found ${accountList.length} accounts`)
         
         if (accountList.length > 0) {
-          // Log account details using our bulletproof method
+          // Log full structure of first account
+          const firstAcc = accountList[0]
+          addDebugStep(`📋 First account keys: ${Object.keys(firstAcc).join(', ')}`)
+          addDebugStep(`📋 Full first account: ${JSON.stringify(firstAcc)}`)
+          
+          // Try to find account ID in various possible fields
+          let foundAccounts = []
           accountList.forEach((acc, idx) => {
-            const accId = getAccountId(acc)
-            const isDemo = isDemoAccount(acc)
-            addDebugStep(` Account ${idx + 1}: ${accId} (${isDemo ? 'DEMO' : 'REAL'})`)
+            // Try different possible ID fields
+            const accId = acc.id || acc.loginid || acc.account_id || acc.accountID || acc.login_id || `account_${idx}`
+            const isDemo = acc.is_virtual || acc.type === 'demo' || accId.startsWith('VR')
+            const accType = isDemo ? 'DEMO' : 'REAL'
+            
+            foundAccounts.push({
+              ...acc,
+              extractedId: accId,
+              isDemo: isDemo,
+              type: accType
+            })
+            
+            addDebugStep(`📋 Account ${idx + 1}: ID=${accId}, Type=${accType}`)
           })
           
-          setAccounts(accountList)
+          setAccounts(foundAccounts)
 
-          // Auto-select the first account
-          const firstAccount = accountList[0]
-          const firstId = getAccountId(firstAccount)
-          const firstIsDemo = isDemoAccount(firstAccount)
+          // Select first account
+          const defaultAcc = foundAccounts[0]
+          setSelectedAccountId(defaultAcc.extractedId)
+          setAccountId(defaultAcc.extractedId)
+          setAccountType(defaultAcc.isDemo ? 'demo' : 'real')
+          setCurrency(defaultAcc.currency || 'USD')
           
-          setSelectedAccountId(firstId)
-          setAccountId(firstId)
-          setAccountType(firstIsDemo ? 'demo' : 'real')
-          setCurrency(firstAccount.currency || 'USD')
+          addDebugStep(`🎯 Selected: ${defaultAcc.extractedId} (${defaultAcc.type})`)
           
-          addDebugStep(`🎯 Selected default account: ${firstId} (${firstIsDemo ? 'DEMO' : 'REAL'})`)
-          
-          // Connect to the default account
-          connectToAccount(firstId, token)
+          // Connect
+          connectToAccount(defaultAcc.extractedId, token)
         } else {
-          setErrorMessage('No accounts found on this Deriv profile.')
+          setErrorMessage('No accounts found.')
         }
 
       } catch (error) {
-        addDebugStep(`❌ Failed to fetch accounts: ${error.message}`)
-        setErrorMessage('Failed to load accounts. Token may be invalid.')
+        addDebugStep(`❌ Fetch failed: ${error.message}`)
+        setErrorMessage('Failed to load accounts.')
       }
     }
 
@@ -208,39 +201,34 @@ export default function TradingPage() {
     }
   }, [])
 
-  // Handle switching between Real and Demo
+  // Handle switching
   const handleSwitchAccount = () => {
     if (accounts.length === 0) {
-      addDebugStep('❌ No accounts loaded yet')
+      addDebugStep('❌ No accounts loaded')
       return
     }
 
-    addDebugStep(`🔄 User requested switch from ${accountType.toUpperCase()}...`)
+    addDebugStep(`🔄 Switching from ${accountType.toUpperCase()}...`)
 
-    // Find the target account (opposite of current)
     const targetType = accountType === 'demo' ? 'real' : 'demo'
-    
     const targetAccount = accounts.find(acc => {
-      const isDemo = isDemoAccount(acc)
-      const accType = isDemo ? 'demo' : 'real'
+      const accType = acc.isDemo ? 'demo' : 'real'
       return accType === targetType
     })
     
     if (targetAccount) {
-      const targetId = getAccountId(targetAccount)
-      addDebugStep(`✅ Found ${targetType.toUpperCase()} account: ${targetId}`)
-      addDebugStep(`🔄 Switching to ${targetId}...`)
+      addDebugStep(`✅ Found ${targetType.toUpperCase()}: ${targetAccount.extractedId}`)
+      addDebugStep(`🔄 Connecting to ${targetAccount.extractedId}...`)
       
-      // Update UI immediately
-      setSelectedAccountId(targetId)
-      setAccountId(targetId)
+      setSelectedAccountId(targetAccount.extractedId)
+      setAccountId(targetAccount.extractedId)
       setAccountType(targetType)
       
       const token = localStorage.getItem('deriv_access_token')
-      connectToAccount(targetId, token)
+      connectToAccount(targetAccount.extractedId, token)
     } else {
-      addDebugStep(`❌ No ${targetType.toUpperCase()} account found in profile`)
-      setErrorMessage(`No ${targetType} account available on this profile.`)
+      addDebugStep(`❌ No ${targetType.toUpperCase()} account found`)
+      setErrorMessage(`No ${targetType} account available.`)
     }
   }
 
@@ -301,11 +289,11 @@ export default function TradingPage() {
       </div>
 
       {/* Debug Steps */}
-      <div className="bg-gray-900 border-b border-gray-700 max-h-32 overflow-y-auto p-2 text-[10px] font-mono">
-        <p className="text-gray-400 font-bold mb-1">CONNECTION LOG (V3 API):</p>
+      <div className="bg-gray-900 border-b border-gray-700 max-h-40 overflow-y-auto p-2 text-[10px] font-mono">
+        <p className="text-gray-400 font-bold mb-1">CONNECTION LOG:</p>
         <div className="space-y-0.5">
           {debugSteps.map((step, i) => (
-            <p key={i} className={step.includes('✅') || step.includes('') || step.includes('📋') || step.includes('🎯') ? 'text-green-400' : step.includes('❌') || step.includes('Failed') || step.includes('error') ? 'text-red-400' : 'text-gray-300'}>
+            <p key={i} className={step.includes('✅') || step.includes('💰') || step.includes('📋') || step.includes('🎯') ? 'text-green-400' : step.includes('❌') || step.includes('Failed') || step.includes('error') ? 'text-red-400' : 'text-gray-300'}>
               {step}
             </p>
           ))}
