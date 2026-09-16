@@ -22,7 +22,7 @@ export default function TradingPage() {
   const [activeSection, setActiveSection] = useState('analysis')
   const [balance, setBalance] = useState(0)
   const [currency, setCurrency] = useState('USD')
-  const [accountType, setAccountType] = useState('real')
+  const [accountType, setAccountType] = useState('real') // 'real' or 'demo'
   const [accountId, setAccountId] = useState('')
   const [isConnected, setIsConnected] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
@@ -36,14 +36,20 @@ export default function TradingPage() {
     setDebugSteps(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${step}`])
   }
 
-  // Helper to extract account ID from account object
+  // Helper to extract account ID
   const getAccountId = (acc) => {
-    return acc.id || acc.loginid || acc.account_id || acc.accountID || ''
+    return acc.id || acc.loginid || acc.account_id || ''
   }
 
-  // Helper to check if account is demo
+  // BULLETPROOF Helper to check if account is Demo
   const isDemoAccount = (acc) => {
-    return acc.is_virtual === true || acc.is_virtual === 1 || acc.type === 'demo'
+    const id = getAccountId(acc)
+    // Deriv Demo accounts ALWAYS start with 'VR' (VRT, VRW, etc.)
+    if (id.startsWith('VR')) return true
+    // Fallback to API fields
+    if (acc.type === 'demo') return true
+    if (acc.is_virtual === true || acc.is_virtual === 1) return true
+    return false
   }
 
   // Connect to a specific account using the OTP endpoint
@@ -54,7 +60,7 @@ export default function TradingPage() {
       return
     }
 
-    addDebugStep(`🔌 Requesting authenticated WS URL for: ${accId}...`)
+    addDebugStep(` Requesting authenticated WS URL for: ${accId}...`)
     setErrorMessage('')
     setIsConnected(false)
 
@@ -95,7 +101,7 @@ export default function TradingPage() {
 
       websocket.onopen = () => {
         addDebugStep('✅ WebSocket CONNECTED & AUTHENTICATED!')
-        // Step 3: Request balance (no need to send 'authorize' message)
+        // Step 3: Request balance
         websocket.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: 1 }))
       }
 
@@ -121,7 +127,7 @@ export default function TradingPage() {
       }
 
       websocket.onclose = () => {
-        addDebugStep('🔌 WebSocket closed')
+        addDebugStep(' WebSocket closed')
         setIsConnected(false)
       }
 
@@ -140,7 +146,7 @@ export default function TradingPage() {
       return
     }
 
-    addDebugStep('📱 App mounted. Fetching account list...')
+    addDebugStep(' App mounted. Fetching account list...')
 
     const fetchAccounts = async () => {
       try {
@@ -162,11 +168,11 @@ export default function TradingPage() {
         addDebugStep(`✅ Found ${accountList.length} accounts linked to profile`)
         
         if (accountList.length > 0) {
-          // Log account details
+          // Log account details using our bulletproof method
           accountList.forEach((acc, idx) => {
             const accId = getAccountId(acc)
-            const accType = isDemoAccount(acc) ? 'DEMO' : 'REAL'
-            addDebugStep(`📋 Account ${idx + 1}: ${accId} (${accType})`)
+            const isDemo = isDemoAccount(acc)
+            addDebugStep(` Account ${idx + 1}: ${accId} (${isDemo ? 'DEMO' : 'REAL'})`)
           })
           
           setAccounts(accountList)
@@ -174,14 +180,14 @@ export default function TradingPage() {
           // Auto-select the first account
           const firstAccount = accountList[0]
           const firstId = getAccountId(firstAccount)
-          const firstType = isDemoAccount(firstAccount) ? 'demo' : 'real'
+          const firstIsDemo = isDemoAccount(firstAccount)
           
           setSelectedAccountId(firstId)
           setAccountId(firstId)
-          setAccountType(firstType)
+          setAccountType(firstIsDemo ? 'demo' : 'real')
           setCurrency(firstAccount.currency || 'USD')
           
-          addDebugStep(`🎯 Selected default account: ${firstId} (${firstType.toUpperCase()})`)
+          addDebugStep(`🎯 Selected default account: ${firstId} (${firstIsDemo ? 'DEMO' : 'REAL'})`)
           
           // Connect to the default account
           connectToAccount(firstId, token)
@@ -213,8 +219,10 @@ export default function TradingPage() {
 
     // Find the target account (opposite of current)
     const targetType = accountType === 'demo' ? 'real' : 'demo'
+    
     const targetAccount = accounts.find(acc => {
-      const accType = isDemoAccount(acc) ? 'demo' : 'real'
+      const isDemo = isDemoAccount(acc)
+      const accType = isDemo ? 'demo' : 'real'
       return accType === targetType
     })
     
@@ -223,6 +231,7 @@ export default function TradingPage() {
       addDebugStep(`✅ Found ${targetType.toUpperCase()} account: ${targetId}`)
       addDebugStep(`🔄 Switching to ${targetId}...`)
       
+      // Update UI immediately
       setSelectedAccountId(targetId)
       setAccountId(targetId)
       setAccountType(targetType)
@@ -296,7 +305,7 @@ export default function TradingPage() {
         <p className="text-gray-400 font-bold mb-1">CONNECTION LOG (V3 API):</p>
         <div className="space-y-0.5">
           {debugSteps.map((step, i) => (
-            <p key={i} className={step.includes('✅') || step.includes('💰') || step.includes('📋') || step.includes('🎯') ? 'text-green-400' : step.includes('❌') || step.includes('Failed') || step.includes('error') ? 'text-red-400' : 'text-gray-300'}>
+            <p key={i} className={step.includes('✅') || step.includes('') || step.includes('📋') || step.includes('🎯') ? 'text-green-400' : step.includes('❌') || step.includes('Failed') || step.includes('error') ? 'text-red-400' : 'text-gray-300'}>
               {step}
             </p>
           ))}
