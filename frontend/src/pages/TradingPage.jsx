@@ -26,177 +26,123 @@ export default function TradingPage() {
   const [accountId, setAccountId] = useState('')
   const [isConnected, setIsConnected] = useState(false)
   const [errorMessage, setErrorMessage] = useState('')
-  const [debugInfo, setDebugInfo] = useState({ wsStatus: 'Initializing', lastMsg: 'None' })
+  const [debugSteps, setDebugSteps] = useState([])
   const [ws, setWs] = useState(null)
-  const [connectionAttempts, setConnectionAttempts] = useState(0)
 
-  const connectToDeriv = () => {
-    const token = localStorage.getItem('deriv_access_token')
+  const addDebugStep = (step) => {
+    setDebugSteps(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${step}`])
+  }
+
+  useEffect(() => {
+    addDebugStep('1. TradingPage mounted')
     
-    setDebugInfo(prev => ({ 
-      ...prev, 
-      wsStatus: 'Checking token...',
-      tokenFound: !!token,
-      tokenLength: token ? token.length : 0
-    }))
-
+    // Step 1: Check localStorage
+    const token = localStorage.getItem('deriv_access_token')
+    const oauthStatus = localStorage.getItem('oauth_connected')
+    
+    addDebugStep(`2. Token found: ${token ? 'YES (' + token.length + ' chars)' : 'NO'}`)
+    addDebugStep(`3. OAuth status: ${oauthStatus || 'NOT SET'}`)
+    
     if (!token) {
-      setErrorMessage(' NO TOKEN FOUND! Click "Clear & Reconnect" to login again.')
-      setDebugInfo(prev => ({ ...prev, wsStatus: 'No token' }))
+      setErrorMessage(' NO TOKEN IN STORAGE! Click "Clear & Reconnect" to login.')
+      addDebugStep('ERROR: No token found')
       return
     }
 
-    if (token.length < 50) {
-      setErrorMessage(` TOKEN TOO SHORT (${token.length} chars). Token exchange failed. Click "Clear & Reconnect".`)
-      setDebugInfo(prev => ({ ...prev, wsStatus: 'Invalid token' }))
-      return
+    // Step 2: Validate token
+    if (!token.startsWith('ory_at_') && !token.startsWith('ory_ac_')) {
+      setErrorMessage('⚠️ Token format looks unusual. Might still work...')
+      addDebugStep(`4. Token starts with: ${token.substring(0, 20)}...`)
+    } else {
+      addDebugStep(`4. Token type: ${token.startsWith('ory_at_') ? 'ACCESS_TOKEN' : 'AUTH_CODE'}`)
     }
 
-    // Close existing connection
-    if (ws) {
-      ws.close()
-      setWs(null)
-    }
-
+    // Step 3: Try WebSocket connection
+    addDebugStep('5. Attempting WebSocket connection...')
     setErrorMessage('')
-    setIsConnected(false)
-    setDebugInfo(prev => ({ ...prev, wsStatus: 'Connecting...' }))
-
-    // Try multiple Deriv WebSocket endpoints
-    const endpoints = [
-      'wss://ws.derivws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH',
-      'wss://ws.binaryws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH',
-      'wss://ws.deriv.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH'
-    ]
-
-    const tryEndpoint = (index) => {
-      if (index >= endpoints.length) {
-        setErrorMessage(' All connection attempts failed. Check your internet and click Retry.')
-        setDebugInfo(prev => ({ ...prev, wsStatus: 'All endpoints failed' }))
-        return
-      }
-
-      const wsUrl = endpoints[index]
-      setDebugInfo(prev => ({ ...prev, wsStatus: `Trying endpoint ${index + 1}/3...` }))
-
+    
+    const wsUrl = 'wss://ws.derivws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH'
+    addDebugStep(`6. Connecting to: ${wsUrl}`)
+    
+    try {
       const websocket = new WebSocket(wsUrl)
-
+      
       websocket.onopen = () => {
-        console.log('✅ WebSocket connected to endpoint', index + 1)
-        setDebugInfo(prev => ({ ...prev, wsStatus: 'Connected! Authorizing...' }))
-        setConnectionAttempts(0)
-        
-        // Send authorize request
+        addDebugStep('7. ✅ WebSocket OPEN!')
+        addDebugStep('8. Sending authorize request...')
         websocket.send(JSON.stringify({ authorize: token }))
       }
 
-      websocket.onmessage = (message) => {
+      websocket.onmessage = (event) => {
         try {
-          const data = JSON.parse(message.data)
-          const msgPreview = JSON.stringify(data).substring(0, 150)
-          setDebugInfo(prev => ({ ...prev, lastMsg: msgPreview }))
-
-          // Handle ping response
-          if (data.msg_type === 'ping') {
-            setDebugInfo(prev => ({ ...prev, wsStatus: 'Ping OK. Authorizing...' }))
-            websocket.send(JSON.stringify({ authorize: token }))
-            return
-          }
-
-          // Handle authorize response
+          const data = JSON.parse(event.data)
+          addDebugStep(`9. Received: ${data.msg_type}`)
+          
           if (data.msg_type === 'authorize') {
             if (data.error) {
-              setErrorMessage(`❌ DERIV REJECTED TOKEN: ${data.error.message || data.error.code}. Click "Clear & Reconnect" to login again.`)
-              setDebugInfo(prev => ({ ...prev, wsStatus: 'Authorization failed' }))
+              addDebugStep(`10. ❌ AUTH FAILED: ${data.error.message}`)
+              setErrorMessage(`Deriv rejected token: ${data.error.message || data.error.code}`)
               websocket.close()
-              return
-            }
-
-            if (data.authorize) {
-              console.log('✅ Authorized! Account:', data.authorize)
-              setAccountId(data.authorize.loginid || 'N/A')
+            } else if (data.authorize) {
+              addDebugStep('10. ✅ AUTHORIZED!')
+              addDebugStep(`11. Account: ${data.authorize.loginid}`)
+              setAccountId(data.authorize.loginid)
               setAccountType(data.authorize.is_virtual ? 'demo' : 'real')
               setCurrency(data.authorize.currency || 'USD')
-              setDebugInfo(prev => ({ ...prev, wsStatus: 'Authorized! Fetching balance...' }))
               
-              // Request balance
+              addDebugStep('12. Requesting balance...')
               websocket.send(JSON.stringify({ balance: 1, subscribe: 1 }))
             }
-            return
           }
-
-          // Handle balance response
+          
           if (data.msg_type === 'balance') {
             if (data.balance) {
-              console.log('💰 Balance received:', data.balance)
+              addDebugStep(`13. 💰 Balance: ${data.balance.balance} ${data.balance.currency}`)
               setBalance(parseFloat(data.balance.balance))
               setCurrency(data.balance.currency)
               setIsConnected(true)
-              setDebugInfo(prev => ({ ...prev, wsStatus: '✅ FULLY CONNECTED' }))
+              setErrorMessage('')
             }
-            return
-          }
-
-          // Handle other messages
-          if (data.msg_type) {
-            console.log('Received message type:', data.msg_type)
           }
         } catch (e) {
-          console.error('Parse error:', e)
-          setErrorMessage('❌ Failed to parse server response')
+          addDebugStep(`ERROR parsing message: ${e.message}`)
         }
       }
 
       websocket.onerror = (error) => {
-        console.error('WebSocket error on endpoint', index + 1, error)
-        setDebugInfo(prev => ({ ...prev, wsStatus: `Endpoint ${index + 1} failed` }))
-        
-        // Try next endpoint
-        tryEndpoint(index + 1)
+        addDebugStep('ERROR: WebSocket connection failed')
+        setErrorMessage('WebSocket failed. Check internet connection.')
       }
 
       websocket.onclose = () => {
-        console.log('WebSocket closed')
+        addDebugStep('WebSocket CLOSED')
         setIsConnected(false)
-        setDebugInfo(prev => ({ ...prev, wsStatus: 'Disconnected' }))
       }
 
       setWs(websocket)
-
-      // Timeout after 10 seconds
-      setTimeout(() => {
-        if (websocket.readyState !== WebSocket.OPEN && !isConnected) {
-          console.log('Connection timeout, trying next endpoint...')
-          websocket.close()
-          tryEndpoint(index + 1)
-        }
-      }, 10000)
+      addDebugStep('WebSocket object created')
+      
+    } catch (error) {
+      addDebugStep(`FATAL ERROR: ${error.message}`)
+      setErrorMessage(`Failed to create WebSocket: ${error.message}`)
     }
-
-    // Start trying endpoints
-    tryEndpoint(0)
-  }
-
-  useEffect(() => {
-    connectToDeriv()
 
     return () => {
       if (ws) {
         ws.close()
+        addDebugStep('WebSocket cleanup')
       }
     }
   }, [])
 
   const handleClearData = () => {
-    localStorage.removeItem('deriv_access_token')
-    localStorage.removeItem('oauth_connected')
+    localStorage.clear()
     if (ws) ws.close()
     window.location.href = '/navigation'
   }
 
   const handleRetry = () => {
-    setConnectionAttempts(prev => prev + 1)
-    connectToDeriv()
+    window.location.reload()
   }
 
   const handleSwitchAccount = () => {
@@ -233,12 +179,12 @@ export default function TradingPage() {
         </div>
         <div className="flex flex-col items-center">
           <span className="text-mwathe-gray text-xs">Account</span>
-          <span className="text-mwathe-white font-mono font-bold text-sm">{accountId || 'Loading...'}</span>
+          <span className="text-mwathe-white font-mono font-bold text-sm">{accountId || '---'}</span>
         </div>
         <div className="flex items-center gap-3">
           <button onClick={handleSwitchAccount} className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold ${accountType === 'demo' ? 'bg-mwathe-skyblue/20 text-mwathe-skyblue' : 'bg-mwathe-green/20 text-mwathe-green'}`}>
             <span>{accountType === 'demo' ? 'DEMO' : 'REAL'}</span>
-            <div className={`w-2 h-2 rounded-full ${isConnected ? 'animate-pulse' : 'bg-gray-500'}`}></div>
+            <div className={`w-2 h-2 rounded-full ${isConnected ? 'animate-pulse bg-green-400' : 'bg-red-500'}`}></div>
           </button>
           <div className="text-right">
             <p className="text-mwathe-gray text-xs">Balance</p>
@@ -247,13 +193,16 @@ export default function TradingPage() {
         </div>
       </div>
 
-      {/* Debug Info Box */}
-      <div className="bg-gray-900 border-b border-gray-700 p-2 text-xs">
-        <p className="text-gray-400 text-xs font-bold mb-1">LIVE DEBUGGER:</p>
-        <div className="text-gray-300 space-y-1">
-          <p>WebSocket: <span className={isConnected ? 'text-green-400' : 'text-yellow-400'}>{debugInfo.wsStatus}</span></p>
-          <p>Connection Attempts: {connectionAttempts}</p>
-          <p className="break-all text-gray-400">Last Msg: {debugInfo.lastMsg}</p>
+      {/* Debug Steps - Scrollable */}
+      <div className="bg-gray-900 border-b border-gray-700 max-h-32 overflow-y-auto p-2 text-xs font-mono">
+        <p className="text-gray-400 font-bold mb-1 sticky top-0 bg-gray-900">CONNECTION LOG:</p>
+        <div className="space-y-1">
+          {debugSteps.map((step, i) => (
+            <p key={i} className={step.includes('✅') ? 'text-green-400' : step.includes('❌') || step.includes('ERROR') ? 'text-red-400' : 'text-gray-300'}>
+              {step}
+            </p>
+          ))}
+          {debugSteps.length === 0 && <p className="text-gray-500">Initializing...</p>}
         </div>
       </div>
 
@@ -262,11 +211,11 @@ export default function TradingPage() {
         <div className="bg-red-900/30 border-b border-red-500 p-3 text-center">
           <p className="text-red-400 text-sm mb-3">{errorMessage}</p>
           <div className="flex gap-2 justify-center">
-            <button onClick={handleRetry} className="px-4 py-2 bg-mwathe-skyblue hover:bg-sky-600 text-white rounded-lg text-sm font-bold flex items-center gap-2">
-              <RefreshCw size={16} /> Retry
+            <button onClick={handleRetry} className="px-4 py-2 bg-mwathe-skyblue hover:bg-sky-600 text-white rounded-lg text-sm font-bold">
+              <RefreshCw size={16} className="inline mr-1" /> Retry
             </button>
-            <button onClick={handleClearData} className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-bold flex items-center gap-2">
-              <LogOut size={16} /> Clear & Reconnect
+            <button onClick={handleClearData} className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg text-sm font-bold">
+              <LogOut size={16} className="inline mr-1" /> Clear & Reconnect
             </button>
           </div>
         </div>
