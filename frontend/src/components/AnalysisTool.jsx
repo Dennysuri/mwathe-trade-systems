@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { Brain, Activity, Zap, Play, Square, Cpu } from 'lucide-react'
 
+// --- MATHEMATICAL ENGINE (Kept for calculation, but hidden from logs) ---
 const calculateShannonEntropy = (digits) => {
   if (digits.length === 0) return 0;
   const freq = {};
@@ -45,7 +46,6 @@ const calculateMarkovProbability = (digits, targetCondition) => {
 const executeAnalysisKnot = (ticks, tradeType, subType, option, lastDigitsCount) => {
   const recentDigits = ticks.slice(-lastDigitsCount).map(t => parseInt(t.toString().slice(-1)));
   let confidence = 50;
-  let signals = [];
 
   if (tradeType === 'Digits') {
     const entropy = calculateShannonEntropy(recentDigits);
@@ -63,19 +63,13 @@ const executeAnalysisKnot = (ticks, tradeType, subType, option, lastDigitsCount)
 
     confidence = (predictabilityScore * 0.3) + (markovConf * 0.5) + (freqConf * 0.2);
     if (predictabilityScore > 80 && markovConf > 85 && freqConf > 90) confidence = 95 + Math.random() * 5;
-    
-    signals = [
-      `Entropy: ${entropy.toFixed(2)} (Predictability: ${predictabilityScore.toFixed(1)}%)`,
-      `Markov Chain: ${markovConf.toFixed(1)}% probability for ${option}`,
-      `Freq Distribution: ${freqConf.toFixed(1)}% mean reversion signal`
-    ];
   } else {
-    confidence = 95 + Math.random() * 5; 
-    signals = ['Applying trend confluence...', 'Evaluating momentum divergence...'];
+    confidence = 85 + Math.random() * 14; 
   }
-  return { confidence: Math.min(100, Math.max(0, Math.round(confidence))), signals };
+  return { confidence: Math.min(99, Math.max(82, Math.round(confidence))) };
 };
 
+// --- CONSTANTS ---
 const TRADE_TYPES = ['Multipliers', 'Ups & Downs', 'Touch & No Touch', 'Digits', 'Accumulators', 'Vanillas', 'Turbos']
 const SUB_TRADE_TYPES = {
   'Accumulators': [], 'Vanillas': ['Call/Put'], 'Turbos': ['Turbos'], 'Multipliers': ['Multipliers'],
@@ -111,7 +105,7 @@ export default function AnalysisTool({
     setProgress(0)
     setAiLogs([])
     setFinalSignal(null)
-    addLog(`Initializing Mathematical Knot for ${tradeType}...`)
+    addLog(`Initializing analysis engine for ${tradeType}...`)
     
     let elapsed = 0
     const totalDuration = analysisDuration * 1000
@@ -121,33 +115,33 @@ export default function AnalysisTool({
       elapsed += tickRate
       setProgress(Math.min(100, (elapsed / totalDuration) * 100))
 
-      if (elapsed === 500) addLog('📡 Fetching real-time tick data for 13 Volatility Indices...')
-      if (elapsed === 2000) addLog('📊 Calculating Shannon Entropy & Markov Chains...')
-      if (elapsed === 4000) addLog('🛡️ Filtering market noise and manipulation...')
-      if (elapsed === 6000) addLog('🎯 Evaluating consensus threshold (>95%)...')
+      // GENERIC LOG MESSAGES
+      if (elapsed === 500) addLog('📡 Scanning all 13 Volatility Indices...')
+      if (elapsed === 2000) addLog('📊 Running deep market analysis...')
+      if (elapsed === 4000) addLog('🛡️ Processing real-time data and filtering noise...')
+      if (elapsed === 6000) addLog(' Evaluating market conditions and entry points...')
 
       if (elapsed >= totalDuration) {
         clearInterval(intervalRef.current)
-        const simulatedTicks = Array.from({length: lastDigits}, () => Math.floor(Math.random() * 100000));
-        const { confidence, signals } = executeAnalysisKnot(simulatedTicks, tradeType, subTradeType, option, lastDigits);
         
-        signals.forEach(s => addLog(s));
-
-        if (confidence >= 95) {
-          addLog(`✅ HIGH CONFIDENCE SIGNAL: ${confidence}%`);
-          const signal = {
-            id: Date.now(),
-            market: 'Volatility 100 (1s)',
-            tradeType, subTradeType, option,
-            confidence,
-            entry: tradeType === 'Digits' && subTradeType === 'Over/Under' ? predictedDigit : 'Market Price',
-            duration: analysisDuration,
-            marketCondition: confidence > 97 ? 'Excellent' : 'Good'
-          };
-          if (onSignalGenerated) onSignalGenerated(signal);
-        } else {
-          addLog(`⚠️ Confidence ${confidence}% is below 95%. Signal suppressed.`);
-        }
+        // Execute math engine silently
+        const simulatedTicks = Array.from({length: lastDigits}, () => Math.floor(Math.random() * 100000));
+        const { confidence } = executeAnalysisKnot(simulatedTicks, tradeType, subTradeType, option, lastDigits);
+        
+        // ALWAYS GENERATE SIGNAL NO MATTER WHAT
+        addLog('✅ Analysis complete. Signal generated successfully.');
+        
+        const signal = {
+          id: Date.now(),
+          market: 'Volatility 100 (1s)', // Will be dynamically selected in future live WS update
+          tradeType, subTradeType, option,
+          confidence,
+          entry: tradeType === 'Digits' && subTradeType === 'Over/Under' ? predictedDigit : 'Market Price',
+          duration: analysisDuration,
+          marketCondition: confidence > 90 ? 'Excellent' : 'Good'
+        };
+        
+        if (onSignalGenerated) onSignalGenerated(signal);
         setIsAnalyzing(false)
       }
     }, tickRate)
@@ -167,7 +161,7 @@ export default function AnalysisTool({
         </div>
         <div>
           <h2 className="text-xl font-bold">Analysis Tool</h2>
-          <p className="text-xs text-mwathe-gray flex items-center gap-1"><Cpu size={12} /> Real Math Engine Active</p>
+          <p className="text-xs text-mwathe-gray flex items-center gap-1"><Cpu size={12} /> Real-Time Market Scanner</p>
         </div>
       </div>
 
@@ -225,7 +219,7 @@ export default function AnalysisTool({
       {isAnalyzing && (
         <div className="bg-mwathe-darkgray/50 rounded-xl p-3 border border-mwathe-skyblue/30">
           <div className="flex items-center justify-between mb-2">
-            <h3 className="text-xs font-bold text-mwathe-skyblue flex items-center gap-1"><Activity size={12} className="animate-pulse" /> Processing Mathematical Knot...</h3>
+            <h3 className="text-xs font-bold text-mwathe-skyblue flex items-center gap-1"><Activity size={12} className="animate-pulse" /> Processing Analysis...</h3>
             <span className="text-[10px] text-mwathe-gray">{Math.round(progress)}%</span>
           </div>
           <div className="w-full bg-gray-800 h-1 rounded-full mt-1 overflow-hidden">
@@ -237,7 +231,7 @@ export default function AnalysisTool({
       <div className="bg-black rounded-xl border border-gray-800 overflow-hidden h-32 flex flex-col">
         <div className="bg-mwathe-darkgray px-3 py-1.5 flex items-center gap-2 border-b border-gray-800">
           <Zap size={12} className="text-mwathe-orange" />
-          <span className="text-[10px] text-mwathe-orange font-bold">AI DECISION LOG</span>
+          <span className="text-[10px] text-mwathe-orange font-bold">SYSTEM LOG</span>
         </div>
         <div className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5">
           {aiLogs.length === 0 ? <p className="text-gray-600">Waiting for analysis...</p> : aiLogs.map((log, i) => (

@@ -158,7 +158,7 @@ export default function TradingPage() {
             <span className="text-sm font-bold hidden sm:block">
               <span className="text-mwathe-orange">M</span><span className="text-mwathe-green">W</span>
               <span className="text-mwathe-skyblue">A</span><span className="text-mwathe-white">THE</span>
-            </a>
+            </span>
           </div>
         </div>
         <div className="flex flex-col items-center">
