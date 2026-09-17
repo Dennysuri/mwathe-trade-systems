@@ -60,7 +60,7 @@ export default function DennyBots() {
   const logRef = useRef(null)
   const botInterval = useRef(null)
 
-  const addLog = (msg) => setLogs(prev => [...prev.slice(-10), `[${new Date().toLocaleTimeString()}] ${msg}`])
+  const addLog = (msg) => setLogs(prev => [...prev.slice(-8), `[${new Date().toLocaleTimeString()}] ${msg}`])
   
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight }, [logs])
   useEffect(() => { if (SUB_TRADE_TYPES[tradeType]?.length > 0) setSubTradeType(SUB_TRADE_TYPES[tradeType][0]); else setSubTradeType('') }, [tradeType])
@@ -132,7 +132,7 @@ export default function DennyBots() {
         addLog(` Scanning ${selectedMarket} for high-probability entry...`)
       } 
       else if (tradeCount % 3 === 2) {
-        addLog(`🎯 Entry point found. Purchasing contract (${currentStake.toFixed(2)} USD)...`)
+        addLog(` Entry point found. Purchasing contract (${currentStake.toFixed(2)} USD)...`)
       } 
       else {
         const isWin = Math.random() > 0.3
@@ -160,7 +160,7 @@ export default function DennyBots() {
       }
 
       if (tradeCount > 15 && Math.random() > 0.8) {
-         addLog(`🏆 Target profit approached. Bot pausing gracefully.`)
+         addLog(` Target profit approached. Bot pausing gracefully.`)
          setIsRunning(false)
          clearInterval(botInterval.current)
       }
@@ -192,7 +192,7 @@ export default function DennyBots() {
   return (
     <div className="h-full overflow-hidden bg-mwathe-black text-mwathe-white p-2 flex flex-col">
       {/* Header - Compact */}
-      <div className="flex items-center gap-2 pb-1 border-b border-gray-800 mb-2">
+      <div className="flex items-center gap-2 pb-1 border-b border-gray-800 mb-2 flex-shrink-0">
         <div className="w-7 h-7 bg-gradient-to-br from-mwathe-orange to-mwathe-green rounded-lg flex items-center justify-center">
           <Activity size={16} className="text-white" />
         </div>
@@ -203,15 +203,15 @@ export default function DennyBots() {
       </div>
 
       {validationError && (
-        <div className="bg-red-900/20 border border-red-500/50 rounded-lg p-2 mb-2 flex items-center gap-2">
+        <div className="bg-red-900/20 border border-red-500/50 rounded-lg p-2 mb-2 flex items-center gap-2 flex-shrink-0">
           <AlertCircle size={12} className="text-red-500" />
           <p className="text-red-400 text-[10px] font-medium">{validationError}</p>
         </div>
       )}
 
-      {/* PARAMETERS SECTION - Compact */}
-      <div className="bg-mwathe-darkgray rounded-lg p-2 border border-gray-800 mb-2">
-        <h3 className="text-mwathe-white font-bold text-[11px] flex items-center gap-1 mb-2"><Target size={12} className="text-mwathe-orange" /> Parameters</h3>
+      {/* PARAMETERS SECTION - Compact & Scrollable */}
+      <div className="bg-mwathe-darkgray rounded-lg p-2 border border-gray-800 mb-2 flex-shrink-0 overflow-y-auto max-h-[35vh]">
+        <h3 className="text-mwathe-white font-bold text-[11px] flex items-center gap-1 mb-2 flex-shrink-0"><Target size={12} className="text-mwathe-orange" /> Parameters</h3>
         
         {/* Market Selection */}
         <div className="mb-2">
@@ -308,7 +308,7 @@ export default function DennyBots() {
       </div>
 
       {/* LIVE PERFORMANCE DASHBOARD - Compact */}
-      <div className="bg-mwathe-darkgray rounded-lg p-2 border border-mwathe-green/30 mb-2">
+      <div className="bg-mwathe-darkgray rounded-lg p-2 border border-mwathe-green/30 mb-2 flex-shrink-0">
         <h3 className="text-mwathe-white font-bold text-[11px] mb-1 flex items-center gap-1">
           <TrendingUp size={12} className="text-mwathe-green" /> Live Performance
         </h3>
@@ -338,13 +338,13 @@ export default function DennyBots() {
         </div>
       </div>
 
-      {/* DISPLAY PANEL - Compact */}
-      <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex flex-col flex-1 min-h-0">
+      {/* DISPLAY PANEL - Smaller fixed height */}
+      <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-shrink-0 mb-2" style={{height: '80px'}}>
         <div className="bg-mwathe-darkgray px-2 py-1 flex items-center gap-1 border-b border-gray-800">
           <Terminal size={10} className="text-mwathe-green" />
           <span className="text-[9px] text-mwathe-gray font-bold">DISPLAY PANEL</span>
         </div>
-        <div ref={logRef} className="flex-1 p-1 overflow-y-auto font-mono text-[9px] space-y-0.5">
+        <div ref={logRef} className="h-[60px] p-1 overflow-y-auto font-mono text-[9px] space-y-0.5">
           {logs.map((log, i) => (
             <p key={i} className={
               log.includes('✅') || log.includes('WON') || log.includes('Profit') ? 'text-mwathe-green' :
@@ -358,8 +358,8 @@ export default function DennyBots() {
         </div>
       </div>
 
-      {/* CONTROLS - Compact */}
-      <div className="grid grid-cols-3 gap-2 pt-2">
+      {/* CONTROLS - Always visible at bottom */}
+      <div className="grid grid-cols-3 gap-2 flex-shrink-0">
         <button onClick={startBot} disabled={isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-[11px] ${isRunning ? 'bg-gray-800 text-gray-500' : 'bg-mwathe-green text-black'}`}>
           <Play size={12} /> Run
         </button>
