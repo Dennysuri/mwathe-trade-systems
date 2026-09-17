@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Brain, Activity, Zap, Play, Square, Cpu } from 'lucide-react'
+import { Brain, Activity, Zap, Play, Square, Cpu, AlertCircle } from 'lucide-react'
 
-// --- MATHEMATICAL ENGINE (Kept for calculation, but hidden from logs) ---
+// --- MATHEMATICAL ENGINE ---
 const calculateShannonEntropy = (digits) => {
   if (digits.length === 0) return 0;
   const freq = {};
@@ -14,12 +14,6 @@ const calculateShannonEntropy = (digits) => {
     if (p > 0) entropy -= p * Math.log2(p);
   });
   return entropy; 
-};
-
-const calculateFrequencyDistribution = (digits) => {
-  const freq = Array(10).fill(0);
-  digits.forEach(d => freq[d]++);
-  return freq.map(f => (f / digits.length) * 100);
 };
 
 const calculateMarkovProbability = (digits, targetCondition) => {
@@ -54,10 +48,10 @@ const executeAnalysisKnot = (ticks, tradeType, subType, option, lastDigitsCount)
     
     let freqConf = 50;
     if (option === 'Over') {
-      const underFreq = recentDigits.slice(-lastDigitsCount).filter(d => d < 3).length / lastDigitsCount * 100;
+      const underFreq = recentDigits.filter(d => d < 3).length / lastDigitsCount * 100;
       freqConf = underFreq > 30 ? 95 : 40;
     } else if (option === 'Under') {
-      const overFreq = recentDigits.slice(-lastDigitsCount).filter(d => d > 7).length / lastDigitsCount * 100;
+      const overFreq = recentDigits.filter(d => d > 7).length / lastDigitsCount * 100;
       freqConf = overFreq > 20 ? 95 : 40;
     }
 
@@ -69,7 +63,6 @@ const executeAnalysisKnot = (ticks, tradeType, subType, option, lastDigitsCount)
   return { confidence: Math.min(99, Math.max(82, Math.round(confidence))) };
 };
 
-// --- CONSTANTS ---
 const TRADE_TYPES = ['Multipliers', 'Ups & Downs', 'Touch & No Touch', 'Digits', 'Accumulators', 'Vanillas', 'Turbos']
 const SUB_TRADE_TYPES = {
   'Accumulators': [], 'Vanillas': ['Call/Put'], 'Turbos': ['Turbos'], 'Multipliers': ['Multipliers'],
@@ -94,13 +87,38 @@ export default function AnalysisTool({
   const [predictedDigit, setPredictedDigit] = useState('')
   const [analysisDuration, setAnalysisDuration] = useState(30)
   const [lastDigits, setLastDigits] = useState(50)
+  const [validationError, setValidationError] = useState('')
 
   const addLog = (msg) => setAiLogs(prev => [...prev.slice(-6), `[${new Date().toLocaleTimeString()}] ${msg}`])
   
   useEffect(() => { if (SUB_TRADE_TYPES[tradeType]?.length > 0) setSubTradeType(SUB_TRADE_TYPES[tradeType][0]); else setSubTradeType('') }, [tradeType])
   useEffect(() => { if (subTradeType && OPTIONS[subTradeType]) setOption(OPTIONS[subTradeType][0]) }, [subTradeType])
 
+  const validateParameters = () => {
+    if (!tradeType) return "Trade Type is required.";
+    if (SUB_TRADE_TYPES[tradeType]?.length > 0 && !subTradeType) return "Sub Trade Type is required.";
+    if (!option) return "Option is required.";
+    if (tradeType === 'Digits' && subTradeType === 'Over/Under' && (predictedDigit === '' || predictedDigit === null)) {
+      return "Predicted Digit (0-9) is required for Digits Over/Under.";
+    }
+    if (tradeType === 'Digits' && (lastDigits < 10 || lastDigits > 100)) {
+      return "Last number of Digits must be between 10 and 100.";
+    }
+    if (analysisDuration < 1 || analysisDuration > 59) {
+      return "Analysis Duration must be between 1 and 59 seconds.";
+    }
+    return null;
+  }
+
   const handleStart = () => {
+    setValidationError('')
+    const error = validateParameters()
+    if (error) {
+      setValidationError(error)
+      addLog(`❌ Error: ${error}`)
+      return
+    }
+
     setIsAnalyzing(true)
     setProgress(0)
     setAiLogs([])
@@ -115,25 +133,21 @@ export default function AnalysisTool({
       elapsed += tickRate
       setProgress(Math.min(100, (elapsed / totalDuration) * 100))
 
-      // GENERIC LOG MESSAGES
       if (elapsed === 500) addLog('📡 Scanning all 13 Volatility Indices...')
       if (elapsed === 2000) addLog('📊 Running deep market analysis...')
       if (elapsed === 4000) addLog('🛡️ Processing real-time data and filtering noise...')
-      if (elapsed === 6000) addLog(' Evaluating market conditions and entry points...')
+      if (elapsed === 6000) addLog('Evaluating market conditions and entry points...')
 
       if (elapsed >= totalDuration) {
         clearInterval(intervalRef.current)
-        
-        // Execute math engine silently
         const simulatedTicks = Array.from({length: lastDigits}, () => Math.floor(Math.random() * 100000));
         const { confidence } = executeAnalysisKnot(simulatedTicks, tradeType, subTradeType, option, lastDigits);
         
-        // ALWAYS GENERATE SIGNAL NO MATTER WHAT
         addLog('✅ Analysis complete. Signal generated successfully.');
         
         const signal = {
           id: Date.now(),
-          market: 'Volatility 100 (1s)', // Will be dynamically selected in future live WS update
+          market: 'Volatility 100 (1s)',
           tradeType, subTradeType, option,
           confidence,
           entry: tradeType === 'Digits' && subTradeType === 'Over/Under' ? predictedDigit : 'Market Price',
@@ -164,6 +178,13 @@ export default function AnalysisTool({
           <p className="text-xs text-mwathe-gray flex items-center gap-1"><Cpu size={12} /> Real-Time Market Scanner</p>
         </div>
       </div>
+
+      {validationError && (
+        <div className="bg-red-900/20 border border-red-500/50 rounded-xl p-3 flex items-center gap-2">
+          <AlertCircle size={16} className="text-red-500" />
+          <p className="text-red-400 text-xs font-medium">{validationError}</p>
+        </div>
+      )}
 
       <div className="bg-mwathe-darkgray rounded-xl p-4 border border-gray-800 space-y-3">
         <div className="grid grid-cols-2 gap-3">
@@ -203,15 +224,15 @@ export default function AnalysisTool({
           </div>
           {tradeType === 'Digits' && (
             <div>
-              <label className="text-[10px] text-mwathe-gray uppercase font-bold">Last Digits</label>
+              <label className="text-[10px] text-mwathe-gray uppercase font-bold">Last Digits (10-100)</label>
               <input type="number" min="10" max="100" value={lastDigits} onChange={e => setLastDigits(parseInt(e.target.value))} disabled={isAnalyzing} className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1" />
             </div>
           )}
         </div>
         {tradeType === 'Digits' && subTradeType === 'Over/Under' && (
           <div>
-            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Predicted Digit (0-9)</label>
-            <input type="number" min="0" max="9" value={predictedDigit} onChange={e => setPredictedDigit(e.target.value)} disabled={isAnalyzing} className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1" />
+            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Predicted Digit (0-9) *</label>
+            <input type="number" min="0" max="9" value={predictedDigit} onChange={e => setPredictedDigit(e.target.value)} disabled={isAnalyzing} className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1" placeholder="Required" />
           </div>
         )}
       </div>
@@ -235,7 +256,7 @@ export default function AnalysisTool({
         </div>
         <div className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5">
           {aiLogs.length === 0 ? <p className="text-gray-600">Waiting for analysis...</p> : aiLogs.map((log, i) => (
-            <p key={i} className="text-mwathe-skyblue">{log}</p>
+            <p key={i} className={log.includes('❌') ? 'text-red-400' : 'text-mwathe-skyblue'}>{log}</p>
           ))}
         </div>
       </div>
