@@ -55,8 +55,8 @@ export default function Signals({ signals, onReset }) {
                     <p className="text-mwathe-white font-mono font-bold">{signal.entry}</p>
                   </div>
                   <div>
-                    <p className="text-mwathe-gray text-xs mb-1">Duration</p>
-                    <p className="text-mwathe-skyblue font-bold">{signal.duration}s</p>
+                    <p className="text-mwathe-gray text-xs mb-1">Contract Duration</p>
+                    <p className="text-mwathe-skyblue font-bold">{signal.contractDuration}</p>
                   </div>
                   <div>
                     <p className="text-mwathe-gray text-xs mb-1">Market Condition</p>

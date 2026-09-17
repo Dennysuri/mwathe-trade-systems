@@ -77,6 +77,17 @@ const OPTIONS = {
   'Multipliers': ['Up', 'Down', 'Both']
 }
 
+// STRICT TIMEFRAME RULES PER DOCUMENT
+const TIMEFRAME_RULES = {
+  'Accumulators': { units: ['Ticks'], defaultUnit: 'Ticks', min: 1, max: 85, fixed: true, label: '1 - 85 ticks (Auto-managed)' },
+  'Multipliers': { units: ['Auto'], defaultUnit: 'Auto', min: 1, max: 1, fixed: true, label: 'Auto (Market dependent)' },
+  'Digits': { units: ['Ticks'], defaultUnit: 'Ticks', min: 1, max: 10, fixed: false },
+  'Turbos': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false },
+  'Ups & Downs': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false },
+  'Touch & No Touch': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false },
+  'Vanillas': { units: ['Minutes', 'Hours', 'Days'], defaultUnit: 'Minutes', min: 1, maxMap: { 'Minutes': 1440, 'Hours': 24, 'Days': 30 }, fixed: false }
+}
+
 export default function AnalysisTool({
   isAnalyzing, setIsAnalyzing, progress, setProgress,
   aiLogs, setAiLogs, finalSignal, setFinalSignal, intervalRef, onSignalGenerated
@@ -85,14 +96,21 @@ export default function AnalysisTool({
   const [subTradeType, setSubTradeType] = useState('Over/Under')
   const [option, setOption] = useState('Over')
   const [predictedDigit, setPredictedDigit] = useState('')
-  const [analysisDuration, setAnalysisDuration] = useState(30)
+  const [analysisDuration, setAnalysisDuration] = useState(30) // How long the AI thinks
   const [lastDigits, setLastDigits] = useState(50)
+  const [timeframeUnit, setTimeframeUnit] = useState('Ticks') // The actual contract duration unit
+  const [durationValue, setDurationValue] = useState(1) // The actual contract duration value
   const [validationError, setValidationError] = useState('')
 
   const addLog = (msg) => setAiLogs(prev => [...prev.slice(-6), `[${new Date().toLocaleTimeString()}] ${msg}`])
   
   useEffect(() => { if (SUB_TRADE_TYPES[tradeType]?.length > 0) setSubTradeType(SUB_TRADE_TYPES[tradeType][0]); else setSubTradeType('') }, [tradeType])
   useEffect(() => { if (subTradeType && OPTIONS[subTradeType]) setOption(OPTIONS[subTradeType][0]) }, [subTradeType])
+  useEffect(() => { 
+    const rules = TIMEFRAME_RULES[tradeType]
+    setTimeframeUnit(rules.defaultUnit)
+    setDurationValue(rules.min)
+  }, [tradeType])
 
   const validateParameters = () => {
     if (!tradeType) return "Trade Type is required.";
@@ -106,6 +124,15 @@ export default function AnalysisTool({
     }
     if (analysisDuration < 1 || analysisDuration > 59) {
       return "Analysis Duration must be between 1 and 59 seconds.";
+    }
+    
+    const rules = TIMEFRAME_RULES[tradeType]
+    if (!rules.fixed) {
+      if (!timeframeUnit) return "Time Frame unit is required."
+      const maxVal = rules.maxMap[timeframeUnit]
+      if (durationValue < rules.min || durationValue > maxVal) {
+        return `Contract Duration must be between ${rules.min} and ${maxVal} ${timeframeUnit.toLowerCase()}.`
+      }
     }
     return null;
   }
@@ -134,8 +161,8 @@ export default function AnalysisTool({
       setProgress(Math.min(100, (elapsed / totalDuration) * 100))
 
       if (elapsed === 500) addLog('📡 Scanning all 13 Volatility Indices...')
-      if (elapsed === 2000) addLog('📊 Running deep market analysis...')
-      if (elapsed === 4000) addLog('🛡️ Processing real-time data and filtering noise...')
+      if (elapsed === 2000) addLog(' Running deep market analysis...')
+      if (elapsed === 4000) addLog('️ Processing real-time data and filtering noise...')
       if (elapsed === 6000) addLog('Evaluating market conditions and entry points...')
 
       if (elapsed >= totalDuration) {
@@ -145,13 +172,16 @@ export default function AnalysisTool({
         
         addLog('✅ Analysis complete. Signal generated successfully.');
         
+        // CORRECT CONTRACT DURATION PASSED TO SIGNALS
+        const contractDurationText = TIMEFRAME_RULES[tradeType].fixed ? TIMEFRAME_RULES[tradeType].label : `${durationValue} ${timeframeUnit}`;
+
         const signal = {
           id: Date.now(),
           market: 'Volatility 100 (1s)',
           tradeType, subTradeType, option,
           confidence,
           entry: tradeType === 'Digits' && subTradeType === 'Over/Under' ? predictedDigit : 'Market Price',
-          duration: analysisDuration,
+          contractDuration: contractDurationText, // THIS IS THE ACTUAL TRADE TIMEFRAME
           marketCondition: confidence > 90 ? 'Excellent' : 'Good'
         };
         
@@ -166,6 +196,8 @@ export default function AnalysisTool({
     setIsAnalyzing(false)
     addLog('🛑 Analysis stopped by user.')
   }
+
+  const rules = TIMEFRAME_RULES[tradeType]
 
   return (
     <div className="h-full overflow-y-auto bg-mwathe-black text-mwathe-white p-4 space-y-4">
@@ -217,9 +249,35 @@ export default function AnalysisTool({
           </div>
         )}
 
+        {/* ACTUAL TRADE TIMEFRAME */}
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Duration: {analysisDuration}s</label>
+            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Contract Time Frame</label>
+            {rules.fixed ? (
+              <input type="text" value={rules.label} disabled className="w-full bg-mwathe-black/50 border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1 text-mwathe-gray" />
+            ) : (
+              <select value={timeframeUnit} onChange={e => { setTimeframeUnit(e.target.value); setDurationValue(rules.min) }} disabled={isAnalyzing} className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1">
+                {rules.units.map(u => <option key={u}>{u}</option>)}
+              </select>
+            )}
+          </div>
+          <div>
+            <label className="text-[10px] text-mwathe-gray uppercase font-bold">
+              Duration {rules.fixed ? '' : `(${rules.min}-${rules.maxMap ? rules.maxMap[timeframeUnit] : rules.max})`}
+            </label>
+            <input 
+              type="number" 
+              value={durationValue} 
+              onChange={e => setDurationValue(parseInt(e.target.value) || 0)} 
+              disabled={isAnalyzing || rules.fixed} 
+              className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1" 
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Analysis Duration: {analysisDuration}s</label>
             <input type="range" min="1" max="59" value={analysisDuration} onChange={e => setAnalysisDuration(parseInt(e.target.value))} disabled={isAnalyzing} className="w-full accent-mwathe-green mt-1" />
           </div>
           {tradeType === 'Digits' && (
