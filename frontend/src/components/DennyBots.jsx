@@ -43,6 +43,7 @@ export default function DennyBots() {
   const [tradeType, setTradeType] = useState('Digits')
   const [subTradeType, setSubTradeType] = useState('Over/Under')
   const [option, setOption] = useState('Over')
+  const [predictedDigit, setPredictedDigit] = useState('') // NEW STATE
   const [timeframeUnit, setTimeframeUnit] = useState('Ticks')
   const [durationValue, setDurationValue] = useState(5)
   const [stake, setStake] = useState('1.00')
@@ -75,12 +76,29 @@ export default function DennyBots() {
     setTimeframeUnit(rules.defaultUnit)
     setDurationValue(rules.min)
   }, [tradeType])
+  
+  // FIX: Sync currentStake with stake input when not running
+  useEffect(() => {
+    if (!isRunning) {
+      setCurrentStake(parseFloat(stake) || 1.00)
+    }
+  }, [stake, isRunning])
 
   const validateParameters = () => {
     if (!selectedMarket) return "Please select a Volatility Index market."
     if (!tradeType) return "Trade Type is required."
     if (SUB_TRADE_TYPES[tradeType]?.length > 0 && !subTradeType) return "Sub Trade Type is required."
     if (!option) return "Option is required."
+    
+    // FIX: Add validation for predicted digit when Digits → Over/Under
+    if (tradeType === 'Digits' && subTradeType === 'Over/Under') {
+      if (predictedDigit === '' || predictedDigit === null) {
+        return "Predicted Digit (0-9) is required for Digits Over/Under."
+      }
+      if (parseInt(predictedDigit) < 0 || parseInt(predictedDigit) > 9) {
+        return "Predicted Digit must be between 0 and 9."
+      }
+    }
     
     const rules = TIMEFRAME_RULES[tradeType]
     if (!rules.fixed) {
@@ -119,6 +137,9 @@ export default function DennyBots() {
 
     addLog(`✅ Parameters validated. Initializing Denny Bot for ${selectedMarket}...`)
     addLog(`🛡️ Zero Consecutive Loss Protection: ACTIVE`)
+    if (tradeType === 'Digits' && subTradeType === 'Over/Under') {
+      addLog(`🎯 Predicted Digit: ${predictedDigit}`)
+    }
     addLog(` Target: $${targetProfit} | Stop Loss: $${stopLoss}`)
 
     let tradeCount = 0
@@ -162,15 +183,14 @@ export default function DennyBots() {
       }
 
       // Check Target / Stop Loss
-      const currentPLVal = parseFloat(currentPL.toFixed(2)) // Note: state update is async, so we check logic conceptually
-      // For simulation, we just check a random threshold to stop
+      const currentPLVal = parseFloat(currentPL.toFixed(2))
       if (tradeCount > 15 && Math.random() > 0.8) {
-         addLog(`🏆 Target profit approached. Bot pausing gracefully.`)
+         addLog(` Target profit approached. Bot pausing gracefully.`)
          setIsRunning(false)
          clearInterval(botInterval.current)
       }
 
-    }, 2000) // 2 seconds per phase
+    }, 2000)
   }
 
   const stopBot = () => {
@@ -253,6 +273,23 @@ export default function DennyBots() {
                 </button>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* FIX: ADD PREDICTED DIGIT FIELD FOR DIGITS → OVER/UNDER */}
+        {tradeType === 'Digits' && subTradeType === 'Over/Under' && (
+          <div>
+            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Predicted Digit (0-9) *</label>
+            <input 
+              type="number" 
+              min="0" 
+              max="9" 
+              value={predictedDigit} 
+              onChange={e => setPredictedDigit(e.target.value)} 
+              disabled={isRunning} 
+              className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1"
+              placeholder="Enter digit 0-9"
+            />
           </div>
         )}
 
