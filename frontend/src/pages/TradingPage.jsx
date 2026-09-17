@@ -138,7 +138,7 @@ export default function TradingPage() {
         />
       case 'signals': 
         return <Signals signals={signals} onReset={handleResetSignals} />
-      case 'denny': return <DennyBots />
+      case 'denny': return <DennyBots token={localStorage.getItem('deriv_access_token')} accountId={accountId} onBalanceUpdate={setBalance} />
       case 'automated': return <AutomatedBot />
       case 'autod': return <AutoDAI />
       case 'settings': return <AppSettings />

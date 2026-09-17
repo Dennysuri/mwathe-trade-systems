@@ -41,7 +41,7 @@ const TIMEFRAME_RULES = {
   'Vanillas': { units: ['Minutes', 'Hours', 'Days'], defaultUnit: 'Minutes', min: 1, maxMap: { 'Minutes': 1440, 'Hours': 24, 'Days': 30 }, fixed: false }
 }
 
-export default function DennyBots() {
+export default function DennyBots({ token, accountId, onBalanceUpdate }) {
   const [selectedMarket, setSelectedMarket] = useState('Volatility 100 (1s) Index')
   const [tradeType, setTradeType] = useState('Digits')
   const [subTradeType, setSubTradeType] = useState('Over/Under')
@@ -84,46 +84,66 @@ export default function DennyBots() {
   }, [tradeType])
   useEffect(() => { if (!isRunning) setCurrentStake(parseFloat(stake) || 1.00) }, [stake, isRunning])
 
+  // SECURE CONNECTION USING MAIN APP'S TOKEN
   useEffect(() => {
-    const token = localStorage.getItem('deriv_access_token')
-    if (!token) { addLog('⚠️ No OAuth token. Connect to Deriv first.'); return }
+    if (!token || !accountId) { 
+      setValidationError('Not connected to Deriv. Please refresh the page.')
+      return 
+    }
 
-    addLog('🔌 Connecting to Deriv WebSocket API...')
-    const wsUrl = 'wss://ws.derivws.com/websockets/v3?app_id=349eTg55tt6ZVaefjBIAH'
-    const websocket = new WebSocket(wsUrl)
+    addLog('🔌 Connecting to Deriv via secure session...')
     
-    websocket.onopen = () => {
-      addLog('✅ WebSocket connected. Authorizing...')
-      websocket.send(JSON.stringify({ authorize: token }))
-    }
-    websocket.onmessage = (message) => {
-      try {
-        const data = JSON.parse(message.data)
-        if (data.msg_type === 'authorize') {
-          if (data.error) addLog(`❌ Auth failed: ${data.error.message}`)
-          else { addLog(`✅ Authorized: ${data.authorize.loginid}`); addLog(` Balance: ${data.authorize.balance} ${data.authorize.currency}`) }
-        }
-        if (data.msg_type === 'tick') {
-          setTickHistory(prev => { const h = [...prev, data.tick.quote]; if (h.length > 50) h.shift(); return h })
-        }
-        if (data.msg_type === 'buy') {
-          if (data.error) { addLog(`❌ Buy failed: ${data.error.message}`); setCurrentContract(null) }
-          else { setCurrentContract({ id: data.buy.contract_id }); addLog(`✅ Contract purchased: ID ${data.buy.contract_id} | Price: $${data.buy.buy_price}`) }
-        }
-        if (data.msg_type === 'proposal_open_contract') {
-          if (!data.error && data.proposal_open_contract.is_sold) {
-            const profit = parseFloat(data.proposal_open_contract.profit)
-            handleContractResult(profit)
-            setCurrentContract(null)
+    fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
+    })
+    .then(res => res.json())
+    .then(data => {
+      const wsUrl = data.data?.url
+      if (!wsUrl) throw new Error('No WebSocket URL returned')
+      
+      addLog('✅ Secure URL received. Opening WebSocket...')
+      const websocket = new WebSocket(wsUrl)
+      
+      websocket.onopen = () => {
+        addLog('✅ WebSocket connected & authorized.')
+        websocket.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: 1 }))
+      }
+      
+      websocket.onmessage = (message) => {
+        try {
+          const data = JSON.parse(message.data)
+          if (data.msg_type === 'balance') {
+            if (onBalanceUpdate) onBalanceUpdate(parseFloat(data.balance.balance))
+            addLog(`💰 Balance updated: ${data.balance.balance} ${data.balance.currency}`)
           }
-        }
-      } catch (e) { console.error(e) }
-    }
-    websocket.onerror = () => addLog('❌ WebSocket error')
-    websocket.onclose = () => addLog('🔌 WebSocket disconnected')
-    setWs(websocket)
-    return () => { if (websocket) websocket.close() }
-  }, [])
+          if (data.msg_type === 'tick') {
+            setTickHistory(prev => { const h = [...prev, data.tick.quote]; if (h.length > 50) h.shift(); return h })
+          }
+          if (data.msg_type === 'buy') {
+            if (data.error) { addLog(`❌ Buy failed: ${data.error.message}`); setCurrentContract(null) }
+            else { setCurrentContract({ id: data.buy.contract_id }); addLog(`✅ Contract purchased: ID ${data.buy.contract_id} | Price: $${data.buy.buy_price}`) }
+          }
+          if (data.msg_type === 'proposal_open_contract') {
+            if (!data.error && data.proposal_open_contract.is_sold) {
+              const profit = parseFloat(data.proposal_open_contract.profit)
+              handleContractResult(profit)
+              setCurrentContract(null)
+            }
+          }
+        } catch (e) { console.error(e) }
+      }
+      websocket.onerror = () => addLog('❌ WebSocket error')
+      websocket.onclose = () => addLog('🔌 WebSocket disconnected')
+      setWs(websocket)
+    })
+    .catch(err => {
+      addLog(` Connection failed: ${err.message}`)
+      setValidationError('Failed to connect to Deriv.')
+    })
+
+    return () => { if (ws) ws.close() }
+  }, [token, accountId])
 
   const startCascadeEngine = (symbol) => {
     addLog(`🧠 [0s] Cascade Engine initiated. Scanning 13 Volatility Indices...`)
@@ -204,9 +224,9 @@ export default function DennyBots() {
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0)
     setCurrentStake(parseFloat(stake)); setConsecutiveLosses(0); setTickHistory([]); setLogs([])
 
-    addLog(`🚀 Starting Denny Bot for ${selectedMarket}...`)
+    addLog(` Starting Denny Bot for ${selectedMarket}...`)
     addLog(`🛡️ Zero Consecutive Loss Protection: ACTIVE (Martingale: ${martingaleFactor}x)`)
-    addLog(`🎯 Target: $${targetProfit} | Stop Loss: $${stopLoss}`)
+    addLog(` Target: $${targetProfit} | Stop Loss: $${stopLoss}`)
     
     const symbol = SYMBOL_MAP[selectedMarket]
     ws.send(JSON.stringify({ ticks: symbol, subscribe: 1, req_id: Date.now() }))
@@ -219,7 +239,7 @@ export default function DennyBots() {
     setIsRunning(false)
     if (executionTimer.current) clearTimeout(executionTimer.current)
     if (ws) ws.send(JSON.stringify({ forget: 'all', req_id: Date.now() }))
-    addLog(` Bot stopped gracefully.`)
+    addLog(`🛑 Bot stopped gracefully.`)
   }
 
   const resetBot = () => {
@@ -386,7 +406,7 @@ export default function DennyBots() {
           {logs.map((log, i) => (
             <p key={i} className={
               log.includes('✅') || log.includes('WON') || log.includes('Profit') || log.includes('Target') ? 'text-mwathe-green' :
-              log.includes('') || log.includes('LOST') || log.includes('Stop') ? 'text-red-500' :
+              log.includes('❌') || log.includes('LOST') || log.includes('Stop') ? 'text-red-500' :
               log.includes('🛡️') || log.includes('Martingale') ? 'text-mwathe-orange' :
               log.includes('🚀') || log.includes('🎯') || log.includes('⚡') || log.includes('🧠') ? 'text-mwathe-skyblue' :
               'text-mwathe-gray'
