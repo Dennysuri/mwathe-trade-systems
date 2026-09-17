@@ -68,6 +68,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
   const [ws, setWs] = useState(null)
   const [tickHistory, setTickHistory] = useState([])
   const [currentContract, setCurrentContract] = useState(null)
+  const [proposalId, setProposalId] = useState(null)
 
   const logRef = useRef(null)
   const executionTimer = useRef(null)
@@ -84,7 +85,6 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
   }, [tradeType])
   useEffect(() => { if (!isRunning) setCurrentStake(parseFloat(stake) || 1.00) }, [stake, isRunning])
 
-  // SECURE CONNECTION USING MAIN APP'S TOKEN
   useEffect(() => {
     if (!token || !accountId) { 
       setValidationError('Not connected to Deriv. Please refresh the page.')
@@ -102,7 +102,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
       const wsUrl = data.data?.url
       if (!wsUrl) throw new Error('No WebSocket URL returned')
       
-      addLog('✅ Secure URL received. Opening WebSocket...')
+      addLog('✅ Secure connection established. Opening trading session...')
       const websocket = new WebSocket(wsUrl)
       
       websocket.onopen = () => {
@@ -120,9 +120,32 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
           if (data.msg_type === 'tick') {
             setTickHistory(prev => { const h = [...prev, data.tick.quote]; if (h.length > 50) h.shift(); return h })
           }
+          if (data.msg_type === 'proposal') {
+            if (data.error) { 
+              addLog(`❌ Proposal failed: ${data.error.message}`)
+              setProposalId(null)
+            } else { 
+              setProposalId(data.proposal.id)
+              addLog(`✅ Entry point confirmed. Executing trade...`)
+              setTimeout(() => {
+                websocket.send(JSON.stringify({ 
+                  buy: data.proposal.id, 
+                  price: currentStake,
+                  req_id: Date.now() 
+                }))
+              }, 200)
+            }
+          }
           if (data.msg_type === 'buy') {
-            if (data.error) { addLog(`❌ Buy failed: ${data.error.message}`); setCurrentContract(null) }
-            else { setCurrentContract({ id: data.buy.contract_id }); addLog(`✅ Contract purchased: ID ${data.buy.contract_id} | Price: $${data.buy.buy_price}`) }
+            if (data.error) { 
+              addLog(`❌ Trade execution failed: ${data.error.message}`)
+              setCurrentContract(null)
+              setProposalId(null)
+            } else { 
+              setCurrentContract({ id: data.buy.contract_id })
+              addLog(`✅ Contract purchased successfully! ID: ${data.buy.contract_id}`)
+              setProposalId(null)
+            }
           }
           if (data.msg_type === 'proposal_open_contract') {
             if (!data.error && data.proposal_open_contract.is_sold) {
@@ -134,7 +157,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
         } catch (e) { console.error(e) }
       }
       websocket.onerror = () => addLog('❌ WebSocket error')
-      websocket.onclose = () => addLog('🔌 WebSocket disconnected')
+      websocket.onclose = () => addLog(' WebSocket disconnected')
       setWs(websocket)
     })
     .catch(err => {
@@ -146,37 +169,42 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
   }, [token, accountId])
 
   const startCascadeEngine = (symbol) => {
-    addLog(`🧠 [0s] Cascade Engine initiated. Scanning 13 Volatility Indices...`)
+    addLog(`🧠 Analyzing 13 Volatility Indices markets...`)
     
     executionTimer.current = setTimeout(() => {
-      addLog(`⚡ [3s] Layer 1 (Hurst/Kalman) evaluated. Calculating Shannon Entropy...`)
-    }, 3000)
+      addLog(` Market analysis in progress. Calculating optimal entry...`)
+    }, 2000)
 
     executionTimer.current = setTimeout(() => {
-      addLog(`📊 [6s] Layer 2 (Markov/Chi-Square) evaluated. Detecting PRNG anomalies...`)
-    }, 6000)
+      addLog(`🎯 Detecting high-probability patterns...`)
+    }, 5000)
 
     executionTimer.current = setTimeout(() => {
-      addLog(`🎯 [8s] Layer 3 (Tick-Velocity) locked. Executing deterministic trade on ${selectedMarket}...`)
+      addLog(`⚡ Sniping entry point on ${selectedMarket}...`)
       executeRealTrade(symbol)
     }, 8000)
   }
 
   const executeRealTrade = (symbol) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) { addLog('❌ WS not connected'); return }
+    if (!ws || ws.readyState !== WebSocket.OPEN) { 
+      addLog('❌ Connection not ready')
+      return 
+    }
     
     const contractType = getContractType()
-    addLog(`🚀 [9s] Sending proposal: ${contractType}, ${durationValue} ${timeframeUnit}, Stake: $${currentStake.toFixed(2)}`)
+    addLog(`🚀 Executing trade: ${contractType}, ${durationValue} ${timeframeUnit}, Stake: $${currentStake.toFixed(2)}`)
     
     ws.send(JSON.stringify({
-      proposal: 1, amount: currentStake, basis: 'stake', contract_type: contractType,
-      currency: 'USD', duration: durationValue, duration_unit: timeframeUnit === 'Minutes' ? 'm' : 't',
-      symbol: symbol, req_id: Date.now()
+      proposal: 1,
+      amount: currentStake,
+      basis: 'stake',
+      contract_type: contractType,
+      currency: 'USD',
+      duration: durationValue,
+      duration_unit: timeframeUnit === 'Minutes' ? 'm' : 't',
+      symbol: symbol,
+      req_id: Date.now()
     }))
-    
-    setTimeout(() => {
-      ws.send(JSON.stringify({ buy: 'proposal', price: currentStake, req_id: Date.now() + 1 }))
-    }, 500)
   }
 
   const getContractType = () => {
@@ -198,7 +226,10 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
       setConsecutiveLosses(0)
       setCurrentStake(parseFloat(stake))
       addLog(`✅ Contract WON! Profit: +$${profit.toFixed(2)}. Stake reset to base.`)
-      if (currentPL >= parseFloat(targetProfit)) { addLog(`🏆 Target profit reached!`); setIsRunning(false) }
+      if (currentPL >= parseFloat(targetProfit)) { 
+        addLog(` Target profit reached!`)
+        setIsRunning(false) 
+      }
     } else {
       setCurrentPL(prev => prev + profit)
       setLosses(prev => prev + 1)
@@ -209,20 +240,35 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
       const newStake = currentStake * martingale
       setCurrentStake(newStake)
       addLog(`❌ Contract LOST. Loss: $${profit.toFixed(2)}.`)
-      addLog(`🛡️ Zero Loss Protocol: Applying ${martingale}x Martingale. Next stake: $${newStake.toFixed(2)}`)
+      addLog(`️ Applying ${martingale}x Martingale. Next stake: $${newStake.toFixed(2)}`)
       
-      if (currentPL <= -parseFloat(stopLoss)) { addLog(`🛑 Stop loss hit!`); setIsRunning(false) }
+      if (currentPL <= -parseFloat(stopLoss)) { 
+        addLog(`🛑 Stop loss hit!`)
+        setIsRunning(false) 
+      }
     }
   }
 
   const startBot = () => {
     setValidationError('')
-    if (!ws || ws.readyState !== WebSocket.OPEN) { setValidationError('Not connected to Deriv.'); return }
-    if (parseFloat(martingaleFactor) <= 0) { setValidationError('Martingale factor must be > 0.'); return }
+    if (!ws || ws.readyState !== WebSocket.OPEN) { 
+      setValidationError('Not connected to Deriv.')
+      return 
+    }
+    if (parseFloat(martingaleFactor) <= 0) { 
+      setValidationError('Martingale factor must be > 0.')
+      return 
+    }
 
     setIsRunning(true)
-    setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0)
-    setCurrentStake(parseFloat(stake)); setConsecutiveLosses(0); setTickHistory([]); setLogs([])
+    setCurrentPL(0)
+    setTotalTrades(0)
+    setWins(0)
+    setLosses(0)
+    setCurrentStake(parseFloat(stake))
+    setConsecutiveLosses(0)
+    setTickHistory([])
+    setLogs([])
 
     addLog(` Starting Denny Bot for ${selectedMarket}...`)
     addLog(`🛡️ Zero Consecutive Loss Protection: ACTIVE (Martingale: ${martingaleFactor}x)`)
@@ -245,8 +291,15 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
   const resetBot = () => {
     stopBot()
     setLogs(['System reset. Ready for new session.'])
-    setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0)
-    setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setTickHistory([]); setValidationError('')
+    setCurrentPL(0)
+    setTotalTrades(0)
+    setWins(0)
+    setLosses(0)
+    setConsecutiveLosses(0)
+    setCurrentStake(parseFloat(stake))
+    setTickHistory([])
+    setValidationError('')
+    setProposalId(null)
   }
 
   const rules = TIMEFRAME_RULES[tradeType]
@@ -400,15 +453,15 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
       <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col">
         <div className="bg-mwathe-darkgray px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0">
           <Terminal size={10} className="text-mwathe-green" />
-          <span className="text-[10px] text-mwathe-gray font-bold">DISPLAY PANEL - Cascade Engine</span>
+          <span className="text-[10px] text-mwathe-gray font-bold">DISPLAY PANEL</span>
         </div>
         <div ref={logRef} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5">
           {logs.map((log, i) => (
             <p key={i} className={
               log.includes('✅') || log.includes('WON') || log.includes('Profit') || log.includes('Target') ? 'text-mwathe-green' :
-              log.includes('❌') || log.includes('LOST') || log.includes('Stop') ? 'text-red-500' :
+              log.includes('❌') || log.includes('LOST') || log.includes('Stop') || log.includes('failed') ? 'text-red-500' :
               log.includes('🛡️') || log.includes('Martingale') ? 'text-mwathe-orange' :
-              log.includes('🚀') || log.includes('🎯') || log.includes('⚡') || log.includes('🧠') ? 'text-mwathe-skyblue' :
+              log.includes('🚀') || log.includes('🎯') || log.includes('⚡') || log.includes('🧠') || log.includes('📊') ? 'text-mwathe-skyblue' :
               'text-mwathe-gray'
             }>
               {log}
