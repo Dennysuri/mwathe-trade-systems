@@ -27,6 +27,7 @@ export default function TradingPage() {
   const [isConnected, setIsConnected] = useState(false)
   const [accounts, setAccounts] = useState([])
   const [selectedAccountId, setSelectedAccountId] = useState('')
+  const [signals, setSignals] = useState([])
   
   const getAccountTypeFromId = (id) => {
     if (!id) return 'real'
@@ -149,15 +150,25 @@ export default function TradingPage() {
     }
   }
 
+  // Handle new signal from Analysis Tool
+  const handleSignalGenerated = (signal) => {
+    setSignals(prev => [signal, ...prev])
+  }
+
+  // Reset signals
+  const handleResetSignals = () => {
+    setSignals([])
+  }
+
   const renderSection = () => {
     switch(activeSection) {
-      case 'analysis': return <AnalysisTool />
-      case 'signals': return <Signals />
+      case 'analysis': return <AnalysisTool onSignalGenerated={handleSignalGenerated} />
+      case 'signals': return <Signals signals={signals} onReset={handleResetSignals} />
       case 'denny': return <DennyBots />
       case 'automated': return <AutomatedBot />
       case 'autod': return <AutoDAI />
       case 'settings': return <AppSettings />
-      default: return <AnalysisTool />
+      default: return <AnalysisTool onSignalGenerated={handleSignalGenerated} />
     }
   }
 
