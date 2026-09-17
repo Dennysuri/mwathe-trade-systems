@@ -68,7 +68,6 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
   const [ws, setWs] = useState(null)
   const [tickHistory, setTickHistory] = useState([])
   const [currentContract, setCurrentContract] = useState(null)
-  const [proposalId, setProposalId] = useState(null)
 
   const logRef = useRef(null)
   const executionTimer = useRef(null)
@@ -123,14 +122,14 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
           if (data.msg_type === 'proposal') {
             if (data.error) { 
               addLog(`❌ Proposal failed: ${data.error.message}`)
-              setProposalId(null)
             } else { 
-              setProposalId(data.proposal.id)
+              const proposalId = data.proposal.id
+              const askPrice = data.proposal.ask_price
               addLog(`✅ Entry point confirmed. Executing trade...`)
               setTimeout(() => {
                 websocket.send(JSON.stringify({ 
-                  buy: data.proposal.id, 
-                  price: data.proposal.ask_price,
+                  buy: proposalId, 
+                  price: askPrice,
                   req_id: Date.now() 
                 }))
               }, 200)
@@ -140,11 +139,9 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
             if (data.error) { 
               addLog(`❌ Trade execution failed: ${data.error.message}`)
               setCurrentContract(null)
-              setProposalId(null)
             } else { 
               setCurrentContract({ id: data.buy.contract_id })
               addLog(`✅ Contract purchased successfully! ID: ${data.buy.contract_id}`)
-              setProposalId(null)
             }
           }
           if (data.msg_type === 'proposal_open_contract') {
@@ -194,7 +191,8 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
     const contractType = getContractType()
     addLog(`🚀 Executing trade: ${contractType}, ${durationValue} ${timeframeUnit}, Stake: $${currentStake.toFixed(2)}`)
     
-    ws.send(JSON.stringify({
+    // Build proposal request
+    const proposalRequest = {
       proposal: 1,
       amount: currentStake,
       basis: 'stake',
@@ -204,7 +202,15 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
       duration_unit: timeframeUnit === 'Minutes' ? 'm' : 't',
       underlying_symbol: symbol,
       req_id: Date.now()
-    }))
+    }
+    
+    // FIXED: Add barrier parameter for Digits Over/Under contracts
+    if (tradeType === 'Digits' && subTradeType === 'Over/Under' && predictedDigit) {
+      proposalRequest.barrier = predictedDigit
+      addLog(` Predicted digit: ${predictedDigit}`)
+    }
+    
+    ws.send(JSON.stringify(proposalRequest))
   }
 
   const getContractType = () => {
@@ -271,8 +277,8 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
     setLogs([])
 
     addLog(`🚀 Starting Denny Bot for ${selectedMarket}...`)
-    addLog(`🛡️ Zero Consecutive Loss Protection: ACTIVE (Martingale: ${martingaleFactor}x)`)
-    addLog(`🎯 Target: $${targetProfit} | Stop Loss: $${stopLoss}`)
+    addLog(`️ Zero Consecutive Loss Protection: ACTIVE (Martingale: ${martingaleFactor}x)`)
+    addLog(` Target: $${targetProfit} | Stop Loss: $${stopLoss}`)
     
     const symbol = SYMBOL_MAP[selectedMarket]
     ws.send(JSON.stringify({ ticks: symbol, subscribe: 1, req_id: Date.now() }))
@@ -299,7 +305,6 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
     setCurrentStake(parseFloat(stake))
     setTickHistory([])
     setValidationError('')
-    setProposalId(null)
   }
 
   const rules = TIMEFRAME_RULES[tradeType]
@@ -461,7 +466,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
               log.includes('✅') || log.includes('WON') || log.includes('Profit') || log.includes('Target') ? 'text-mwathe-green' :
               log.includes('❌') || log.includes('LOST') || log.includes('Stop') || log.includes('failed') ? 'text-red-500' :
               log.includes('🛡️') || log.includes('Martingale') ? 'text-mwathe-orange' :
-              log.includes('🚀') || log.includes('🎯') || log.includes('⚡') || log.includes('🧠') || log.includes('📊') ? 'text-mwathe-skyblue' :
+              log.includes('') || log.includes('🎯') || log.includes('⚡') || log.includes('') || log.includes('📊') ? 'text-mwathe-skyblue' :
               'text-mwathe-gray'
             }>
               {log}
