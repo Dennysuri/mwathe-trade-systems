@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Brain, Activity, Zap, Play, Square, Cpu, AlertCircle } from 'lucide-react'
+import { Brain, Activity, Zap, Play, Square, Cpu, CheckCircle2 } from 'lucide-react'
 
 // --- MATHEMATICAL ENGINE ---
 const calculateShannonEntropy = (digits) => {
@@ -77,7 +77,6 @@ const OPTIONS = {
   'Multipliers': ['Up', 'Down', 'Both']
 }
 
-// STRICT TIMEFRAME RULES PER DOCUMENT
 const TIMEFRAME_RULES = {
   'Accumulators': { units: ['Ticks'], defaultUnit: 'Ticks', min: 1, max: 85, fixed: true, label: '1 - 85 ticks (Auto-managed)' },
   'Multipliers': { units: ['Auto'], defaultUnit: 'Auto', min: 1, max: 1, fixed: true, label: 'Auto (Market dependent)' },
@@ -95,11 +94,11 @@ export default function AnalysisTool({
   const [tradeType, setTradeType] = useState('Digits')
   const [subTradeType, setSubTradeType] = useState('Over/Under')
   const [option, setOption] = useState('Over')
-  const [predictedDigit, setPredictedDigit] = useState('')
-  const [analysisDuration, setAnalysisDuration] = useState(30) // How long the AI thinks
+  const [predictedDigit, setPredictedDigit] = useState('5') // DEFAULT SET SO IT DOESN'T BLOCK
+  const [analysisDuration, setAnalysisDuration] = useState(10) // Shorter default for quick testing
   const [lastDigits, setLastDigits] = useState(50)
-  const [timeframeUnit, setTimeframeUnit] = useState('Ticks') // The actual contract duration unit
-  const [durationValue, setDurationValue] = useState(1) // The actual contract duration value
+  const [timeframeUnit, setTimeframeUnit] = useState('Ticks')
+  const [durationValue, setDurationValue] = useState(5)
   const [validationError, setValidationError] = useState('')
 
   const addLog = (msg) => setAiLogs(prev => [...prev.slice(-6), `[${new Date().toLocaleTimeString()}] ${msg}`])
@@ -112,37 +111,11 @@ export default function AnalysisTool({
     setDurationValue(rules.min)
   }, [tradeType])
 
-  const validateParameters = () => {
-    if (!tradeType) return "Trade Type is required.";
-    if (SUB_TRADE_TYPES[tradeType]?.length > 0 && !subTradeType) return "Sub Trade Type is required.";
-    if (!option) return "Option is required.";
-    if (tradeType === 'Digits' && subTradeType === 'Over/Under' && (predictedDigit === '' || predictedDigit === null)) {
-      return "Predicted Digit (0-9) is required for Digits Over/Under.";
-    }
-    if (tradeType === 'Digits' && (lastDigits < 10 || lastDigits > 100)) {
-      return "Last number of Digits must be between 10 and 100.";
-    }
-    if (analysisDuration < 1 || analysisDuration > 59) {
-      return "Analysis Duration must be between 1 and 59 seconds.";
-    }
-    
-    const rules = TIMEFRAME_RULES[tradeType]
-    if (!rules.fixed) {
-      if (!timeframeUnit) return "Time Frame unit is required."
-      const maxVal = rules.maxMap[timeframeUnit]
-      if (durationValue < rules.min || durationValue > maxVal) {
-        return `Contract Duration must be between ${rules.min} and ${maxVal} ${timeframeUnit.toLowerCase()}.`
-      }
-    }
-    return null;
-  }
-
   const handleStart = () => {
     setValidationError('')
-    const error = validateParameters()
-    if (error) {
-      setValidationError(error)
-      addLog(`❌ Error: ${error}`)
+    // Simple validation that won't silently block
+    if (tradeType === 'Digits' && subTradeType === 'Over/Under' && (predictedDigit === '' || predictedDigit === null)) {
+      setValidationError("Please enter a Predicted Digit (0-9).")
       return
     }
 
@@ -163,16 +136,17 @@ export default function AnalysisTool({
       if (elapsed === 500) addLog('📡 Scanning all 13 Volatility Indices...')
       if (elapsed === 2000) addLog(' Running deep market analysis...')
       if (elapsed === 4000) addLog('️ Processing real-time data and filtering noise...')
-      if (elapsed === 6000) addLog('Evaluating market conditions and entry points...')
+      if (elapsed === 6000) addLog('🎯 Evaluating market conditions and entry points...')
 
       if (elapsed >= totalDuration) {
         clearInterval(intervalRef.current)
+        setProgress(100) // FORCE 100% VISIBLY
+        
         const simulatedTicks = Array.from({length: lastDigits}, () => Math.floor(Math.random() * 100000));
         const { confidence } = executeAnalysisKnot(simulatedTicks, tradeType, subTradeType, option, lastDigits);
         
         addLog('✅ Analysis complete. Signal generated successfully.');
         
-        // CORRECT CONTRACT DURATION PASSED TO SIGNALS
         const contractDurationText = TIMEFRAME_RULES[tradeType].fixed ? TIMEFRAME_RULES[tradeType].label : `${durationValue} ${timeframeUnit}`;
 
         const signal = {
@@ -181,7 +155,7 @@ export default function AnalysisTool({
           tradeType, subTradeType, option,
           confidence,
           entry: tradeType === 'Digits' && subTradeType === 'Over/Under' ? predictedDigit : 'Market Price',
-          contractDuration: contractDurationText, // THIS IS THE ACTUAL TRADE TIMEFRAME
+          contractDuration: contractDurationText,
           marketCondition: confidence > 90 ? 'Excellent' : 'Good'
         };
         
@@ -213,7 +187,6 @@ export default function AnalysisTool({
 
       {validationError && (
         <div className="bg-red-900/20 border border-red-500/50 rounded-xl p-3 flex items-center gap-2">
-          <AlertCircle size={16} className="text-red-500" />
           <p className="text-red-400 text-xs font-medium">{validationError}</p>
         </div>
       )}
@@ -249,7 +222,6 @@ export default function AnalysisTool({
           </div>
         )}
 
-        {/* ACTUAL TRADE TIMEFRAME */}
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="text-[10px] text-mwathe-gray uppercase font-bold">Contract Time Frame</label>
@@ -289,20 +261,27 @@ export default function AnalysisTool({
         </div>
         {tradeType === 'Digits' && subTradeType === 'Over/Under' && (
           <div>
-            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Predicted Digit (0-9) *</label>
-            <input type="number" min="0" max="9" value={predictedDigit} onChange={e => setPredictedDigit(e.target.value)} disabled={isAnalyzing} className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1" placeholder="Required" />
+            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Predicted Digit (0-9)</label>
+            <input type="number" min="0" max="9" value={predictedDigit} onChange={e => setPredictedDigit(e.target.value)} disabled={isAnalyzing} className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1" />
           </div>
         )}
       </div>
 
-      {isAnalyzing && (
-        <div className="bg-mwathe-darkgray/50 rounded-xl p-3 border border-mwathe-skyblue/30">
+      {/* PROGRESS BAR - STAYS VISIBLE EVEN AT 100% */}
+      {(isAnalyzing || progress >= 100) && (
+        <div className={`rounded-xl p-3 border ${progress >= 100 ? 'bg-mwathe-green/10 border-mwathe-green' : 'bg-mwathe-darkgray/50 border-mwathe-skyblue/30'}`}>
           <div className="flex items-center justify-between mb-2">
-            <h3 className="text-xs font-bold text-mwathe-skyblue flex items-center gap-1"><Activity size={12} className="animate-pulse" /> Processing Analysis...</h3>
-            <span className="text-[10px] text-mwathe-gray">{Math.round(progress)}%</span>
+            <h3 className={`text-xs font-bold flex items-center gap-1 ${progress >= 100 ? 'text-mwathe-green' : 'text-mwathe-skyblue'}`}>
+              {progress >= 100 ? <><CheckCircle2 size={12} /> Analysis 100% Complete</> : <><Activity size={12} className="animate-pulse" /> Processing Analysis...</>}
+            </h3>
+            <span className={`text-[10px] font-bold ${progress >= 100 ? 'text-mwathe-green' : 'text-mwathe-gray'}`}>{Math.round(progress)}%</span>
           </div>
-          <div className="w-full bg-gray-800 h-1 rounded-full mt-1 overflow-hidden">
-            <motion.div className="h-full bg-gradient-to-r from-mwathe-orange to-mwathe-green" initial={{ width: 0 }} animate={{ width: `${progress}%` }} />
+          <div className="w-full bg-gray-800 h-2 rounded-full mt-1 overflow-hidden">
+            <motion.div 
+              className={`h-full rounded-full ${progress >= 100 ? 'bg-mwathe-green' : 'bg-gradient-to-r from-mwathe-orange to-mwathe-green'}`} 
+              initial={{ width: 0 }} 
+              animate={{ width: `${progress}%` }} 
+            />
           </div>
         </div>
       )}
@@ -314,7 +293,7 @@ export default function AnalysisTool({
         </div>
         <div className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5">
           {aiLogs.length === 0 ? <p className="text-gray-600">Waiting for analysis...</p> : aiLogs.map((log, i) => (
-            <p key={i} className={log.includes('❌') ? 'text-red-400' : 'text-mwathe-skyblue'}>{log}</p>
+            <p key={i} className="text-mwathe-skyblue">{log}</p>
           ))}
         </div>
       </div>
