@@ -71,8 +71,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
   const [isTradeInProgress, setIsTradeInProgress] = useState(false)
 
   const logRef = useRef(null)
-  const executionTimers = useRef([])
-  const nextTradeTimer = useRef(null)
+  const timersRef = useRef([])
 
   const addLog = (msg) => setLogs(prev => [...prev.slice(-20), `[${new Date().toLocaleTimeString()}] ${msg}`])
   
@@ -86,161 +85,122 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
   }, [tradeType])
   useEffect(() => { if (!isRunning) setCurrentStake(parseFloat(stake) || 1.00) }, [stake, isRunning])
 
+  // WebSocket connection
   useEffect(() => {
     if (!token || !accountId) { 
       setValidationError('Not connected to Deriv. Please refresh the page.')
       return 
     }
 
-    addLog('🔌 Connecting to Deriv via secure session...')
-    
-    fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
-    })
-    .then(res => res.json())
-    .then(data => {
-      const wsUrl = data.data?.url
-      if (!wsUrl) throw new Error('No WebSocket URL returned')
-      
-      addLog('✅ Secure connection established. Opening trading session...')
-      const websocket = new WebSocket(wsUrl)
-      
-      websocket.onopen = () => {
-        addLog('✅ WebSocket connected & authorized.')
-        websocket.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: 1 }))
-      }
-      
-      websocket.onmessage = (message) => {
-        try {
-          const data = JSON.parse(message.data)
-          if (data.msg_type === 'balance') {
-            if (onBalanceUpdate) onBalanceUpdate(parseFloat(data.balance.balance))
-            addLog(`💰 Balance updated: ${data.balance.balance} ${data.balance.currency}`)
-          }
-          if (data.msg_type === 'tick') {
-            setTickHistory(prev => { const h = [...prev, data.tick.quote]; if (h.length > 50) h.shift(); return h })
-          }
-          if (data.msg_type === 'proposal') {
-            if (data.error) { 
-              addLog(`❌ Proposal failed: ${data.error.message}`)
-              setIsTradeInProgress(false)
-            } else { 
-              const proposalId = data.proposal.id
-              const askPrice = data.proposal.ask_price
-              addLog(`✅ Entry point confirmed. Executing trade...`)
-              setTimeout(() => {
-                websocket.send(JSON.stringify({ 
-                  buy: proposalId, 
-                  price: askPrice,
-                  req_id: Date.now() 
-                }))
-              }, 200)
+    const connectWS = async () => {
+      try {
+        addLog('🔌 Connecting to Deriv...')
+        const response = await fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
+        })
+        const data = await response.json()
+        const wsUrl = data.data?.url
+        
+        if (!wsUrl) throw new Error('No WebSocket URL')
+        
+        addLog('✅ Secure connection established...')
+        const websocket = new WebSocket(wsUrl)
+        
+        websocket.onopen = () => {
+          addLog('✅ WebSocket connected & authorized.')
+          websocket.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: 1 }))
+        }
+        
+        websocket.onmessage = (message) => {
+          try {
+            const msg = JSON.parse(message.data)
+            if (msg.msg_type === 'balance') {
+              if (onBalanceUpdate) onBalanceUpdate(parseFloat(msg.balance.balance))
             }
-          }
-          if (data.msg_type === 'buy') {
-            if (data.error) { 
-              addLog(`❌ Trade execution failed: ${data.error.message}`)
-              setCurrentContract(null)
-              setIsTradeInProgress(false)
-            } else { 
-              const contractId = data.buy.contract_id
-              setCurrentContract({ id: contractId })
-              addLog(`✅ Contract purchased successfully! ID: ${contractId}`)
-              addLog(`📊 Monitoring contract...`)
-              websocket.send(JSON.stringify({
-                proposal_open_contract: contractId,
-                subscribe: 1,
-                req_id: Date.now()
-              }))
+            if (msg.msg_type === 'tick') {
+              setTickHistory(prev => { 
+                const h = [...prev, msg.tick.quote]
+                if (h.length > 50) h.shift()
+                return h 
+              })
             }
-          }
-          if (data.msg_type === 'proposal_open_contract') {
-            if (!data.error && data.proposal_open_contract) {
-              const contract = data.proposal_open_contract
-              if (contract.is_sold) {
-                const profit = parseFloat(contract.profit)
-                handleContractResult(profit)
-                setCurrentContract(null)
+            if (msg.msg_type === 'proposal') {
+              if (msg.error) { 
+                addLog(`❌ Proposal failed: ${msg.error.message}`)
                 setIsTradeInProgress(false)
-              } else {
-                const currentProfit = parseFloat(contract.profit || 0)
-                setCurrentPL(prev => currentProfit)
+              } else { 
+                addLog(`✅ Entry confirmed. Executing...`)
+                setTimeout(() => {
+                  websocket.send(JSON.stringify({ 
+                    buy: msg.proposal.id, 
+                    price: msg.proposal.ask_price,
+                    req_id: Date.now() 
+                  }))
+                }, 200)
               }
             }
-          }
-        } catch (e) { console.error(e) }
+            if (msg.msg_type === 'buy') {
+              if (msg.error) { 
+                addLog(` Trade failed: ${msg.error.message}`)
+                setCurrentContract(null)
+                setIsTradeInProgress(false)
+              } else { 
+                setCurrentContract({ id: msg.buy.contract_id })
+                addLog(`✅ Contract purchased! ID: ${msg.buy.contract_id}`)
+                addLog(`📊 Monitoring contract...`)
+                websocket.send(JSON.stringify({
+                  proposal_open_contract: msg.buy.contract_id,
+                  subscribe: 1,
+                  req_id: Date.now()
+                }))
+              }
+            }
+            if (msg.msg_type === 'proposal_open_contract') {
+              if (!msg.error && msg.proposal_open_contract) {
+                const contract = msg.proposal_open_contract
+                if (contract.is_sold) {
+                  const profit = parseFloat(contract.profit)
+                  handleContractResult(profit)
+                  setCurrentContract(null)
+                  setIsTradeInProgress(false)
+                } else {
+                  setCurrentPL(parseFloat(contract.profit || 0))
+                }
+              }
+            }
+          } catch (e) { console.error(e) }
+        }
+        websocket.onerror = () => addLog('❌ WebSocket error')
+        websocket.onclose = () => addLog('🔌 Disconnected')
+        setWs(websocket)
+      } catch (err) {
+        addLog(`❌ Connection failed: ${err.message}`)
+        setValidationError('Failed to connect.')
       }
-      websocket.onerror = () => addLog('❌ WebSocket error')
-      websocket.onclose = () => addLog(' WebSocket disconnected')
-      setWs(websocket)
-    })
-    .catch(err => {
-      addLog(`❌ Connection failed: ${err.message}`)
-      setValidationError('Failed to connect to Deriv.')
-    })
-
+    }
+    
+    connectWS()
     return () => { if (ws) ws.close() }
   }, [token, accountId])
 
   const clearAllTimers = () => {
-    executionTimers.current.forEach(timer => clearTimeout(timer))
-    executionTimers.current = []
-    if (nextTradeTimer.current) {
-      clearTimeout(nextTradeTimer.current)
-      nextTradeTimer.current = null
-    }
+    timersRef.current.forEach(timer => clearTimeout(timer))
+    timersRef.current = []
   }
 
-  const startCascadeEngine = (symbol) => {
-    if (!isRunning) {
-      console.log('Bot not running, aborting cascade')
-      return
-    }
-    
-    console.log('Starting cascade engine for', symbol)
-    addLog(`🧠 Analyzing 13 Volatility Indices markets...`)
-    
-    const timer1 = setTimeout(() => {
-      if (!isRunning) return
-      addLog(`⚡ Market analysis in progress. Calculating optimal entry...`)
-    }, 2000)
-
-    const timer2 = setTimeout(() => {
-      if (!isRunning) return
-      addLog(`🎯 Detecting high-probability patterns...`)
-    }, 5000)
-
-    const timer3 = setTimeout(() => {
-      if (!isRunning) {
-        console.log('Bot stopped before trade execution')
-        return
-      }
-      addLog(`🚀 Sniping entry point on ${selectedMarket}...`)
-      executeRealTrade(symbol)
-    }, 8000)
-    
-    executionTimers.current = [timer1, timer2, timer3]
-  }
-
-  const executeRealTrade = (symbol) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) { 
-      addLog('❌ Connection not ready')
+  const executeTrade = (symbol) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN || !isRunning) { 
+      addLog('❌ Not ready')
       setIsTradeInProgress(false)
       return 
     }
     
-    if (!isRunning) {
-      console.log('Bot stopped before execution')
-      setIsTradeInProgress(false)
-      return
-    }
-    
     setIsTradeInProgress(true)
     const contractType = getContractType()
-    addLog(` Executing trade: ${contractType}, ${durationValue} ${timeframeUnit}, Stake: $${currentStake.toFixed(2)}`)
+    addLog(`🚀 Executing: ${contractType}, ${durationValue}${timeframeUnit}, $${currentStake}`)
     
-    const proposalRequest = {
+    const proposal = {
       proposal: 1,
       amount: currentStake,
       basis: 'stake',
@@ -253,11 +213,11 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
     }
     
     if (tradeType === 'Digits' && subTradeType === 'Over/Under' && predictedDigit) {
-      proposalRequest.barrier = predictedDigit
-      addLog(`🎯 Predicted digit: ${predictedDigit}`)
+      proposal.barrier = predictedDigit
+      addLog(` Digit: ${predictedDigit}`)
     }
     
-    ws.send(JSON.stringify(proposalRequest))
+    ws.send(JSON.stringify(proposal))
   }
 
   const getContractType = () => {
@@ -272,69 +232,83 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
 
   const handleContractResult = (profit) => {
     const isWin = profit > 0
-    const newTotalTrades = totalTrades + 1
-    setTotalTrades(newTotalTrades)
+    const newTotal = totalTrades + 1
+    setTotalTrades(newTotal)
     
     if (isWin) {
-      const newWins = wins + 1
-      setWins(newWins)
+      setWins(wins + 1)
       setConsecutiveLosses(0)
       setCurrentStake(parseFloat(stake))
-      addLog(`✅ Contract WON! Profit: +$${profit.toFixed(2)}. Stake reset to base.`)
+      addLog(`✅ WON! +$${profit.toFixed(2)}`)
     } else {
-      const newLosses = losses + 1
-      setLosses(newLosses)
-      const newConsecutiveLosses = consecutiveLosses + 1
-      setConsecutiveLosses(newConsecutiveLosses)
-      
-      const martingale = parseFloat(martingaleFactor) || 1.5
-      const newStake = currentStake * martingale
+      setLosses(losses + 1)
+      setConsecutiveLosses(consecutiveLosses + 1)
+      const newStake = currentStake * (parseFloat(martingaleFactor) || 1.5)
       setCurrentStake(newStake)
-      addLog(`❌ Contract LOST. Loss: $${profit.toFixed(2)}.`)
-      addLog(`️ Applying ${martingale}x Martingale. Next stake: $${newStake.toFixed(2)}`)
+      addLog(`❌ LOST -$${profit.toFixed(2)}. Next: $${newStake.toFixed(2)}`)
     }
     
     const newPL = currentPL + profit
     setCurrentPL(newPL)
     
     if (newPL >= parseFloat(targetProfit)) { 
-      addLog(`🏆 Target profit reached! Total P/L: $${newPL.toFixed(2)}`)
+      addLog(` Target hit! P/L: $${newPL.toFixed(2)}`)
       setIsRunning(false)
       return
     }
-    
     if (newPL <= -parseFloat(stopLoss)) { 
-      addLog(`🛑 Stop loss hit! Total P/L: $${newPL.toFixed(2)}`)
+      addLog(`🛑 Stop loss! P/L: $${newPL.toFixed(2)}`)
       setIsRunning(false)
       return
     }
     
     if (isRunning) {
-      addLog(`📊 Current P/L: $${newPL.toFixed(2)} | Trades: ${newTotalTrades}`)
-      addLog(` Starting next trade in 2 seconds...`)
+      addLog(` P/L: $${newPL.toFixed(2)} | Trades: ${newTotal}`)
+      addLog(`⏳ Next trade in 2s...`)
       
-      nextTradeTimer.current = setTimeout(() => {
-        if (isRunning && ws && ws.readyState === WebSocket.OPEN) {
-          const symbol = SYMBOL_MAP[selectedMarket]
-          startCascadeEngine(symbol)
+      const timer = setTimeout(() => {
+        if (isRunning && ws?.readyState === WebSocket.OPEN) {
+          startTradingCycle(SYMBOL_MAP[selectedMarket])
         }
       }, 2000)
+      timersRef.current.push(timer)
     }
   }
 
+  const startTradingCycle = (symbol) => {
+    if (!isRunning) return
+    
+    addLog(`🧠 Analyzing ${selectedMarket}...`)
+    
+    const t1 = setTimeout(() => {
+      if (!isRunning) return
+      addLog(` Analysis in progress...`)
+    }, 2000)
+
+    const t2 = setTimeout(() => {
+      if (!isRunning) return
+      addLog(`🎯 Detecting patterns...`)
+    }, 5000)
+
+    const t3 = setTimeout(() => {
+      if (!isRunning) return
+      addLog(` Sniping entry on ${selectedMarket}...`)
+      executeTrade(symbol)
+    }, 8000)
+    
+    timersRef.current = [t1, t2, t3]
+  }
+
   const startBot = () => {
-    console.log('Starting bot...')
+    console.log('=== STARTING BOT ===')
     setValidationError('')
     if (!ws || ws.readyState !== WebSocket.OPEN) { 
-      console.log('WebSocket not ready')
-      setValidationError('Not connected to Deriv.')
-      return 
-    }
-    if (parseFloat(martingaleFactor) <= 0) { 
-      setValidationError('Martingale factor must be > 0.')
+      console.log('WS not ready')
+      setValidationError('Not connected.')
       return 
     }
 
+    clearAllTimers()
     setIsRunning(true)
     setCurrentPL(0)
     setTotalTrades(0)
@@ -344,31 +318,35 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
     setConsecutiveLosses(0)
     setTickHistory([])
     setLogs([])
-    clearAllTimers()
 
-    addLog(`🚀 Starting Denny Bot for ${selectedMarket}...`)
-    addLog(`️ Zero Consecutive Loss Protection: ACTIVE (Martingale: ${martingaleFactor}x)`)
-    addLog(`🎯 Target: $${targetProfit} | Stop Loss: $${stopLoss}`)
+    addLog(`🚀 Starting Denny Bot: ${selectedMarket}`)
+    addLog(`🛡️ Protection: ACTIVE (${martingaleFactor}x)`)
+    addLog(`🎯 Target: $${targetProfit} | Stop: $${stopLoss}`)
     
     const symbol = SYMBOL_MAP[selectedMarket]
     ws.send(JSON.stringify({ ticks: symbol, subscribe: 1, req_id: Date.now() }))
     ws.send(JSON.stringify({ ticks_history: symbol, count: 50, end: 'latest', style: 'ticks', req_id: Date.now() + 1 }))
     
-    startCascadeEngine(symbol)
+    // Start the trading cycle
+    setTimeout(() => {
+      if (isRunning) {
+        startTradingCycle(symbol)
+      }
+    }, 1000)
   }
 
   const stopBot = () => {
-    console.log('Stopping bot...')
+    console.log('=== STOPPING BOT ===')
     setIsRunning(false)
     clearAllTimers()
     if (ws) ws.send(JSON.stringify({ forget: 'all', req_id: Date.now() }))
-    addLog(`🛑 Bot stopped gracefully.`)
+    addLog(` Stopped.`)
   }
 
   const resetBot = () => {
-    console.log('Resetting bot...')
+    console.log('=== RESETTING BOT ===')
     stopBot()
-    setLogs(['System reset. Ready for new session.'])
+    setLogs(['System reset. Ready.'])
     setCurrentPL(0)
     setTotalTrades(0)
     setWins(0)
@@ -513,7 +491,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
         </div>
         <div className="mt-1 flex items-center justify-center gap-1 bg-mwathe-black/50 rounded p-1">
           <ShieldCheck size={10} className={consecutiveLosses === 0 ? "text-mwathe-green" : "text-mwathe-orange"} />
-          <p className="text-[9px] text-mwathe-gray">Zero Consecutive Losses: <span className="font-bold text-mwathe-white">{consecutiveLosses === 0 ? 'SECURE' : `${consecutiveLosses} Loss (${martingaleFactor}x Martingale Active)`}</span></p>
+          <p className="text-[9px] text-mwathe-gray">Zero Consecutive Losses: <span className="font-bold text-mwathe-white">{consecutiveLosses === 0 ? 'SECURE' : `${consecutiveLosses} Loss (${martingaleFactor}x Active)`}</span></p>
         </div>
       </div>
 
@@ -537,9 +515,9 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
         <div ref={logRef} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5">
           {logs.map((log, i) => (
             <p key={i} className={
-              log.includes('✅') || log.includes('WON') || log.includes('Profit') || log.includes('Target') ? 'text-mwathe-green' :
-              log.includes('❌') || log.includes('LOST') || log.includes('Stop') || log.includes('failed') ? 'text-red-500' :
-              log.includes('🛡️') || log.includes('Martingale') ? 'text-mwathe-orange' :
+              log.includes('✅') || log.includes('WON') ? 'text-mwathe-green' :
+              log.includes('❌') || log.includes('LOST') ? 'text-red-500' :
+              log.includes('️') || log.includes('Martingale') ? 'text-mwathe-orange' :
               log.includes('🚀') || log.includes('🎯') || log.includes('⚡') || log.includes('🧠') || log.includes('📊') ? 'text-mwathe-skyblue' :
               'text-mwathe-gray'
             }>
