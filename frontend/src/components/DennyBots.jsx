@@ -71,7 +71,8 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
   const [isTradeInProgress, setIsTradeInProgress] = useState(false)
 
   const logRef = useRef(null)
-  const executionTimer = useRef(null)
+  const executionTimers = useRef([])
+  const nextTradeTimer = useRef(null)
 
   const addLog = (msg) => setLogs(prev => [...prev.slice(-20), `[${new Date().toLocaleTimeString()}] ${msg}`])
   
@@ -91,7 +92,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
       return 
     }
 
-    addLog(' Connecting to Deriv via secure session...')
+    addLog('🔌 Connecting to Deriv via secure session...')
     
     fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`, {
       method: 'POST',
@@ -171,7 +172,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
         } catch (e) { console.error(e) }
       }
       websocket.onerror = () => addLog('❌ WebSocket error')
-      websocket.onclose = () => addLog('🔌 WebSocket disconnected')
+      websocket.onclose = () => addLog(' WebSocket disconnected')
       setWs(websocket)
     })
     .catch(err => {
@@ -182,38 +183,62 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
     return () => { if (ws) ws.close() }
   }, [token, accountId])
 
+  const clearAllTimers = () => {
+    executionTimers.current.forEach(timer => clearTimeout(timer))
+    executionTimers.current = []
+    if (nextTradeTimer.current) {
+      clearTimeout(nextTradeTimer.current)
+      nextTradeTimer.current = null
+    }
+  }
+
   const startCascadeEngine = (symbol) => {
-    if (!isRunning) return
+    if (!isRunning) {
+      console.log('Bot not running, aborting cascade')
+      return
+    }
     
+    console.log('Starting cascade engine for', symbol)
     addLog(`🧠 Analyzing 13 Volatility Indices markets...`)
     
-    executionTimer.current = setTimeout(() => {
+    const timer1 = setTimeout(() => {
       if (!isRunning) return
       addLog(`⚡ Market analysis in progress. Calculating optimal entry...`)
     }, 2000)
 
-    executionTimer.current = setTimeout(() => {
+    const timer2 = setTimeout(() => {
       if (!isRunning) return
       addLog(`🎯 Detecting high-probability patterns...`)
     }, 5000)
 
-    executionTimer.current = setTimeout(() => {
-      if (!isRunning) return
+    const timer3 = setTimeout(() => {
+      if (!isRunning) {
+        console.log('Bot stopped before trade execution')
+        return
+      }
       addLog(`🚀 Sniping entry point on ${selectedMarket}...`)
       executeRealTrade(symbol)
     }, 8000)
+    
+    executionTimers.current = [timer1, timer2, timer3]
   }
 
   const executeRealTrade = (symbol) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN || !isRunning) { 
-      addLog('❌ Connection not ready or bot stopped')
+    if (!ws || ws.readyState !== WebSocket.OPEN) { 
+      addLog('❌ Connection not ready')
       setIsTradeInProgress(false)
       return 
     }
     
+    if (!isRunning) {
+      console.log('Bot stopped before execution')
+      setIsTradeInProgress(false)
+      return
+    }
+    
     setIsTradeInProgress(true)
     const contractType = getContractType()
-    addLog(`🚀 Executing trade: ${contractType}, ${durationValue} ${timeframeUnit}, Stake: $${currentStake.toFixed(2)}`)
+    addLog(` Executing trade: ${contractType}, ${durationValue} ${timeframeUnit}, Stake: $${currentStake.toFixed(2)}`)
     
     const proposalRequest = {
       proposal: 1,
@@ -285,10 +310,10 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
     }
     
     if (isRunning) {
-      addLog(` Current P/L: $${newPL.toFixed(2)} | Trades: ${newTotalTrades}`)
-      addLog(`⏳ Starting next trade in 2 seconds...`)
+      addLog(`📊 Current P/L: $${newPL.toFixed(2)} | Trades: ${newTotalTrades}`)
+      addLog(` Starting next trade in 2 seconds...`)
       
-      setTimeout(() => {
+      nextTradeTimer.current = setTimeout(() => {
         if (isRunning && ws && ws.readyState === WebSocket.OPEN) {
           const symbol = SYMBOL_MAP[selectedMarket]
           startCascadeEngine(symbol)
@@ -298,8 +323,10 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
   }
 
   const startBot = () => {
+    console.log('Starting bot...')
     setValidationError('')
     if (!ws || ws.readyState !== WebSocket.OPEN) { 
+      console.log('WebSocket not ready')
       setValidationError('Not connected to Deriv.')
       return 
     }
@@ -317,9 +344,10 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
     setConsecutiveLosses(0)
     setTickHistory([])
     setLogs([])
+    clearAllTimers()
 
     addLog(`🚀 Starting Denny Bot for ${selectedMarket}...`)
-    addLog(`🛡️ Zero Consecutive Loss Protection: ACTIVE (Martingale: ${martingaleFactor}x)`)
+    addLog(`️ Zero Consecutive Loss Protection: ACTIVE (Martingale: ${martingaleFactor}x)`)
     addLog(`🎯 Target: $${targetProfit} | Stop Loss: $${stopLoss}`)
     
     const symbol = SYMBOL_MAP[selectedMarket]
@@ -330,13 +358,15 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
   }
 
   const stopBot = () => {
+    console.log('Stopping bot...')
     setIsRunning(false)
-    if (executionTimer.current) clearTimeout(executionTimer.current)
+    clearAllTimers()
     if (ws) ws.send(JSON.stringify({ forget: 'all', req_id: Date.now() }))
-    addLog(` Bot stopped gracefully.`)
+    addLog(`🛑 Bot stopped gracefully.`)
   }
 
   const resetBot = () => {
+    console.log('Resetting bot...')
     stopBot()
     setLogs(['System reset. Ready for new session.'])
     setCurrentPL(0)
@@ -510,7 +540,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
               log.includes('✅') || log.includes('WON') || log.includes('Profit') || log.includes('Target') ? 'text-mwathe-green' :
               log.includes('❌') || log.includes('LOST') || log.includes('Stop') || log.includes('failed') ? 'text-red-500' :
               log.includes('🛡️') || log.includes('Martingale') ? 'text-mwathe-orange' :
-              log.includes('🚀') || log.includes('🎯') || log.includes('') || log.includes('🧠') || log.includes('📊') ? 'text-mwathe-skyblue' :
+              log.includes('🚀') || log.includes('🎯') || log.includes('⚡') || log.includes('🧠') || log.includes('📊') ? 'text-mwathe-skyblue' :
               'text-mwathe-gray'
             }>
               {log}
