@@ -68,6 +68,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
   const [ws, setWs] = useState(null)
   const [tickHistory, setTickHistory] = useState([])
   const [currentContract, setCurrentContract] = useState(null)
+  const [isTradeInProgress, setIsTradeInProgress] = useState(false)
 
   const logRef = useRef(null)
   const executionTimer = useRef(null)
@@ -90,7 +91,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
       return 
     }
 
-    addLog('🔌 Connecting to Deriv via secure session...')
+    addLog(' Connecting to Deriv via secure session...')
     
     fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`, {
       method: 'POST',
@@ -122,6 +123,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
           if (data.msg_type === 'proposal') {
             if (data.error) { 
               addLog(`❌ Proposal failed: ${data.error.message}`)
+              setIsTradeInProgress(false)
             } else { 
               const proposalId = data.proposal.id
               const askPrice = data.proposal.ask_price
@@ -139,16 +141,31 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
             if (data.error) { 
               addLog(`❌ Trade execution failed: ${data.error.message}`)
               setCurrentContract(null)
+              setIsTradeInProgress(false)
             } else { 
-              setCurrentContract({ id: data.buy.contract_id })
-              addLog(`✅ Contract purchased successfully! ID: ${data.buy.contract_id}`)
+              const contractId = data.buy.contract_id
+              setCurrentContract({ id: contractId })
+              addLog(`✅ Contract purchased successfully! ID: ${contractId}`)
+              addLog(`📊 Monitoring contract...`)
+              websocket.send(JSON.stringify({
+                proposal_open_contract: contractId,
+                subscribe: 1,
+                req_id: Date.now()
+              }))
             }
           }
           if (data.msg_type === 'proposal_open_contract') {
-            if (!data.error && data.proposal_open_contract.is_sold) {
-              const profit = parseFloat(data.proposal_open_contract.profit)
-              handleContractResult(profit)
-              setCurrentContract(null)
+            if (!data.error && data.proposal_open_contract) {
+              const contract = data.proposal_open_contract
+              if (contract.is_sold) {
+                const profit = parseFloat(contract.profit)
+                handleContractResult(profit)
+                setCurrentContract(null)
+                setIsTradeInProgress(false)
+              } else {
+                const currentProfit = parseFloat(contract.profit || 0)
+                setCurrentPL(prev => currentProfit)
+              }
             }
           }
         } catch (e) { console.error(e) }
@@ -166,32 +183,38 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
   }, [token, accountId])
 
   const startCascadeEngine = (symbol) => {
+    if (!isRunning) return
+    
     addLog(`🧠 Analyzing 13 Volatility Indices markets...`)
     
     executionTimer.current = setTimeout(() => {
+      if (!isRunning) return
       addLog(`⚡ Market analysis in progress. Calculating optimal entry...`)
     }, 2000)
 
     executionTimer.current = setTimeout(() => {
+      if (!isRunning) return
       addLog(`🎯 Detecting high-probability patterns...`)
     }, 5000)
 
     executionTimer.current = setTimeout(() => {
+      if (!isRunning) return
       addLog(`🚀 Sniping entry point on ${selectedMarket}...`)
       executeRealTrade(symbol)
     }, 8000)
   }
 
   const executeRealTrade = (symbol) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) { 
-      addLog('❌ Connection not ready')
+    if (!ws || ws.readyState !== WebSocket.OPEN || !isRunning) { 
+      addLog('❌ Connection not ready or bot stopped')
+      setIsTradeInProgress(false)
       return 
     }
     
+    setIsTradeInProgress(true)
     const contractType = getContractType()
     addLog(`🚀 Executing trade: ${contractType}, ${durationValue} ${timeframeUnit}, Stake: $${currentStake.toFixed(2)}`)
     
-    // Build proposal request
     const proposalRequest = {
       proposal: 1,
       amount: currentStake,
@@ -204,10 +227,9 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
       req_id: Date.now()
     }
     
-    // FIXED: Add barrier parameter for Digits Over/Under contracts
     if (tradeType === 'Digits' && subTradeType === 'Over/Under' && predictedDigit) {
       proposalRequest.barrier = predictedDigit
-      addLog(` Predicted digit: ${predictedDigit}`)
+      addLog(`🎯 Predicted digit: ${predictedDigit}`)
     }
     
     ws.send(JSON.stringify(proposalRequest))
@@ -225,33 +247,53 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
 
   const handleContractResult = (profit) => {
     const isWin = profit > 0
+    const newTotalTrades = totalTrades + 1
+    setTotalTrades(newTotalTrades)
+    
     if (isWin) {
-      setCurrentPL(prev => prev + profit)
-      setWins(prev => prev + 1)
-      setTotalTrades(prev => prev + 1)
+      const newWins = wins + 1
+      setWins(newWins)
       setConsecutiveLosses(0)
       setCurrentStake(parseFloat(stake))
       addLog(`✅ Contract WON! Profit: +$${profit.toFixed(2)}. Stake reset to base.`)
-      if (currentPL >= parseFloat(targetProfit)) { 
-        addLog(`🏆 Target profit reached!`)
-        setIsRunning(false) 
-      }
     } else {
-      setCurrentPL(prev => prev + profit)
-      setLosses(prev => prev + 1)
-      setTotalTrades(prev => prev + 1)
-      setConsecutiveLosses(prev => prev + 1)
+      const newLosses = losses + 1
+      setLosses(newLosses)
+      const newConsecutiveLosses = consecutiveLosses + 1
+      setConsecutiveLosses(newConsecutiveLosses)
       
       const martingale = parseFloat(martingaleFactor) || 1.5
       const newStake = currentStake * martingale
       setCurrentStake(newStake)
       addLog(`❌ Contract LOST. Loss: $${profit.toFixed(2)}.`)
-      addLog(`🛡️ Applying ${martingale}x Martingale. Next stake: $${newStake.toFixed(2)}`)
+      addLog(`️ Applying ${martingale}x Martingale. Next stake: $${newStake.toFixed(2)}`)
+    }
+    
+    const newPL = currentPL + profit
+    setCurrentPL(newPL)
+    
+    if (newPL >= parseFloat(targetProfit)) { 
+      addLog(`🏆 Target profit reached! Total P/L: $${newPL.toFixed(2)}`)
+      setIsRunning(false)
+      return
+    }
+    
+    if (newPL <= -parseFloat(stopLoss)) { 
+      addLog(`🛑 Stop loss hit! Total P/L: $${newPL.toFixed(2)}`)
+      setIsRunning(false)
+      return
+    }
+    
+    if (isRunning) {
+      addLog(` Current P/L: $${newPL.toFixed(2)} | Trades: ${newTotalTrades}`)
+      addLog(`⏳ Starting next trade in 2 seconds...`)
       
-      if (currentPL <= -parseFloat(stopLoss)) { 
-        addLog(`🛑 Stop loss hit!`)
-        setIsRunning(false) 
-      }
+      setTimeout(() => {
+        if (isRunning && ws && ws.readyState === WebSocket.OPEN) {
+          const symbol = SYMBOL_MAP[selectedMarket]
+          startCascadeEngine(symbol)
+        }
+      }, 2000)
     }
   }
 
@@ -277,8 +319,8 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
     setLogs([])
 
     addLog(`🚀 Starting Denny Bot for ${selectedMarket}...`)
-    addLog(`️ Zero Consecutive Loss Protection: ACTIVE (Martingale: ${martingaleFactor}x)`)
-    addLog(` Target: $${targetProfit} | Stop Loss: $${stopLoss}`)
+    addLog(`🛡️ Zero Consecutive Loss Protection: ACTIVE (Martingale: ${martingaleFactor}x)`)
+    addLog(`🎯 Target: $${targetProfit} | Stop Loss: $${stopLoss}`)
     
     const symbol = SYMBOL_MAP[selectedMarket]
     ws.send(JSON.stringify({ ticks: symbol, subscribe: 1, req_id: Date.now() }))
@@ -291,7 +333,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
     setIsRunning(false)
     if (executionTimer.current) clearTimeout(executionTimer.current)
     if (ws) ws.send(JSON.stringify({ forget: 'all', req_id: Date.now() }))
-    addLog(`🛑 Bot stopped gracefully.`)
+    addLog(` Bot stopped gracefully.`)
   }
 
   const resetBot = () => {
@@ -305,6 +347,8 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
     setCurrentStake(parseFloat(stake))
     setTickHistory([])
     setValidationError('')
+    setCurrentContract(null)
+    setIsTradeInProgress(false)
   }
 
   const rules = TIMEFRAME_RULES[tradeType]
@@ -444,7 +488,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
       </div>
 
       <div className="grid grid-cols-3 gap-2 flex-shrink-0 mb-2">
-        <button onClick={startBot} disabled={isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${isRunning ? 'bg-gray-800 text-gray-500' : 'bg-mwathe-green text-black'}`}>
+        <button onClick={startBot} disabled={isRunning || isTradeInProgress} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${isRunning || isTradeInProgress ? 'bg-gray-800 text-gray-500' : 'bg-mwathe-green text-black'}`}>
           <Zap size={14} /> Run
         </button>
         <button onClick={stopBot} disabled={!isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${!isRunning ? 'bg-gray-800 text-gray-500' : 'bg-red-500 text-white'}`}>
@@ -466,7 +510,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
               log.includes('✅') || log.includes('WON') || log.includes('Profit') || log.includes('Target') ? 'text-mwathe-green' :
               log.includes('❌') || log.includes('LOST') || log.includes('Stop') || log.includes('failed') ? 'text-red-500' :
               log.includes('🛡️') || log.includes('Martingale') ? 'text-mwathe-orange' :
-              log.includes('') || log.includes('🎯') || log.includes('⚡') || log.includes('') || log.includes('📊') ? 'text-mwathe-skyblue' :
+              log.includes('🚀') || log.includes('🎯') || log.includes('') || log.includes('🧠') || log.includes('📊') ? 'text-mwathe-skyblue' :
               'text-mwathe-gray'
             }>
               {log}
