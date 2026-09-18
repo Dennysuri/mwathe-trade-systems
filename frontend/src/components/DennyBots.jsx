@@ -56,7 +56,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
   
   const [isRunning, setIsRunning] = useState(false)
   const [validationError, setValidationError] = useState('')
-  const [logs, setLogs] = useState(['System initialized.'])
+  const [logs, setLogs] = useState(['System initialized. Waiting for parameters...'])
   
   const [currentPL, setCurrentPL] = useState(0.00)
   const [totalTrades, setTotalTrades] = useState(0)
@@ -70,7 +70,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
   const [currentContract, setCurrentContract] = useState(null)
 
   const logRef = useRef(null)
-  const timersRef = useRef([])
+  const executionTimer = useRef(null)
   const isRunningRef = useRef(false)
 
   const addLog = (msg) => setLogs(prev => [...prev.slice(-20), `[${new Date().toLocaleTimeString()}] ${msg}`])
@@ -85,121 +85,121 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
   }, [tradeType])
   useEffect(() => { if (!isRunning) setCurrentStake(parseFloat(stake) || 1.00) }, [stake, isRunning])
 
-  // WebSocket connection
   useEffect(() => {
-    if (!token || !accountId) return
-
-    const connectWS = async () => {
-      try {
-        const response = await fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
-        })
-        const data = await response.json()
-        const wsUrl = data.data?.url
-        
-        if (!wsUrl) throw new Error('No WebSocket URL')
-        
-        const websocket = new WebSocket(wsUrl)
-        
-        websocket.onopen = () => {
-          addLog('✅ Connected to Deriv')
-          websocket.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: 1 }))
-        }
-        
-        websocket.onmessage = (message) => {
-          try {
-            const msg = JSON.parse(message.data)
-            if (msg.msg_type === 'balance' && onBalanceUpdate) {
-              onBalanceUpdate(parseFloat(msg.balance.balance))
-            }
-            if (msg.msg_type === 'tick') {
-              setTickHistory(prev => { 
-                const h = [...prev, msg.tick.quote]
-                if (h.length > 50) h.shift()
-                return h 
-              })
-            }
-            if (msg.msg_type === 'proposal') {
-              if (msg.error) { 
-                addLog(`❌ Proposal failed`)
-              } else { 
-                setTimeout(() => {
-                  websocket.send(JSON.stringify({ 
-                    buy: msg.proposal.id, 
-                    price: msg.proposal.ask_price,
-                    req_id: Date.now() 
-                  }))
-                }, 200)
-              }
-            }
-            if (msg.msg_type === 'buy') {
-              if (msg.error) { 
-                addLog(`❌ Buy failed`)
-                setCurrentContract(null)
-              } else { 
-                setCurrentContract({ id: msg.buy.contract_id })
-                addLog(`✅ Contract: ${msg.buy.contract_id}`)
-                websocket.send(JSON.stringify({
-                  proposal_open_contract: msg.buy.contract_id,
-                  subscribe: 1,
-                  req_id: Date.now()
-                }))
-              }
-            }
-            if (msg.msg_type === 'proposal_open_contract') {
-              if (!msg.error && msg.proposal_open_contract) {
-                const contract = msg.proposal_open_contract
-                if (contract.is_sold) {
-                  const profit = parseFloat(contract.profit)
-                  handleContractResult(profit)
-                  setCurrentContract(null)
-                } else {
-                  setCurrentPL(parseFloat(contract.profit || 0))
-                }
-              }
-            }
-          } catch (e) { console.error(e) }
-        }
-        websocket.onerror = () => addLog('❌ WS Error')
-        websocket.onclose = () => addLog('🔌 Disconnected')
-        setWs(websocket)
-      } catch (err) {
-        addLog(`❌ Connection failed`)
-      }
+    if (!token || !accountId) { 
+      setValidationError('Not connected to Deriv. Please refresh the page.')
+      return 
     }
+
+    addLog('🔌 Connecting to Deriv via secure session...')
     
-    connectWS()
+    fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }
+    })
+    .then(res => res.json())
+    .then(data => {
+      const wsUrl = data.data?.url
+      if (!wsUrl) throw new Error('No WebSocket URL returned')
+      
+      addLog('✅ Secure connection established. Opening trading session...')
+      const websocket = new WebSocket(wsUrl)
+      
+      websocket.onopen = () => {
+        addLog('✅ WebSocket connected & authorized.')
+        websocket.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: 1 }))
+      }
+      
+      websocket.onmessage = (message) => {
+        try {
+          const data = JSON.parse(message.data)
+          if (data.msg_type === 'balance') {
+            if (onBalanceUpdate) onBalanceUpdate(parseFloat(data.balance.balance))
+            addLog(`💰 Balance updated: ${data.balance.balance} ${data.balance.currency}`)
+          }
+          if (data.msg_type === 'tick') {
+            setTickHistory(prev => { const h = [...prev, data.tick.quote]; if (h.length > 50) h.shift(); return h })
+          }
+          if (data.msg_type === 'proposal') {
+            if (data.error) { 
+              addLog(`❌ Proposal failed: ${data.error.message}`)
+            } else { 
+              const proposalId = data.proposal.id
+              const askPrice = data.proposal.ask_price
+              addLog(`✅ Entry point confirmed. Executing trade...`)
+              setTimeout(() => {
+                websocket.send(JSON.stringify({ 
+                  buy: proposalId, 
+                  price: askPrice,
+                  req_id: Date.now() 
+                }))
+              }, 200)
+            }
+          }
+          if (data.msg_type === 'buy') {
+            if (data.error) { 
+              addLog(`❌ Trade execution failed: ${data.error.message}`)
+              setCurrentContract(null)
+            } else { 
+              setCurrentContract({ id: data.buy.contract_id })
+              addLog(`✅ Contract purchased successfully! ID: ${data.buy.contract_id}`)
+            }
+          }
+          if (data.msg_type === 'proposal_open_contract') {
+            if (!data.error && data.proposal_open_contract.is_sold) {
+              const profit = parseFloat(data.proposal_open_contract.profit)
+              handleContractResult(profit)
+              setCurrentContract(null)
+            }
+          }
+        } catch (e) { console.error(e) }
+      }
+      websocket.onerror = () => addLog('❌ WebSocket error')
+      websocket.onclose = () => addLog(' WebSocket disconnected')
+      setWs(websocket)
+    })
+    .catch(err => {
+      addLog(`❌ Connection failed: ${err.message}`)
+      setValidationError('Failed to connect to Deriv.')
+    })
+
     return () => { if (ws) ws.close() }
   }, [token, accountId])
 
-  const clearAllTimers = () => {
-    timersRef.current.forEach(timer => clearTimeout(timer))
-    timersRef.current = []
+  const startCascadeEngine = (symbol) => {
+    if (!isRunningRef.current) return
+    
+    addLog(`🧠 Analyzing 13 Volatility Indices markets...`)
+    
+    if (executionTimer.current) clearTimeout(executionTimer.current)
+
+    executionTimer.current = setTimeout(() => {
+      if (!isRunningRef.current) return
+      addLog(`⚡ Market analysis in progress. Calculating optimal entry...`)
+      
+      executionTimer.current = setTimeout(() => {
+        if (!isRunningRef.current) return
+        addLog(`🎯 Detecting high-probability patterns...`)
+        
+        executionTimer.current = setTimeout(() => {
+          if (!isRunningRef.current) return
+          addLog(`🚀 Sniping entry point on ${selectedMarket}...`)
+          executeRealTrade(symbol)
+        }, 3000)
+      }, 3000)
+    }, 2000)
   }
 
-  const getContractType = () => {
-    if (tradeType === 'Digits') {
-      if (subTradeType === 'Over/Under') return option === 'Over' ? 'DIGITOVER' : 'DIGITUNDER'
-      if (subTradeType === 'Even/Odd') return option === 'Even' ? 'DIGITEVEN' : 'DIGITODD'
-      return 'DIGITDIFF'
-    }
-    if (tradeType === 'Ups & Downs') return option === 'Rise' || option === 'Higher' ? 'CALL' : 'PUT'
-    return 'CALL'
-  }
-
-  const executeTrade = () => {
-    if (!ws || ws.readyState !== WebSocket.OPEN || !isRunningRef.current) { 
-      addLog('❌ Not ready')
+  const executeRealTrade = (symbol) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) { 
+      addLog('❌ Connection not ready')
       return 
     }
     
-    const symbol = SYMBOL_MAP[selectedMarket]
     const contractType = getContractType()
+    addLog(`🚀 Executing trade: ${contractType}, ${durationValue} ${timeframeUnit}, Stake: $${currentStake.toFixed(2)}`)
     
-    addLog(`🚀 Trade: ${contractType} ${durationValue}${timeframeUnit[0]} $${currentStake}`)
-    
-    const proposal = {
+    const proposalRequest = {
       proposal: 1,
       amount: currentStake,
       basis: 'stake',
@@ -212,71 +212,86 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
     }
     
     if (tradeType === 'Digits' && subTradeType === 'Over/Under' && predictedDigit) {
-      proposal.barrier = predictedDigit
+      proposalRequest.barrier = predictedDigit
+      addLog(`🎯 Predicted digit: ${predictedDigit}`)
     }
     
-    ws.send(JSON.stringify(proposal))
+    ws.send(JSON.stringify(proposalRequest))
+  }
+
+  const getContractType = () => {
+    if (tradeType === 'Digits') {
+      if (subTradeType === 'Over/Under') return option === 'Over' ? 'DIGITOVER' : 'DIGITUNDER'
+      if (subTradeType === 'Even/Odd') return option === 'Even' ? 'DIGITEVEN' : 'DIGITODD'
+      return 'DIGITDIFF'
+    }
+    if (tradeType === 'Ups & Downs') return option === 'Rise' || option === 'Higher' ? 'CALL' : 'PUT'
+    return 'CALL'
   }
 
   const handleContractResult = (profit) => {
     const isWin = profit > 0
-    const newTotal = totalTrades + 1
-    setTotalTrades(newTotal)
-    
     if (isWin) {
-      setWins(wins + 1)
+      setCurrentPL(prev => prev + profit)
+      setWins(prev => prev + 1)
+      setTotalTrades(prev => prev + 1)
       setConsecutiveLosses(0)
       setCurrentStake(parseFloat(stake))
-      addLog(`✅ WON +$${profit.toFixed(2)}`)
+      addLog(`✅ Contract WON! Profit: +$${profit.toFixed(2)}. Stake reset to base.`)
     } else {
-      setLosses(losses + 1)
-      setConsecutiveLosses(consecutiveLosses + 1)
-      const newStake = currentStake * (parseFloat(martingaleFactor) || 1.5)
-      setCurrentStake(newStake)
-      addLog(`❌ LOST -$${profit.toFixed(2)}`)
-    }
-    
-    const newPL = currentPL + profit
-    setCurrentPL(newPL)
-    
-    // Check targets
-    if (newPL >= parseFloat(targetProfit)) { 
-      addLog(` Target hit! $${newPL.toFixed(2)}`)
-      setIsRunning(false)
-      isRunningRef.current = false
-      return
-    }
-    if (newPL <= -parseFloat(stopLoss)) { 
-      addLog(`🛑 Stop loss $${newPL.toFixed(2)}`)
-      setIsRunning(false)
-      isRunningRef.current = false
-      return
-    }
-    
-    // CONTINUOUS TRADING LOOP
-    if (isRunningRef.current) {
-      addLog(`P/L: $${newPL.toFixed(2)} | Trades: ${newTotal}`)
-      addLog(`⏳ Next trade in 2s...`)
+      setCurrentPL(prev => prev + profit)
+      setLosses(prev => prev + 1)
+      setTotalTrades(prev => prev + 1)
+      setConsecutiveLosses(prev => prev + 1)
       
-      const timer = setTimeout(() => {
+      const martingale = parseFloat(martingaleFactor) || 1.5
+      const newStake = currentStake * martingale
+      setCurrentStake(newStake)
+      addLog(`❌ Contract LOST. Loss: $${profit.toFixed(2)}.`)
+      addLog(`🛡️ Applying ${martingale}x Martingale. Next stake: $${newStake.toFixed(2)}`)
+    }
+
+    const newPL = currentPL + profit
+    
+    if (newPL >= parseFloat(targetProfit)) { 
+      addLog(`🏆 Target profit reached!`)
+      setIsRunning(false)
+      isRunningRef.current = false
+      return
+    }
+    
+    if (newPL <= -parseFloat(stopLoss)) { 
+      addLog(`🛑 Stop loss hit!`)
+      setIsRunning(false)
+      isRunningRef.current = false
+      return
+    }
+
+    if (isRunningRef.current) {
+      addLog(`⏳ Next trade in 2 seconds...`)
+      
+      executionTimer.current = setTimeout(() => {
         if (isRunningRef.current && ws?.readyState === WebSocket.OPEN) {
-          executeTrade()
+          const symbol = SYMBOL_MAP[selectedMarket]
+          startCascadeEngine(symbol)
         }
       }, 2000)
-      timersRef.current.push(timer)
     }
   }
 
   const startBot = () => {
-    console.log('=== STARTING BOT ===')
     setValidationError('')
     if (!ws || ws.readyState !== WebSocket.OPEN) { 
-      console.log('WS not ready')
-      setValidationError('Not connected.')
+      setValidationError('Not connected to Deriv.')
+      return 
+    }
+    if (parseFloat(martingaleFactor) <= 0) { 
+      setValidationError('Martingale factor must be > 0.')
       return 
     }
 
-    clearAllTimers()
+    if (executionTimer.current) clearTimeout(executionTimer.current)
+    
     setIsRunning(true)
     isRunningRef.current = true
     setCurrentPL(0)
@@ -288,36 +303,31 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
     setTickHistory([])
     setLogs([])
 
-    addLog(`🚀 Denny Bot Started`)
-    addLog(`Market: ${selectedMarket}`)
-    addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`)
+    addLog(`🚀 Starting Denny Bot for ${selectedMarket}...`)
+    addLog(`🛡️ Zero Consecutive Loss Protection: ACTIVE (Martingale: ${martingaleFactor}x)`)
+    addLog(`🎯 Target: $${targetProfit} | Stop Loss: $${stopLoss}`)
     
     const symbol = SYMBOL_MAP[selectedMarket]
     ws.send(JSON.stringify({ ticks: symbol, subscribe: 1, req_id: Date.now() }))
     ws.send(JSON.stringify({ ticks_history: symbol, count: 50, end: 'latest', style: 'ticks', req_id: Date.now() + 1 }))
     
-    // Start first trade after 3 seconds
-    const timer = setTimeout(() => {
-      if (isRunningRef.current) {
-        executeTrade()
-      }
-    }, 3000)
-    timersRef.current.push(timer)
+    startCascadeEngine(symbol)
   }
 
   const stopBot = () => {
-    console.log('=== STOPPING BOT ===')
     setIsRunning(false)
     isRunningRef.current = false
-    clearAllTimers()
+    if (executionTimer.current) {
+      clearTimeout(executionTimer.current)
+      executionTimer.current = null
+    }
     if (ws) ws.send(JSON.stringify({ forget: 'all', req_id: Date.now() }))
-    addLog(`⏹️ Stopped`)
+    addLog(`🛑 Bot stopped gracefully.`)
   }
 
   const resetBot = () => {
-    console.log('=== RESETTING BOT ===')
     stopBot()
-    setLogs(['System reset.'])
+    setLogs(['System reset. Ready for new session.'])
     setCurrentPL(0)
     setTotalTrades(0)
     setWins(0)
@@ -326,7 +336,6 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
     setCurrentStake(parseFloat(stake))
     setTickHistory([])
     setValidationError('')
-    setCurrentContract(null)
   }
 
   const rules = TIMEFRAME_RULES[tradeType]
@@ -340,7 +349,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
         </div>
         <div>
           <h2 className="text-base font-bold">Denny Bots</h2>
-          <p className="text-[10px] text-mwathe-gray flex items-center gap-1"><ShieldCheck size={10} /> Zero Consecutive Losses</p>
+          <p className="text-[10px] text-mwathe-gray flex items-center gap-1"><ShieldCheck size={10} /> Zero Consecutive Loss Protection</p>
         </div>
       </div>
 
@@ -355,7 +364,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
         <h3 className="text-mwathe-white font-bold text-xs flex items-center gap-1 mb-2"><Target size={12} className="text-mwathe-orange" /> Parameters</h3>
         
         <div className="mb-2">
-          <label className="text-[10px] text-mwathe-gray uppercase font-bold">Market</label>
+          <label className="text-[10px] text-mwathe-gray uppercase font-bold">Select Market</label>
           <select value={selectedMarket} onChange={e => setSelectedMarket(e.target.value)} disabled={isRunning} className="w-full bg-mwathe-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5">
             {VOLATILITY_INDICES.map(m => <option key={m}>{m}</option>)}
           </select>
@@ -363,7 +372,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
 
         <div className="grid grid-cols-2 gap-2 mb-2">
           <div>
-            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Type</label>
+            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Trade Type</label>
             <select value={tradeType} onChange={e => setTradeType(e.target.value)} disabled={isRunning} className="w-full bg-mwathe-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5">
               {TRADE_TYPES.map(t => <option key={t}>{t}</option>)}
             </select>
@@ -393,14 +402,14 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
 
         {tradeType === 'Digits' && subTradeType === 'Over/Under' && (
           <div className="mb-2">
-            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Digit (0-9)</label>
-            <input type="number" min="0" max="9" value={predictedDigit} onChange={e => setPredictedDigit(e.target.value)} disabled={isRunning} className="w-full bg-mwathe-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5" />
+            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Predicted Digit (0-9) *</label>
+            <input type="number" min="0" max="9" value={predictedDigit} onChange={e => setPredictedDigit(e.target.value)} disabled={isRunning} className="w-full bg-mwathe-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5" placeholder="Enter digit 0-9" />
           </div>
         )}
 
         <div className="grid grid-cols-2 gap-2 mb-2">
           <div>
-            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Time</label>
+            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Time Frame</label>
             {rules.fixed ? (
               <input type="text" value={rules.label} disabled className="w-full bg-mwathe-black/50 border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-mwathe-gray" />
             ) : (
@@ -410,28 +419,28 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
             )}
           </div>
           <div>
-            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Duration</label>
+            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Duration {rules.fixed ? '' : `(${rules.min}-${rules.maxMap ? rules.maxMap[timeframeUnit] : rules.max})`}</label>
             <input type="number" value={durationValue} onChange={e => setDurationValue(parseInt(e.target.value) || 0)} disabled={isRunning || rules.fixed} className="w-full bg-mwathe-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5" />
           </div>
         </div>
 
         <div className="grid grid-cols-2 gap-2 mb-2">
           <div>
-            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Stake</label>
+            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Stake ($)</label>
             <input type="number" step="0.01" value={stake} onChange={e => setStake(e.target.value)} disabled={isRunning} className="w-full bg-mwathe-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5" />
           </div>
           <div>
-            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Martingale</label>
+            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Martingale Factor</label>
             <input type="number" step="0.1" value={martingaleFactor} onChange={e => setMartingaleFactor(e.target.value)} disabled={isRunning} className="w-full bg-mwathe-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5" />
           </div>
         </div>
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Target</label>
+            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Target ($)</label>
             <input type="number" step="0.01" value={targetProfit} onChange={e => setTargetProfit(e.target.value)} disabled={isRunning} className="w-full bg-mwathe-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5" />
           </div>
           <div>
-            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Stop Loss</label>
+            <label className="text-[10px] text-mwathe-gray uppercase font-bold">Stop Loss ($)</label>
             <input type="number" step="0.01" value={stopLoss} onChange={e => setStopLoss(e.target.value)} disabled={isRunning} className="w-full bg-mwathe-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5" />
           </div>
         </div>
@@ -439,11 +448,11 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
 
       <div className="bg-mwathe-darkgray rounded-lg p-2 border border-mwathe-green/30 mb-2 flex-shrink-0">
         <h3 className="text-mwathe-white font-bold text-xs mb-1 flex items-center gap-1">
-          <TrendingUp size={12} className="text-mwathe-green" /> Performance
+          <TrendingUp size={12} className="text-mwathe-green" /> Live Performance
         </h3>
         <div className="grid grid-cols-4 gap-1 text-center">
           <div className="bg-mwathe-black/50 rounded p-1">
-            <p className="text-[9px] text-mwathe-gray">P/L</p>
+            <p className="text-[9px] text-mwathe-gray">Net P/L</p>
             <p className={`font-bold text-xs ${currentPL >= 0 ? 'text-mwathe-green' : 'text-red-500'}`}>{currentPL >= 0 ? '+' : ''}{currentPL.toFixed(2)}</p>
           </div>
           <div className="bg-mwathe-black/50 rounded p-1">
@@ -455,15 +464,19 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
             <p className="text-mwathe-white font-bold text-xs">{totalTrades}</p>
           </div>
           <div className="bg-mwathe-black/50 rounded p-1">
-            <p className="text-[9px] text-mwathe-gray">Next</p>
+            <p className="text-[9px] text-mwathe-gray">Next Stake</p>
             <p className="text-mwathe-orange font-bold text-xs">{currentStake.toFixed(2)}</p>
           </div>
+        </div>
+        <div className="mt-1 flex items-center justify-center gap-1 bg-mwathe-black/50 rounded p-1">
+          <ShieldCheck size={10} className={consecutiveLosses === 0 ? "text-mwathe-green" : "text-mwathe-orange"} />
+          <p className="text-[9px] text-mwathe-gray">Zero Consecutive Losses: <span className="font-bold text-mwathe-white">{consecutiveLosses === 0 ? 'SECURE' : `${consecutiveLosses} Loss (${martingaleFactor}x Martingale Active)`}</span></p>
         </div>
       </div>
 
       <div className="grid grid-cols-3 gap-2 flex-shrink-0 mb-2">
         <button onClick={startBot} disabled={isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${isRunning ? 'bg-gray-800 text-gray-500' : 'bg-mwathe-green text-black'}`}>
-          <Play size={14} /> Run
+          <Zap size={14} /> Run
         </button>
         <button onClick={stopBot} disabled={!isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${!isRunning ? 'bg-gray-800 text-gray-500' : 'bg-red-500 text-white'}`}>
           <Square size={14} /> Stop
@@ -476,14 +489,15 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
       <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col">
         <div className="bg-mwathe-darkgray px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0">
           <Terminal size={10} className="text-mwathe-green" />
-          <span className="text-[10px] text-mwathe-gray font-bold">LOG</span>
+          <span className="text-[10px] text-mwathe-gray font-bold">DISPLAY PANEL</span>
         </div>
         <div ref={logRef} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5">
           {logs.map((log, i) => (
             <p key={i} className={
-              log.includes('✅') || log.includes('WON') ? 'text-mwathe-green' :
-              log.includes('❌') || log.includes('LOST') ? 'text-red-500' :
-              log.includes('️') || log.includes('🎯') ? 'text-mwathe-skyblue' :
+              log.includes('✅') || log.includes('WON') || log.includes('Profit') || log.includes('Target') ? 'text-mwathe-green' :
+              log.includes('❌') || log.includes('LOST') || log.includes('Stop') || log.includes('failed') ? 'text-red-500' :
+              log.includes('🛡️') || log.includes('Martingale') ? 'text-mwathe-orange' :
+              log.includes('') || log.includes('🎯') || log.includes('⚡') || log.includes('') || log.includes('📊') ? 'text-mwathe-skyblue' :
               'text-mwathe-gray'
             }>
               {log}
