@@ -36,14 +36,33 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
   const wsRef = useRef(null)
   const isRunningRef = useRef(false)
   const reqIdRef = useRef(1)
+  
+  // CRITICAL: Refs for immediate access in async loop
+  const currentStakeRef = useRef(1.00)
+  const sessionPLRef = useRef(0.00)
+  const totalTradesRef = useRef(0)
+  const winsRef = useRef(0)
+  const lossesRef = useRef(0)
+  const consecutiveLossesRef = useRef(0)
 
-  const addLog = (msg) => setLogs(prev => [...prev.slice(-20), `[${new Date().toLocaleTimeString()}] ${msg}`])
-  useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight }, [logs])
+  const addLog = (msg) => {
+    setLogs(prev => {
+      const newLogs = [...prev.slice(-19), `[${new Date().toLocaleTimeString()}] ${msg}`]
+      return newLogs
+    })
+  }
+
+  // Auto-scroll logs
+  useEffect(() => {
+    if (logRef.current) {
+      logRef.current.scrollTop = logRef.current.scrollHeight
+    }
+  }, [logs])
   
   useEffect(() => { if (SUB_TRADE_TYPES[tradeType]?.length > 0) setSubTradeType(SUB_TRADE_TYPES[tradeType][0]); else setSubTradeType('') }, [tradeType])
   useEffect(() => { if (subTradeType && OPTIONS[subTradeType]) setOption(OPTIONS[subTradeType][0]) }, [subTradeType])
   useEffect(() => { const rules = TIMEFRAME_RULES[tradeType]; setTimeframeUnit(rules.defaultUnit); setDurationValue(rules.min) }, [tradeType])
-  useEffect(() => { if (!isRunning) setCurrentStake(parseFloat(stake) || 1.00) }, [stake, isRunning])
+  useEffect(() => { if (!isRunning) { setCurrentStake(parseFloat(stake)); currentStakeRef.current = parseFloat(stake) } }, [stake, isRunning])
 
   // WebSocket Connection
   useEffect(() => {
@@ -77,17 +96,13 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
     return () => { if (wsRef.current) wsRef.current.close() }
   }, [token, accountId])
 
-  // API Request Helper - FIXED req_id issue
   const wsRequest = (request) => {
     return new Promise((resolve, reject) => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
         return reject(new Error('WebSocket not connected'))
       }
-      
       const req_id = reqIdRef.current++
-      // Include req_id in the request object BEFORE sending
       const requestWithId = { ...request, req_id }
-      
       const onMessage = (event) => {
         try {
           const msg = JSON.parse(event.data)
@@ -98,10 +113,8 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
           }
         } catch (e) {}
       }
-      
       wsRef.current.addEventListener('message', onMessage)
       wsRef.current.send(JSON.stringify(requestWithId))
-      
       setTimeout(() => { 
         wsRef.current.removeEventListener('message', onMessage)
         reject(new Error('Request timeout')) 
@@ -109,7 +122,6 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
     })
   }
 
-  // Contract Monitor Helper
   const monitorContract = (contract_id) => {
     return new Promise((resolve) => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return resolve(null)
@@ -124,7 +136,8 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
               if (sub_id) wsRef.current.send(JSON.stringify({ forget: sub_id, req_id: reqIdRef.current++ }))
               resolve(msg.proposal_open_contract)
             } else {
-              setCurrentPL(parseFloat(msg.proposal_open_contract.profit || 0))
+              const profit = parseFloat(msg.proposal_open_contract.profit || 0)
+              setCurrentPL(profit)
             }
           }
         } catch (e) {}
@@ -144,7 +157,6 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
     return 'CALL'
   }
 
-  // Main Async Trade Engine
   const runTradeCycle = async () => {
     while (isRunningRef.current) {
       try {
@@ -156,11 +168,11 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
 
         const symbol = SYMBOL_MAP[selectedMarket]
         const contractType = getContractType()
-        addLog(`🚀 Trade: ${contractType} ${durationValue}${timeframeUnit[0]} $${currentStake}`)
+        addLog(` Trade: ${contractType} ${durationValue}${timeframeUnit[0]} $${currentStakeRef.current.toFixed(2)}`)
 
         const proposalReq = { 
           proposal: 1, 
-          amount: currentStake, 
+          amount: currentStakeRef.current, 
           basis: 'stake', 
           contract_type: contractType, 
           currency: 'USD', 
@@ -187,40 +199,48 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
         const profit = parseFloat(contractResult.profit || 0)
         const isWin = profit > 0
         
-        const newTotal = totalTrades + 1
-        setTotalTrades(newTotal)
+        // IMMEDIATELY update refs
+        totalTradesRef.current += 1
+        sessionPLRef.current += profit
         
         if (isWin) {
-          setWins(wins + 1)
-          setConsecutiveLosses(0)
-          setCurrentStake(parseFloat(stake))
+          winsRef.current += 1
+          consecutiveLossesRef.current = 0
+          currentStakeRef.current = parseFloat(stake)
           addLog(`✅ WON +$${profit.toFixed(2)}`)
         } else {
-          setLosses(losses + 1)
-          const newConsecutive = consecutiveLosses + 1
-          setConsecutiveLosses(newConsecutive)
-          const newStake = currentStake * parseFloat(martingaleFactor)
-          setCurrentStake(newStake)
-          addLog(`❌ LOST -$${profit.toFixed(2)}`)
+          lossesRef.current += 1
+          consecutiveLossesRef.current += 1
+          
+          // CRITICAL: Apply martingale IMMEDIATELY after loss
+          const martingale = parseFloat(martingaleFactor) || 1.5
+          currentStakeRef.current = currentStakeRef.current * martingale
+          addLog(` LOST -$${profit.toFixed(2)} | Martingale ${martingale}x applied: $${currentStakeRef.current.toFixed(2)}`)
         }
 
-        const newPL = currentPL + profit
-        setCurrentPL(newPL)
+        // IMMEDIATELY update UI state
+        setTotalTrades(totalTradesRef.current)
+        setWins(winsRef.current)
+        setLosses(lossesRef.current)
+        setConsecutiveLosses(consecutiveLossesRef.current)
+        setCurrentStake(currentStakeRef.current)
+        setCurrentPL(sessionPLRef.current)
 
-        if (newPL >= parseFloat(targetProfit)) { 
-          addLog(`🎯 Target hit! $${newPL.toFixed(2)}`)
+        // Check targets
+        if (sessionPLRef.current >= parseFloat(targetProfit)) { 
+          addLog(`🎯 Target hit! $${sessionPLRef.current.toFixed(2)}`)
           setIsRunning(false)
           isRunningRef.current = false
           break
         }
-        if (newPL <= -parseFloat(stopLoss)) { 
-          addLog(`🛑 Stop loss hit! $${newPL.toFixed(2)}`)
+        if (sessionPLRef.current <= -parseFloat(stopLoss)) { 
+          addLog(`🛑 Stop loss hit! $${sessionPLRef.current.toFixed(2)}`)
           setIsRunning(false)
           isRunningRef.current = false
           break
         }
 
-        addLog(`📊 P/L: $${newPL.toFixed(2)} | Trades: ${newTotal}`)
+        addLog(`📊 P/L: $${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
         await new Promise(r => setTimeout(r, 500))
       } catch (error) {
         if (!isRunningRef.current) break
@@ -238,16 +258,28 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
     }
     isRunningRef.current = true
     setIsRunning(true)
+    
+    // Reset all refs AND state
+    sessionPLRef.current = 0
+    totalTradesRef.current = 0
+    winsRef.current = 0
+    lossesRef.current = 0
+    consecutiveLossesRef.current = 0
+    currentStakeRef.current = parseFloat(stake)
+    
     setCurrentPL(0)
     setTotalTrades(0)
     setWins(0)
     setLosses(0)
-    setCurrentStake(parseFloat(stake))
     setConsecutiveLosses(0)
+    setCurrentStake(parseFloat(stake))
     setLogs([])
-    addLog(` Denny Bot Started`)
+    
+    addLog(`🚀 Denny Bot Started`)
     addLog(`Market: ${selectedMarket}`)
     addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`)
+    addLog(`Base Stake: $${stake} | Martingale: ${martingaleFactor}x`)
+    
     runTradeCycle()
   }
 
@@ -268,6 +300,12 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
     setConsecutiveLosses(0)
     setCurrentStake(parseFloat(stake))
     setValidationError('')
+    sessionPLRef.current = 0
+    totalTradesRef.current = 0
+    winsRef.current = 0
+    lossesRef.current = 0
+    consecutiveLossesRef.current = 0
+    currentStakeRef.current = parseFloat(stake)
   }
   
   const rules = TIMEFRAME_RULES[tradeType]
@@ -289,7 +327,21 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
       </div>
       <div className="bg-gray-900 rounded-lg p-2 border border-green-500/30 mb-2 flex-shrink-0"><h3 className="text-white font-bold text-xs mb-1 flex items-center gap-1"><TrendingUp size={12} className="text-green-500" /> Performance</h3><div className="grid grid-cols-4 gap-1 text-center"><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">P/L</p><p className={`font-bold text-xs ${currentPL >= 0 ? 'text-green-500' : 'text-red-500'}`}>{currentPL >= 0 ? '+' : ''}{currentPL.toFixed(2)}</p></div><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Win Rate</p><p className="text-sky-400 font-bold text-xs">{winRate}%</p></div><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Trades</p><p className="text-white font-bold text-xs">{totalTrades}</p></div><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Next</p><p className="text-orange-400 font-bold text-xs">{currentStake.toFixed(2)}</p></div></div></div>
       <div className="grid grid-cols-3 gap-2 flex-shrink-0 mb-2"><button onClick={startBot} disabled={isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${isRunning ? 'bg-gray-800 text-gray-500' : 'bg-green-500 text-black'}`}><Play size={14} /> Run</button><button onClick={stopBot} disabled={!isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${!isRunning ? 'bg-gray-800 text-gray-500' : 'bg-red-500 text-white'}`}><Square size={14} /> Stop</button><button onClick={resetBot} className="py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs bg-gray-800 border border-gray-700 text-orange-400"><RefreshCw size={14} /> Reset</button></div>
-      <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col"><div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">LOG</span></div><div ref={logRef} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5">{logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') ? 'text-red-500' : log.includes('🎯') || log.includes('🚀') ? 'text-sky-400' : 'text-gray-400'}>{log}</p>)}</div></div>
+      <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col">
+        <div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">LOG (Scrollable)</span></div>
+        <div ref={logRef} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5" style={{scrollBehavior: 'smooth'}}>
+          {logs.map((log, i) => (
+            <p key={i} className={
+              log.includes('✅') || log.includes('WON') ? 'text-green-400' :
+              log.includes('❌') || log.includes('LOST') ? 'text-red-500' :
+              log.includes('🎯') || log.includes('') ? 'text-sky-400' :
+              'text-gray-400'
+            }>
+              {log}
+            </p>
+          ))}
+        </div>
+      </div>
     </div>
   )
 }
