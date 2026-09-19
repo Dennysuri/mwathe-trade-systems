@@ -11,7 +11,6 @@ const TIMEFRAME_RULES = { 'Accumulators': { units: ['Ticks'], defaultUnit: 'Tick
 const ALLOWED_DIGITS_MARKETS = ['R_10', 'R_25', 'R_50', 'R_75', 'R_100']
 const roundStake = (v) => Math.round(v * 100) / 100
 
-// --- HIGH-GRADE MATHEMATICAL STRATEGIES ---
 const calcEntropy = (arr) => { const f={}; arr.forEach(x=>f[x]=(f[x]||0)+1); let e=0; Object.values(f).forEach(c=>{const p=c/arr.length; e-=p*Math.log2(p)}); return e }
 const calcChiSquare = (digits, target) => { const f=Array(10).fill(0); digits.forEach(d=>f[d]++); const exp=digits.length/10; return (f[target]-exp)/exp }
 const calcMarkov = (digits, target, order=2) => { if(digits.length<order+1) return 0.1; const seq=digits.slice(-order); let match=0, total=0; for(let i=0;i<digits.length-order;i++){ let isMatch=true; for(let j=0;j<order;j++) if(digits[i+j]!==seq[j]) isMatch=false; if(isMatch){ total++; if(digits[i+order]===target) match++ } } return total===0 ? 0.1 : match/total }
@@ -77,15 +76,12 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const ws = new WebSocket(wsUrl)
         wsRef.current = ws
         ws.onopen = () => { ws.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: reqIdRef.current++ })) }
-        
         ws.onmessage = (event) => {
           try {
             const msg = JSON.parse(event.data)
             if (msg.msg_type === 'history') {
               const sym = msg.history.symbol
-              if (msg.history.prices && msg.history.prices.length > 0) {
-                tickDataRef.current[sym] = msg.history.prices.map(p => parseFloat(p))
-              }
+              if (msg.history.prices && msg.history.prices.length > 0) tickDataRef.current[sym] = msg.history.prices.map(p => parseFloat(p))
             }
             if (msg.msg_type === 'tick') {
               const sym = msg.tick.symbol
@@ -186,12 +182,10 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
 
   const calculateConfluence = (symbol, targetDigit) => {
     const ticks = tickDataRef.current[symbol]
-    if (!ticks || ticks.length < 20) return { score: 0, signal: 'CALL', reasons: [] }
-    
+    if (!ticks || ticks.length < 20) return { score: 50, signal: 'CALL', reasons: [] }
     let score = 50, reasons = [], signal = 'CALL'
     const digits = ticks.map(t => parseInt(t.toString().slice(-1)))
     const td = parseInt(targetDigit)
-
     if (tradeType === 'Digits') {
       const markovProb = calcMarkov(digits, td, 2)
       if (markovProb > 0.25) { score += 15; reasons.push(`Markov: ${(markovProb*100).toFixed(0)}%`) }
@@ -228,29 +222,20 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const scanMarkets = () => {
     let bestSym = null, bestScore = -1, bestSignal = 'CALL', bestReasons = []
     const blacklisted = blacklistedMarketsRef.current
-    
     Object.keys(SYMBOL_MAP).forEach(name => {
       const sym = SYMBOL_MAP[name]
       if (blacklisted.includes(sym)) return
       if (tradeType === 'Digits' && !ALLOWED_DIGITS_MARKETS.includes(sym)) return
-      
       const res = calculateConfluence(sym, predictedDigit)
-      if (res.reasons.length === 0 && res.score === 50) return // Skip if no strategies fired at all
-
-      if (res.score > bestScore) { 
-        bestScore = res.score; bestSym = sym; bestSignal = res.signal; bestReasons = res.reasons 
-      }
+      if (res.score > bestScore) { bestScore = res.score; bestSym = sym; bestSignal = res.signal; bestReasons = res.reasons }
     })
-
     if (!bestSym) {
       blacklistedMarketsRef.current = []
       Object.keys(SYMBOL_MAP).forEach(name => {
         const sym = SYMBOL_MAP[name]
         if (tradeType === 'Digits' && !ALLOWED_DIGITS_MARKETS.includes(sym)) return
         const res = calculateConfluence(sym, predictedDigit)
-        if (res.score > bestScore) { 
-          bestScore = res.score; bestSym = sym; bestSignal = res.signal; bestReasons = res.reasons 
-        }
+        if (res.score > bestScore) { bestScore = res.score; bestSym = sym; bestSignal = res.signal; bestReasons = res.reasons }
       })
     }
     return { symbol: bestSym, score: bestScore, signal: bestSignal, reasons: bestReasons }
@@ -261,62 +246,45 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       addLog('🔬 Analyzing markets...')
       await loadAllHistory()
     }
-
     while (isRunningRef.current) {
       try {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { await new Promise(r => setTimeout(r, 2000)); continue }
-
         const best = scanMarkets()
         if (!best.symbol) { await new Promise(r => setTimeout(r, 1000)); continue }
-
         setBestMarket(Object.keys(SYMBOL_MAP).find(key => SYMBOL_MAP[key] === best.symbol) || best.symbol)
         setConfluenceScore(best.score)
-
         addLog(`🎯 LOCKED: ${best.symbol} | Score: ${best.score}% | Signal: ${best.signal}`)
         if (best.reasons.length > 0) addLog(`📊 Reasons: ${best.reasons.join(' | ')}`)
         addLog(`🚀 EXECUTING IMMEDIATELY...`)
-
         const contractType = getContractType()
         const tradeStake = roundStake(currentStakeRef.current)
-        
         const proposalReq = { proposal: 1, amount: tradeStake, basis: 'stake', contract_type: contractType, currency: 'USD', duration: durationValue, duration_unit: timeframeUnit === 'Minutes' ? 'm' : 't', underlying_symbol: best.symbol }
         if (tradeType === 'Digits' && subTradeType === 'Over/Under' && predictedDigit) proposalReq.barrier = predictedDigit
-
         const proposalRes = await wsRequest(proposalReq)
         if (!isRunningRef.current) break
         const buyRes = await wsRequest({ buy: proposalRes.proposal.id, price: proposalRes.proposal.ask_price })
         if (!isRunningRef.current) break
-
         addLog(`✅ Contract purchased: ${buyRes.buy.contract_id}`)
         const contractResult = await monitorContract(buyRes.buy.contract_id)
         if (!isRunningRef.current || !contractResult) break
-
         const profit = parseFloat(contractResult.profit || 0)
         const isWin = profit > 0
         totalTradesRef.current += 1
         sessionPLRef.current += profit
-        setCurrentPL(sessionPLRef.current)
-
         if (isWin) {
-          winsRef.current += 1; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake)
-          blacklistedMarketsRef.current = []
+          winsRef.current += 1; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []
           addLog(`✅ WON +$${profit.toFixed(2)} | Stake reset to base`)
         } else {
-          lossesRef.current += 1; consecutiveLossesRef.current += 1
-          blacklistedMarketsRef.current.push(best.symbol)
+          lossesRef.current += 1; consecutiveLossesRef.current += 1; blacklistedMarketsRef.current.push(best.symbol)
           addLog(`🛡️ Blacklisted ${best.symbol} to prevent consecutive loss.`)
           const martingale = parseFloat(martingaleFactor) || 1.5
           currentStakeRef.current = roundStake(currentStakeRef.current * martingale)
           addLog(`❌ LOST -$${profit.toFixed(2)} | Martingale ${martingale}x applied → Next: $${currentStakeRef.current.toFixed(2)}`)
         }
-
-        setTotalTrades(totalTradesRef.current); setWins(winsRef.current); setLosses(lossesRef.current)
-        setConsecutiveLosses(consecutiveLossesRef.current); setCurrentStake(currentStakeRef.current)
-
-        if (sessionPLRef.current >= parseFloat(targetProfit)) { addLog(` TARGET HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
-        if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog(` STOP LOSS HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
-
-        addLog(`📊 Session: P/L $${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
+        setTotalTrades(totalTradesRef.current); setWins(winsRef.current); setLosses(lossesRef.current); setConsecutiveLosses(consecutiveLossesRef.current); setCurrentStake(currentStakeRef.current); setCurrentPL(sessionPLRef.current)
+        if (sessionPLRef.current >= parseFloat(targetProfit)) { addLog(`🎯 TARGET HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
+        if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog(`🛑 STOP LOSS HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
+        addLog(` Session: P/L $${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
         addLog('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
         await new Promise(r => setTimeout(r, 500))
       } catch (error) {
@@ -334,7 +302,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0
     currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []; historyLoadedRef.current = false
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); setLogs([])
-    addLog(`⚡ AUTOMATED BOT ACTIVATED`)
+    addLog(` AUTOMATED BOT ACTIVATED`)
     addLog(`Type: ${tradeType} | Stake: $${stake} | Martingale: ${martingaleFactor}x`)
     addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`)
     runTradeCycle()
