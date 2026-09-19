@@ -11,6 +11,7 @@ const TIMEFRAME_RULES = { 'Accumulators': { units: ['Ticks'], defaultUnit: 'Tick
 const ALLOWED_DIGITS_MARKETS = ['R_10', 'R_25', 'R_50', 'R_75', 'R_100']
 const roundStake = (v) => Math.round(v * 100) / 100
 
+// --- HIGH-GRADE MATHEMATICAL STRATEGIES ---
 const calcEntropy = (arr) => { const f={}; arr.forEach(x=>f[x]=(f[x]||0)+1); let e=0; Object.values(f).forEach(c=>{const p=c/arr.length; e-=p*Math.log2(p)}); return e }
 const calcChiSquare = (digits, target) => { const f=Array(10).fill(0); digits.forEach(d=>f[d]++); const exp=digits.length/10; return (f[target]-exp)/exp }
 const calcMarkov = (digits, target, order=2) => { if(digits.length<order+1) return 0.1; const seq=digits.slice(-order); let match=0, total=0; for(let i=0;i<digits.length-order;i++){ let isMatch=true; for(let j=0;j<order;j++) if(digits[i+j]!==seq[j]) isMatch=false; if(isMatch){ total++; if(digits[i+order]===target) match++ } } return total===0 ? 0.1 : match/total }
@@ -75,34 +76,28 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         if (wsRef.current) wsRef.current.close()
         const ws = new WebSocket(wsUrl)
         wsRef.current = ws
-        ws.onopen = () => { addLog('✅ Connected to Deriv API'); ws.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: reqIdRef.current++ })) }
+        ws.onopen = () => { ws.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: reqIdRef.current++ })) }
         
         ws.onmessage = (event) => {
           try {
             const msg = JSON.parse(event.data)
-            
-            // FIX: Handle History Data (Loads 50 ticks instantly)
             if (msg.msg_type === 'history') {
               const sym = msg.history.symbol
               if (msg.history.prices && msg.history.prices.length > 0) {
                 tickDataRef.current[sym] = msg.history.prices.map(p => parseFloat(p))
-                addLog(`📥 Loaded history for ${sym} (${msg.history.prices.length} ticks)`)
               }
             }
-            
-            // Handle Live Ticks (Sliding Window)
             if (msg.msg_type === 'tick') {
               const sym = msg.tick.symbol
               if (!tickDataRef.current[sym]) tickDataRef.current[sym] = []
               tickDataRef.current[sym] = [...tickDataRef.current[sym], msg.tick.quote].slice(-100)
             }
-            
             if (msg.msg_type === 'balance' && onBalanceUpdate) onBalanceUpdate(parseFloat(msg.balance.balance))
           } catch (e) {}
         }
-        ws.onerror = () => addLog('❌ WS Error')
-        ws.onclose = () => addLog(' Disconnected')
-      } catch (err) { addLog(` Connection failed`) }
+        ws.onerror = () => {}
+        ws.onclose = () => {}
+      } catch (err) { addLog(`❌ Connection failed`) }
     }
     connectWS()
     return () => { if (wsRef.current) wsRef.current.close() }
@@ -111,17 +106,9 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const loadAllHistory = () => {
     return new Promise((resolve) => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return resolve()
-      
       let loadedCount = 0
       const totalMarkets = Object.values(SYMBOL_MAP).length
-      const checkDone = () => {
-        loadedCount++
-        if (loadedCount >= totalMarkets) {
-          historyLoadedRef.current = true
-          resolve()
-        }
-      }
-
+      const checkDone = () => { loadedCount++; if (loadedCount >= totalMarkets) { historyLoadedRef.current = true; resolve() } }
       Object.values(SYMBOL_MAP).forEach(sym => {
         const reqId = reqIdRef.current++
         const onMessage = (event) => {
@@ -129,19 +116,14 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
             const msg = JSON.parse(event.data)
             if (msg.req_id === reqId && msg.msg_type === 'history') {
               wsRef.current.removeEventListener('message', onMessage)
-              if (msg.history.prices) {
-                tickDataRef.current[sym] = msg.history.prices.map(p => parseFloat(p))
-              }
+              if (msg.history.prices) tickDataRef.current[sym] = msg.history.prices.map(p => parseFloat(p))
               checkDone()
             }
           } catch (e) {}
         }
         wsRef.current.addEventListener('message', onMessage)
-        // Request 50 ticks of history for the sliding window
         wsRef.current.send(JSON.stringify({ ticks_history: sym, count: 50, end: 'latest', style: 'ticks', req_id: reqId }))
       })
-      
-      // Timeout fallback if API is slow
       setTimeout(() => { historyLoadedRef.current = true; resolve() }, 8000)
     })
   }
@@ -204,7 +186,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
 
   const calculateConfluence = (symbol, targetDigit) => {
     const ticks = tickDataRef.current[symbol]
-    if (!ticks || ticks.length < 20) return { score: 0, signal: 'CALL', reasons: ['Gathering data'] }
+    if (!ticks || ticks.length < 20) return { score: 0, signal: 'CALL', reasons: [] }
     
     let score = 50, reasons = [], signal = 'CALL'
     const digits = ticks.map(t => parseInt(t.toString().slice(-1)))
@@ -253,7 +235,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       if (tradeType === 'Digits' && !ALLOWED_DIGITS_MARKETS.includes(sym)) return
       
       const res = calculateConfluence(sym, predictedDigit)
-      if (res.reasons.includes('Gathering data')) return
+      if (res.reasons.length === 0 && res.score === 50) return // Skip if no strategies fired at all
 
       if (res.score > bestScore) { 
         bestScore = res.score; bestSym = sym; bestSignal = res.signal; bestReasons = res.reasons 
@@ -266,42 +248,33 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const sym = SYMBOL_MAP[name]
         if (tradeType === 'Digits' && !ALLOWED_DIGITS_MARKETS.includes(sym)) return
         const res = calculateConfluence(sym, predictedDigit)
-        if (!res.reasons.includes('Gathering data') && res.score > bestScore) { 
+        if (res.score > bestScore) { 
           bestScore = res.score; bestSym = sym; bestSignal = res.signal; bestReasons = res.reasons 
         }
       })
     }
-
     return { symbol: bestSym, score: bestScore, signal: bestSignal, reasons: bestReasons }
   }
 
   const runTradeCycle = async () => {
-    // FIX: Load history immediately so we don't wait for live ticks
     if (!historyLoadedRef.current) {
-      addLog('📡 Loading 50-tick history for all markets...')
+      addLog('🔬 Analyzing markets...')
       await loadAllHistory()
-      addLog('✅ History loaded. Analysis ready.')
     }
 
     while (isRunningRef.current) {
       try {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { await new Promise(r => setTimeout(r, 2000)); continue }
 
-        addLog(' Scanning all markets for maximum confluence...')
         const best = scanMarkets()
-        
-        if (!best.symbol) {
-          addLog('️ No valid market found. Re-checking...')
-          await new Promise(r => setTimeout(r, 1000))
-          continue
-        }
+        if (!best.symbol) { await new Promise(r => setTimeout(r, 1000)); continue }
 
         setBestMarket(Object.keys(SYMBOL_MAP).find(key => SYMBOL_MAP[key] === best.symbol) || best.symbol)
         setConfluenceScore(best.score)
 
-        addLog(` LOCKED: ${best.symbol} | Score: ${best.score}% | Signal: ${best.signal}`)
-        addLog(` Reasons: ${best.reasons.join(' | ')}`)
-        addLog(` EXECUTING IMMEDIATELY...`)
+        addLog(`🎯 LOCKED: ${best.symbol} | Score: ${best.score}% | Signal: ${best.signal}`)
+        if (best.reasons.length > 0) addLog(`📊 Reasons: ${best.reasons.join(' | ')}`)
+        addLog(`🚀 EXECUTING IMMEDIATELY...`)
 
         const contractType = getContractType()
         const tradeStake = roundStake(currentStakeRef.current)
@@ -331,10 +304,10 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         } else {
           lossesRef.current += 1; consecutiveLossesRef.current += 1
           blacklistedMarketsRef.current.push(best.symbol)
-          addLog(` Blacklisted ${best.symbol} to prevent consecutive loss.`)
+          addLog(`🛡️ Blacklisted ${best.symbol} to prevent consecutive loss.`)
           const martingale = parseFloat(martingaleFactor) || 1.5
           currentStakeRef.current = roundStake(currentStakeRef.current * martingale)
-          addLog(` LOST -$${profit.toFixed(2)} | Martingale ${martingale}x applied → Next: $${currentStakeRef.current.toFixed(2)}`)
+          addLog(`❌ LOST -$${profit.toFixed(2)} | Martingale ${martingale}x applied → Next: $${currentStakeRef.current.toFixed(2)}`)
         }
 
         setTotalTrades(totalTradesRef.current); setWins(winsRef.current); setLosses(lossesRef.current)
@@ -343,12 +316,12 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         if (sessionPLRef.current >= parseFloat(targetProfit)) { addLog(` TARGET HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
         if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog(` STOP LOSS HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
 
-        addLog(` Session: P/L $${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
+        addLog(`📊 Session: P/L $${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
         addLog('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
         await new Promise(r => setTimeout(r, 500))
       } catch (error) {
         if (!isRunningRef.current) break
-        addLog(` Error: ${error.message}`)
+        addLog(`❌ Error: ${error.message}`)
         await new Promise(r => setTimeout(r, 2000))
       }
     }
@@ -361,7 +334,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0
     currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []; historyLoadedRef.current = false
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); setLogs([])
-    addLog(` AUTOMATED BOT ACTIVATED`)
+    addLog(`⚡ AUTOMATED BOT ACTIVATED`)
     addLog(`Type: ${tradeType} | Stake: $${stake} | Martingale: ${martingaleFactor}x`)
     addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`)
     runTradeCycle()
@@ -403,7 +376,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col">
         <div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">EXECUTION LOG (Scrollable)</span></div>
         <div ref={logRef} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5" style={{scrollBehavior: 'auto'}}>
-          {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('TARGET') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') || log.includes('Error') || log.includes('CRITICAL') ? 'text-red-500' : log.includes('🚀') || log.includes('') || log.includes('🎯') || log.includes('🔬') ? 'text-sky-400' : log.includes('⏹️') || log.includes('⚠️') || log.includes('LOCKDOWN') ? 'text-orange-400' : log.includes('━━') ? 'text-gray-600' : 'text-gray-400'}>{log}</p>)}
+          {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('TARGET') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') || log.includes('Error') || log.includes('CRITICAL') ? 'text-red-500' : log.includes('🚀') || log.includes('🎯') || log.includes('🔬') ? 'text-sky-400' : log.includes('⏹️') || log.includes('⚠️') || log.includes('LOCKDOWN') ? 'text-orange-400' : log.includes('━━') ? 'text-gray-600' : 'text-gray-400'}>{log}</p>)}
         </div>
       </div>
     </div>
