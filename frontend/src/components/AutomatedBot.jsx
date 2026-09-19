@@ -8,6 +8,9 @@ const SUB_TRADE_TYPES = { 'Accumulators': [], 'Vanillas': ['Call/Put'], 'Turbos'
 const OPTIONS = { 'Over/Under': ['Over', 'Under', 'Both'], 'Even/Odd': ['Even', 'Odd', 'Both'], 'Matches/Differs': ['Matches', 'Differs', 'Both'], 'Turbos': ['Up', 'Down', 'Both'], 'Rise/Fall': ['Rise', 'Fall', 'Both'], 'Higher/Lower': ['Higher', 'Lower', 'Both'], 'Touch/No Touch': ['Touch', 'No Touch', 'Both'], 'Call/Put': ['Call', 'Put', 'Both'], 'Multipliers': ['Up', 'Down', 'Both'] }
 const TIMEFRAME_RULES = { 'Accumulators': { units: ['Ticks'], defaultUnit: 'Ticks', min: 1, max: 85, fixed: true, label: '1 - 85 ticks' }, 'Multipliers': { units: ['Auto'], defaultUnit: 'Auto', min: 1, max: 1, fixed: true, label: 'Auto' }, 'Digits': { units: ['Ticks'], defaultUnit: 'Ticks', min: 1, max: 10, fixed: false }, 'Turbos': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false }, 'Ups & Downs': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false }, 'Touch & No Touch': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false }, 'Vanillas': { units: ['Minutes', 'Hours', 'Days'], defaultUnit: 'Minutes', min: 1, maxMap: { 'Minutes': 1440, 'Hours': 24, 'Days': 30 }, fixed: false } }
 
+// CRITICAL FIX: Only these markets support Digits trading on Deriv
+const ALLOWED_DIGITS_MARKETS = ['R_10', 'R_25', 'R_50', 'R_75', 'R_100']
+
 const roundStake = (v) => Math.round(v * 100) / 100
 
 // --- HIGH-GRADE MATHEMATICAL STRATEGIES ---
@@ -54,19 +57,10 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const winsRef = useRef(0)
   const lossesRef = useRef(0)
   const consecutiveLossesRef = useRef(0)
-  const blacklistedMarketsRef = useRef([]) // Tracks markets that just lost
+  const blacklistedMarketsRef = useRef([])
 
   const addLog = (msg) => setLogs(prev => [...prev.slice(-50), `[${new Date().toLocaleTimeString()}] ${msg}`])
-  
-  // FIX: Robust auto-scrolling to always show the latest message
-  useEffect(() => { 
-    if (logRef.current) {
-      requestAnimationFrame(() => {
-        logRef.current.scrollTop = logRef.current.scrollHeight
-      })
-    }
-  }, [logs])
-  
+  useEffect(() => { if (logRef.current) requestAnimationFrame(() => { logRef.current.scrollTop = logRef.current.scrollHeight }) }, [logs])
   useEffect(() => { if (SUB_TRADE_TYPES[tradeType]?.length > 0) setSubTradeType(SUB_TRADE_TYPES[tradeType][0]); else setSubTradeType('') }, [tradeType])
   useEffect(() => { if (subTradeType && OPTIONS[subTradeType]) setOption(OPTIONS[subTradeType][0]) }, [subTradeType])
   useEffect(() => { const rules = TIMEFRAME_RULES[tradeType]; setTimeframeUnit(rules.defaultUnit); setDurationValue(rules.min) }, [tradeType])
@@ -161,6 +155,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
 
   const calculateConfluence = (symbol, targetDigit) => {
     const ticks = tickDataRef.current[symbol]
+    // CRITICAL FIX: Do not calculate if we don't have enough data
     if (!ticks || ticks.length < 20) return { score: 0, signal: 'CALL', reasons: ['Gathering data'] }
     
     let score = 50, reasons = [], signal = 'CALL'
@@ -200,33 +195,41 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     return { score: Math.min(score, 99), signal, reasons }
   }
 
-  // RAPID SCANNER & BLACKLIST ENGINE
   const scanMarkets = () => {
     let bestSym = null, bestScore = -1, bestSignal = 'CALL', bestReasons = []
     const blacklisted = blacklistedMarketsRef.current
     
     Object.keys(SYMBOL_MAP).forEach(name => {
       const sym = SYMBOL_MAP[name]
-      // Skip blacklisted markets to prevent consecutive losses on the same market
       if (blacklisted.includes(sym)) return
       
+      // CRITICAL FIX: Only scan markets that support the current trade type
+      if (tradeType === 'Digits' && !ALLOWED_DIGITS_MARKETS.includes(sym)) return
+      
       const res = calculateConfluence(sym, predictedDigit)
+      
+      // CRITICAL FIX: Ignore markets that are still gathering data
+      if (res.reasons.includes('Gathering data')) return
+
       if (res.score > bestScore) { 
         bestScore = res.score; bestSym = sym; bestSignal = res.signal; bestReasons = res.reasons 
       }
     })
 
-    // Fallback: If all markets are blacklisted, clear blacklist and rescan
+    // Fallback: If all valid markets are blacklisted, clear blacklist
     if (!bestSym) {
       blacklistedMarketsRef.current = []
       Object.keys(SYMBOL_MAP).forEach(name => {
         const sym = SYMBOL_MAP[name]
+        if (tradeType === 'Digits' && !ALLOWED_DIGITS_MARKETS.includes(sym)) return
         const res = calculateConfluence(sym, predictedDigit)
-        if (res.score > bestScore) { bestScore = res.score; bestSym = sym; bestSignal = res.signal; bestReasons = res.reasons }
+        if (!res.reasons.includes('Gathering data') && res.score > bestScore) { 
+          bestScore = res.score; bestSym = sym; bestSignal = res.signal; bestReasons = res.reasons 
+        }
       })
     }
 
-    return { symbol: bestSym || 'R_100', score: bestScore, signal: bestSignal, reasons: bestReasons }
+    return { symbol: bestSym, score: bestScore, signal: bestSignal, reasons: bestReasons }
   }
 
   const runTradeCycle = async () => {
@@ -244,6 +247,14 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
 
         addLog(' Scanning all 13 markets for maximum confluence...')
         const best = scanMarkets()
+        
+        // CRITICAL FIX: If no market is ready (all gathering data), wait and rescan. DO NOT TRADE.
+        if (!best.symbol || best.reasons.includes('Gathering data')) {
+          addLog('⏳ Waiting for market data to load...')
+          await new Promise(r => setTimeout(r, 2000))
+          continue
+        }
+
         setBestMarket(Object.keys(SYMBOL_MAP).find(key => SYMBOL_MAP[key] === best.symbol) || best.symbol)
         setConfluenceScore(best.score)
 
@@ -270,22 +281,19 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const isWin = profit > 0
         totalTradesRef.current += 1
         sessionPLRef.current += profit
-        
         setCurrentPL(sessionPLRef.current)
 
         if (isWin) {
           winsRef.current += 1; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake)
-          blacklistedMarketsRef.current = [] // Clear blacklist on win
+          blacklistedMarketsRef.current = []
           addLog(`✅ WON +$${profit.toFixed(2)} | Stake reset to base`)
         } else {
           lossesRef.current += 1; consecutiveLossesRef.current += 1
-          // BLACKLIST THE MARKET THAT JUST LOST
           blacklistedMarketsRef.current.push(best.symbol)
           addLog(` Blacklisted ${best.symbol} to prevent consecutive loss.`)
-          
           const martingale = parseFloat(martingaleFactor) || 1.5
           currentStakeRef.current = roundStake(currentStakeRef.current * martingale)
-          addLog(`❌ LOST -$${profit.toFixed(2)} | Martingale ${martingale}x applied → Next: $${currentStakeRef.current.toFixed(2)}`)
+          addLog(` LOST -$${profit.toFixed(2)} | Martingale ${martingale}x applied → Next: $${currentStakeRef.current.toFixed(2)}`)
         }
 
         setTotalTrades(totalTradesRef.current); setWins(winsRef.current); setLosses(lossesRef.current)
@@ -310,8 +318,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }
     isRunningRef.current = true; setIsRunning(true)
     sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0
-    currentStakeRef.current = parseFloat(stake)
-    blacklistedMarketsRef.current = []
+    currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); setLogs([])
     addLog(` AUTOMATED BOT ACTIVATED`)
     addLog(`Type: ${tradeType} | Stake: $${stake} | Martingale: ${martingaleFactor}x`)
@@ -347,14 +354,8 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Next</p><p className="text-orange-400 font-bold text-xs">{currentStake.toFixed(2)}</p></div>
         </div>
         <div className="grid grid-cols-2 gap-2">
-          <div className="bg-green-900/20 border border-green-500/30 rounded p-1 text-center">
-            <p className="text-[9px] text-green-400 uppercase font-bold">Trades Won</p>
-            <p className="text-green-400 font-bold text-lg">{wins}</p>
-          </div>
-          <div className="bg-red-900/20 border border-red-500/30 rounded p-1 text-center">
-            <p className="text-[9px] text-red-400 uppercase font-bold">Trades Lost</p>
-            <p className="text-red-400 font-bold text-lg">{losses}</p>
-          </div>
+          <div className="bg-green-900/20 border border-green-500/30 rounded p-1 text-center"><p className="text-[9px] text-green-400 uppercase font-bold">Trades Won</p><p className="text-green-400 font-bold text-lg">{wins}</p></div>
+          <div className="bg-red-900/20 border border-red-500/30 rounded p-1 text-center"><p className="text-[9px] text-red-400 uppercase font-bold">Trades Lost</p><p className="text-red-400 font-bold text-lg">{losses}</p></div>
         </div>
       </div>
       <div className="grid grid-cols-3 gap-2 flex-shrink-0 mb-2"><button onClick={startBot} disabled={isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${isRunning ? 'bg-gray-800 text-gray-500' : 'bg-green-500 text-black'}`}><Play size={14} /> Run</button><button onClick={stopBot} disabled={!isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${!isRunning ? 'bg-gray-800 text-gray-500' : 'bg-red-500 text-white'}`}><Square size={14} /> Stop</button><button onClick={resetBot} className="py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs bg-gray-800 border border-gray-700 text-orange-400"><RefreshCw size={14} /> Reset</button></div>
