@@ -9,7 +9,6 @@ const OPTIONS = { 'Over/Under': ['Over', 'Under', 'Both'], 'Even/Odd': ['Even', 
 const TIMEFRAME_RULES = { 'Accumulators': { units: ['Ticks'], defaultUnit: 'Ticks', min: 1, max: 85, fixed: true, label: '1 - 85 ticks' }, 'Multipliers': { units: ['Auto'], defaultUnit: 'Auto', min: 1, max: 1, fixed: true, label: 'Auto' }, 'Digits': { units: ['Ticks'], defaultUnit: 'Ticks', min: 1, max: 10, fixed: false }, 'Turbos': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false }, 'Ups & Downs': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false }, 'Touch & No Touch': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false }, 'Vanillas': { units: ['Minutes', 'Hours', 'Days'], defaultUnit: 'Minutes', min: 1, maxMap: { 'Minutes': 1440, 'Hours': 24, 'Days': 30 }, fixed: false } }
 
 export default function DennyBots({ token, accountId, onBalanceUpdate }) {
-  // UI State
   const [selectedMarket, setSelectedMarket] = useState('Volatility 100 (1s) Index')
   const [tradeType, setTradeType] = useState('Digits')
   const [subTradeType, setSubTradeType] = useState('Over/Under')
@@ -36,43 +35,11 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
   const logRef = useRef(null)
   const wsRef = useRef(null)
   const isRunningRef = useRef(false)
-  
-  // Refs for Trade Engine (avoids React closure issues)
-  const currentStakeRef = useRef(1.00)
-  const totalTradesRef = useRef(0)
-  const winsRef = useRef(0)
-  const lossesRef = useRef(0)
-  const consecutiveLossesRef = useRef(0)
-  const sessionPLRef = useRef(0.00)
-  const targetProfitRef = useRef('50.00')
-  const stopLossRef = useRef('20.00')
-  const martingaleRef = useRef('1.5')
-  const stakeRef = useRef('1.00')
-  const selectedMarketRef = useRef('Volatility 100 (1s) Index')
-  const tradeTypeRef = useRef('Digits')
-  const subTradeTypeRef = useRef('Over/Under')
-  const optionRef = useRef('Over')
-  const predictedDigitRef = useRef('3')
-  const timeframeUnitRef = useRef('Ticks')
-  const durationValueRef = useRef(1)
+  const reqIdRef = useRef(1)
 
   const addLog = (msg) => setLogs(prev => [...prev.slice(-20), `[${new Date().toLocaleTimeString()}] ${msg}`])
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight }, [logs])
   
-  // Sync State to Refs
-  useEffect(() => { currentStakeRef.current = currentStake }, [currentStake])
-  useEffect(() => { targetProfitRef.current = targetProfit }, [targetProfit])
-  useEffect(() => { stopLossRef.current = stopLoss }, [stopLoss])
-  useEffect(() => { martingaleRef.current = martingaleFactor }, [martingaleFactor])
-  useEffect(() => { stakeRef.current = stake }, [stake])
-  useEffect(() => { selectedMarketRef.current = selectedMarket }, [selectedMarket])
-  useEffect(() => { tradeTypeRef.current = tradeType }, [tradeType])
-  useEffect(() => { subTradeTypeRef.current = subTradeType }, [subTradeType])
-  useEffect(() => { optionRef.current = option }, [option])
-  useEffect(() => { predictedDigitRef.current = predictedDigit }, [predictedDigit])
-  useEffect(() => { timeframeUnitRef.current = timeframeUnit }, [timeframeUnit])
-  useEffect(() => { durationValueRef.current = durationValue }, [durationValue])
-
   useEffect(() => { if (SUB_TRADE_TYPES[tradeType]?.length > 0) setSubTradeType(SUB_TRADE_TYPES[tradeType][0]); else setSubTradeType('') }, [tradeType])
   useEffect(() => { if (subTradeType && OPTIONS[subTradeType]) setOption(OPTIONS[subTradeType][0]) }, [subTradeType])
   useEffect(() => { const rules = TIMEFRAME_RULES[tradeType]; setTimeframeUnit(rules.defaultUnit); setDurationValue(rules.min) }, [tradeType])
@@ -92,7 +59,10 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
         const ws = new WebSocket(wsUrl)
         wsRef.current = ws
         
-        ws.onopen = () => { addLog('✅ Connected to Deriv'); ws.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: 1 })) }
+        ws.onopen = () => { 
+          addLog('✅ Connected to Deriv')
+          ws.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: reqIdRef.current++ }))
+        }
         ws.onmessage = (event) => {
           try {
             const msg = JSON.parse(event.data)
@@ -101,18 +71,23 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
         }
         ws.onerror = () => addLog('❌ WS Error')
         ws.onclose = () => addLog('🔌 Disconnected')
-      } catch (err) { addLog(`❌ Connection failed`) }
+      } catch (err) { addLog(` Connection failed`) }
     }
     connectWS()
     return () => { if (wsRef.current) wsRef.current.close() }
   }, [token, accountId])
 
-  // API Request Helper
+  // API Request Helper - FIXED req_id issue
   const wsRequest = (request) => {
     return new Promise((resolve, reject) => {
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return reject(new Error('WebSocket not connected'))
-      const req_id = Date.now() + Math.random().toString(36).substr(2, 9)
-      request.req_id = req_id
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        return reject(new Error('WebSocket not connected'))
+      }
+      
+      const req_id = reqIdRef.current++
+      // Include req_id in the request object BEFORE sending
+      const requestWithId = { ...request, req_id }
+      
       const onMessage = (event) => {
         try {
           const msg = JSON.parse(event.data)
@@ -123,9 +98,14 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
           }
         } catch (e) {}
       }
+      
       wsRef.current.addEventListener('message', onMessage)
-      wsRef.current.send(JSON.stringify(request))
-      setTimeout(() => { wsRef.current.removeEventListener('message', onMessage); reject(new Error('Request timeout')) }, 15000)
+      wsRef.current.send(JSON.stringify(requestWithId))
+      
+      setTimeout(() => { 
+        wsRef.current.removeEventListener('message', onMessage)
+        reject(new Error('Request timeout')) 
+      }, 15000)
     })
   }
 
@@ -141,7 +121,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
             if (msg.subscription?.id) sub_id = msg.subscription.id
             if (msg.proposal_open_contract.is_sold) {
               wsRef.current.removeEventListener('message', onMessage)
-              if (sub_id) wsRef.current.send(JSON.stringify({ forget: sub_id, req_id: Date.now() }))
+              if (sub_id) wsRef.current.send(JSON.stringify({ forget: sub_id, req_id: reqIdRef.current++ }))
               resolve(msg.proposal_open_contract)
             } else {
               setCurrentPL(parseFloat(msg.proposal_open_contract.profit || 0))
@@ -150,17 +130,17 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
         } catch (e) {}
       }
       wsRef.current.addEventListener('message', onMessage)
-      wsRef.current.send(JSON.stringify({ proposal_open_contract: 1, contract_id: contract_id, subscribe: 1, req_id: Date.now() }))
+      wsRef.current.send(JSON.stringify({ proposal_open_contract: 1, contract_id: contract_id, subscribe: 1, req_id: reqIdRef.current++ }))
     })
   }
 
   const getContractType = () => {
-    if (tradeTypeRef.current === 'Digits') {
-      if (subTradeTypeRef.current === 'Over/Under') return optionRef.current === 'Over' ? 'DIGITOVER' : 'DIGITUNDER'
-      if (subTradeTypeRef.current === 'Even/Odd') return optionRef.current === 'Even' ? 'DIGITEVEN' : 'DIGITODD'
+    if (tradeType === 'Digits') {
+      if (subTradeType === 'Over/Under') return option === 'Over' ? 'DIGITOVER' : 'DIGITUNDER'
+      if (subTradeType === 'Even/Odd') return option === 'Even' ? 'DIGITEVEN' : 'DIGITODD'
       return 'DIGITDIFF'
     }
-    if (tradeTypeRef.current === 'Ups & Downs') return optionRef.current === 'Rise' || optionRef.current === 'Higher' ? 'CALL' : 'PUT'
+    if (tradeType === 'Ups & Downs') return option === 'Rise' || option === 'Higher' ? 'CALL' : 'PUT'
     return 'CALL'
   }
 
@@ -174,12 +154,23 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
           continue
         }
 
-        const symbol = SYMBOL_MAP[selectedMarketRef.current]
+        const symbol = SYMBOL_MAP[selectedMarket]
         const contractType = getContractType()
-        addLog(`🚀 Trade: ${contractType} ${durationValueRef.current}${timeframeUnitRef.current[0]} $${currentStakeRef.current.toFixed(2)}`)
+        addLog(`🚀 Trade: ${contractType} ${durationValue}${timeframeUnit[0]} $${currentStake}`)
 
-        const proposalReq = { proposal: 1, amount: currentStakeRef.current, basis: 'stake', contract_type: contractType, currency: 'USD', duration: durationValueRef.current, duration_unit: timeframeUnitRef.current === 'Minutes' ? 'm' : 't', underlying_symbol: symbol }
-        if (tradeTypeRef.current === 'Digits' && subTradeTypeRef.current === 'Over/Under' && predictedDigitRef.current) proposalReq.barrier = predictedDigitRef.current
+        const proposalReq = { 
+          proposal: 1, 
+          amount: currentStake, 
+          basis: 'stake', 
+          contract_type: contractType, 
+          currency: 'USD', 
+          duration: durationValue, 
+          duration_unit: timeframeUnit === 'Minutes' ? 'm' : 't', 
+          underlying_symbol: symbol 
+        }
+        if (tradeType === 'Digits' && subTradeType === 'Over/Under' && predictedDigit) {
+          proposalReq.barrier = predictedDigit
+        }
 
         const proposalRes = await wsRequest(proposalReq)
         if (!isRunningRef.current) break
@@ -196,31 +187,40 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
         const profit = parseFloat(contractResult.profit || 0)
         const isWin = profit > 0
         
-        totalTradesRef.current += 1
+        const newTotal = totalTrades + 1
+        setTotalTrades(newTotal)
+        
         if (isWin) {
-          winsRef.current += 1
-          consecutiveLossesRef.current = 0
-          currentStakeRef.current = parseFloat(stakeRef.current)
+          setWins(wins + 1)
+          setConsecutiveLosses(0)
+          setCurrentStake(parseFloat(stake))
           addLog(`✅ WON +$${profit.toFixed(2)}`)
         } else {
-          lossesRef.current += 1
-          consecutiveLossesRef.current += 1
-          currentStakeRef.current = currentStakeRef.current * parseFloat(martingaleRef.current)
+          setLosses(losses + 1)
+          const newConsecutive = consecutiveLosses + 1
+          setConsecutiveLosses(newConsecutive)
+          const newStake = currentStake * parseFloat(martingaleFactor)
+          setCurrentStake(newStake)
           addLog(`❌ LOST -$${profit.toFixed(2)}`)
         }
 
-        sessionPLRef.current += profit
-        setTotalTrades(totalTradesRef.current)
-        setWins(winsRef.current)
-        setLosses(lossesRef.current)
-        setConsecutiveLosses(consecutiveLossesRef.current)
-        setCurrentStake(currentStakeRef.current)
-        setCurrentPL(sessionPLRef.current)
+        const newPL = currentPL + profit
+        setCurrentPL(newPL)
 
-        if (sessionPLRef.current >= parseFloat(targetProfitRef.current)) { addLog(`🎯 Target hit! $${sessionPLRef.current.toFixed(2)}`); stopBot(); break }
-        if (sessionPLRef.current <= -parseFloat(stopLossRef.current)) { addLog(`🛑 Stop loss hit! $${sessionPLRef.current.toFixed(2)}`); stopBot(); break }
+        if (newPL >= parseFloat(targetProfit)) { 
+          addLog(`🎯 Target hit! $${newPL.toFixed(2)}`)
+          setIsRunning(false)
+          isRunningRef.current = false
+          break
+        }
+        if (newPL <= -parseFloat(stopLoss)) { 
+          addLog(`🛑 Stop loss hit! $${newPL.toFixed(2)}`)
+          setIsRunning(false)
+          isRunningRef.current = false
+          break
+        }
 
-        addLog(`📊 P/L: $${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
+        addLog(`📊 P/L: $${newPL.toFixed(2)} | Trades: ${newTotal}`)
         await new Promise(r => setTimeout(r, 500))
       } catch (error) {
         if (!isRunningRef.current) break
@@ -232,18 +232,47 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
 
   const startBot = () => {
     setValidationError('')
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { 
+      setValidationError('Not connected.')
+      return 
+    }
     isRunningRef.current = true
     setIsRunning(true)
-    sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake)
-    setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setLogs([])
-    addLog(`🚀 Denny Bot Started`); addLog(`Market: ${selectedMarket}`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`)
+    setCurrentPL(0)
+    setTotalTrades(0)
+    setWins(0)
+    setLosses(0)
+    setCurrentStake(parseFloat(stake))
+    setConsecutiveLosses(0)
+    setLogs([])
+    addLog(` Denny Bot Started`)
+    addLog(`Market: ${selectedMarket}`)
+    addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`)
     runTradeCycle()
   }
 
-  const stopBot = () => { isRunningRef.current = false; setIsRunning(false); if (wsRef.current) wsRef.current.send(JSON.stringify({ forget: 'all', req_id: Date.now() })); addLog(`⏹️ Stopped`) }
-  const resetBot = () => { stopBot(); setLogs(['System reset.']); setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setValidationError('') }
-  const rules = TIMEFRAME_RULES[tradeType]; const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
+  const stopBot = () => { 
+    isRunningRef.current = false
+    setIsRunning(false)
+    if (wsRef.current) wsRef.current.send(JSON.stringify({ forget: 'all', req_id: reqIdRef.current++ }))
+    addLog(`⏹️ Stopped`)
+  }
+  
+  const resetBot = () => { 
+    stopBot()
+    setLogs(['System reset.'])
+    setCurrentPL(0)
+    setTotalTrades(0)
+    setWins(0)
+    setLosses(0)
+    setConsecutiveLosses(0)
+    setCurrentStake(parseFloat(stake))
+    setValidationError('')
+  }
+  
+  const rules = TIMEFRAME_RULES[tradeType]
+  const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
+
   return (
     <div className="h-full flex flex-col bg-gray-950 text-white p-2 overflow-hidden">
       <div className="flex items-center gap-2 pb-1 border-b border-gray-800 mb-2 flex-shrink-0"><div className="w-7 h-7 bg-gradient-to-br from-orange-500 to-green-500 rounded-lg flex items-center justify-center"><Activity size={16} className="text-white" /></div><div><h2 className="text-base font-bold text-white">Denny Bots</h2><p className="text-[10px] text-gray-400 flex items-center gap-1"><ShieldCheck size={10} /> Zero Consecutive Losses</p></div></div>
