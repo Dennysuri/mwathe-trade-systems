@@ -8,12 +8,9 @@ const SUB_TRADE_TYPES = { 'Accumulators': [], 'Vanillas': ['Call/Put'], 'Turbos'
 const OPTIONS = { 'Over/Under': ['Over', 'Under', 'Both'], 'Even/Odd': ['Even', 'Odd', 'Both'], 'Matches/Differs': ['Matches', 'Differs', 'Both'], 'Turbos': ['Up', 'Down', 'Both'], 'Rise/Fall': ['Rise', 'Fall', 'Both'], 'Higher/Lower': ['Higher', 'Lower', 'Both'], 'Touch/No Touch': ['Touch', 'No Touch', 'Both'], 'Call/Put': ['Call', 'Put', 'Both'], 'Multipliers': ['Up', 'Down', 'Both'] }
 const TIMEFRAME_RULES = { 'Accumulators': { units: ['Ticks'], defaultUnit: 'Ticks', min: 1, max: 85, fixed: true, label: '1 - 85 ticks' }, 'Multipliers': { units: ['Auto'], defaultUnit: 'Auto', min: 1, max: 1, fixed: true, label: 'Auto' }, 'Digits': { units: ['Ticks'], defaultUnit: 'Ticks', min: 1, max: 10, fixed: false }, 'Turbos': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false }, 'Ups & Downs': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false }, 'Touch & No Touch': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false }, 'Vanillas': { units: ['Minutes', 'Hours', 'Days'], defaultUnit: 'Minutes', min: 1, maxMap: { 'Minutes': 1440, 'Hours': 24, 'Days': 30 }, fixed: false } }
 
-// CRITICAL FIX: Only these markets support Digits trading on Deriv
 const ALLOWED_DIGITS_MARKETS = ['R_10', 'R_25', 'R_50', 'R_75', 'R_100']
-
 const roundStake = (v) => Math.round(v * 100) / 100
 
-// --- HIGH-GRADE MATHEMATICAL STRATEGIES ---
 const calcEntropy = (arr) => { const f={}; arr.forEach(x=>f[x]=(f[x]||0)+1); let e=0; Object.values(f).forEach(c=>{const p=c/arr.length; e-=p*Math.log2(p)}); return e }
 const calcChiSquare = (digits, target) => { const f=Array(10).fill(0); digits.forEach(d=>f[d]++); const exp=digits.length/10; return (f[target]-exp)/exp }
 const calcMarkov = (digits, target, order=2) => { if(digits.length<order+1) return 0.1; const seq=digits.slice(-order); let match=0, total=0; for(let i=0;i<digits.length-order;i++){ let isMatch=true; for(let j=0;j<order;j++) if(digits[i+j]!==seq[j]) isMatch=false; if(isMatch){ total++; if(digits[i+order]===target) match++ } } return total===0 ? 0.1 : match/total }
@@ -36,7 +33,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   
   const [isRunning, setIsRunning] = useState(false)
   const [validationError, setValidationError] = useState('')
-  const [logs, setLogs] = useState(['System initialized. Ready to hunt.'])
+  const [logs, setLogs] = useState(['System initialized.'])
   const [currentPL, setCurrentPL] = useState(0.00)
   const [totalTrades, setTotalTrades] = useState(0)
   const [wins, setWins] = useState(0)
@@ -58,6 +55,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const lossesRef = useRef(0)
   const consecutiveLossesRef = useRef(0)
   const blacklistedMarketsRef = useRef([])
+  const historyLoadedRef = useRef(false)
 
   const addLog = (msg) => setLogs(prev => [...prev.slice(-50), `[${new Date().toLocaleTimeString()}] ${msg}`])
   useEffect(() => { if (logRef.current) requestAnimationFrame(() => { logRef.current.scrollTop = logRef.current.scrollHeight }) }, [logs])
@@ -78,14 +76,27 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const ws = new WebSocket(wsUrl)
         wsRef.current = ws
         ws.onopen = () => { addLog('✅ Connected to Deriv API'); ws.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: reqIdRef.current++ })) }
+        
         ws.onmessage = (event) => {
           try {
             const msg = JSON.parse(event.data)
+            
+            // FIX: Handle History Data (Loads 50 ticks instantly)
+            if (msg.msg_type === 'history') {
+              const sym = msg.history.symbol
+              if (msg.history.prices && msg.history.prices.length > 0) {
+                tickDataRef.current[sym] = msg.history.prices.map(p => parseFloat(p))
+                addLog(`📥 Loaded history for ${sym} (${msg.history.prices.length} ticks)`)
+              }
+            }
+            
+            // Handle Live Ticks (Sliding Window)
             if (msg.msg_type === 'tick') {
               const sym = msg.tick.symbol
               if (!tickDataRef.current[sym]) tickDataRef.current[sym] = []
               tickDataRef.current[sym] = [...tickDataRef.current[sym], msg.tick.quote].slice(-100)
             }
+            
             if (msg.msg_type === 'balance' && onBalanceUpdate) onBalanceUpdate(parseFloat(msg.balance.balance))
           } catch (e) {}
         }
@@ -96,6 +107,44 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     connectWS()
     return () => { if (wsRef.current) wsRef.current.close() }
   }, [token, accountId])
+
+  const loadAllHistory = () => {
+    return new Promise((resolve) => {
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return resolve()
+      
+      let loadedCount = 0
+      const totalMarkets = Object.values(SYMBOL_MAP).length
+      const checkDone = () => {
+        loadedCount++
+        if (loadedCount >= totalMarkets) {
+          historyLoadedRef.current = true
+          resolve()
+        }
+      }
+
+      Object.values(SYMBOL_MAP).forEach(sym => {
+        const reqId = reqIdRef.current++
+        const onMessage = (event) => {
+          try {
+            const msg = JSON.parse(event.data)
+            if (msg.req_id === reqId && msg.msg_type === 'history') {
+              wsRef.current.removeEventListener('message', onMessage)
+              if (msg.history.prices) {
+                tickDataRef.current[sym] = msg.history.prices.map(p => parseFloat(p))
+              }
+              checkDone()
+            }
+          } catch (e) {}
+        }
+        wsRef.current.addEventListener('message', onMessage)
+        // Request 50 ticks of history for the sliding window
+        wsRef.current.send(JSON.stringify({ ticks_history: sym, count: 50, end: 'latest', style: 'ticks', req_id: reqId }))
+      })
+      
+      // Timeout fallback if API is slow
+      setTimeout(() => { historyLoadedRef.current = true; resolve() }, 8000)
+    })
+  }
 
   const wsRequest = (request) => {
     return new Promise((resolve, reject) => {
@@ -155,7 +204,6 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
 
   const calculateConfluence = (symbol, targetDigit) => {
     const ticks = tickDataRef.current[symbol]
-    // CRITICAL FIX: Do not calculate if we don't have enough data
     if (!ticks || ticks.length < 20) return { score: 0, signal: 'CALL', reasons: ['Gathering data'] }
     
     let score = 50, reasons = [], signal = 'CALL'
@@ -202,13 +250,9 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     Object.keys(SYMBOL_MAP).forEach(name => {
       const sym = SYMBOL_MAP[name]
       if (blacklisted.includes(sym)) return
-      
-      // CRITICAL FIX: Only scan markets that support the current trade type
       if (tradeType === 'Digits' && !ALLOWED_DIGITS_MARKETS.includes(sym)) return
       
       const res = calculateConfluence(sym, predictedDigit)
-      
-      // CRITICAL FIX: Ignore markets that are still gathering data
       if (res.reasons.includes('Gathering data')) return
 
       if (res.score > bestScore) { 
@@ -216,7 +260,6 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       }
     })
 
-    // Fallback: If all valid markets are blacklisted, clear blacklist
     if (!bestSym) {
       blacklistedMarketsRef.current = []
       Object.keys(SYMBOL_MAP).forEach(name => {
@@ -233,25 +276,23 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   }
 
   const runTradeCycle = async () => {
+    // FIX: Load history immediately so we don't wait for live ticks
+    if (!historyLoadedRef.current) {
+      addLog('📡 Loading 50-tick history for all markets...')
+      await loadAllHistory()
+      addLog('✅ History loaded. Analysis ready.')
+    }
+
     while (isRunningRef.current) {
       try {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { await new Promise(r => setTimeout(r, 2000)); continue }
 
-        if (Object.keys(tickDataRef.current).length < 5) {
-          addLog('📡 Gathering market data across all indices...')
-          for (const sym of Object.values(SYMBOL_MAP)) {
-            if (wsRef.current.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({ ticks: sym, subscribe: 1, req_id: reqIdRef.current++ }))
-          }
-          await new Promise(r => setTimeout(r, 3000))
-        }
-
-        addLog(' Scanning all 13 markets for maximum confluence...')
+        addLog(' Scanning all markets for maximum confluence...')
         const best = scanMarkets()
         
-        // CRITICAL FIX: If no market is ready (all gathering data), wait and rescan. DO NOT TRADE.
-        if (!best.symbol || best.reasons.includes('Gathering data')) {
-          addLog('⏳ Waiting for market data to load...')
-          await new Promise(r => setTimeout(r, 2000))
+        if (!best.symbol) {
+          addLog('️ No valid market found. Re-checking...')
+          await new Promise(r => setTimeout(r, 1000))
           continue
         }
 
@@ -259,7 +300,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         setConfluenceScore(best.score)
 
         addLog(` LOCKED: ${best.symbol} | Score: ${best.score}% | Signal: ${best.signal}`)
-        addLog(`📊 Reasons: ${best.reasons.join(' | ')}`)
+        addLog(` Reasons: ${best.reasons.join(' | ')}`)
         addLog(` EXECUTING IMMEDIATELY...`)
 
         const contractType = getContractType()
@@ -307,7 +348,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         await new Promise(r => setTimeout(r, 500))
       } catch (error) {
         if (!isRunningRef.current) break
-        addLog(`❌ Error: ${error.message}`)
+        addLog(` Error: ${error.message}`)
         await new Promise(r => setTimeout(r, 2000))
       }
     }
@@ -318,7 +359,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }
     isRunningRef.current = true; setIsRunning(true)
     sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0
-    currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []
+    currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []; historyLoadedRef.current = false
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); setLogs([])
     addLog(` AUTOMATED BOT ACTIVATED`)
     addLog(`Type: ${tradeType} | Stake: $${stake} | Martingale: ${martingaleFactor}x`)
@@ -327,7 +368,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   }
 
   const stopBot = () => { isRunningRef.current = false; setIsRunning(false); if (wsRef.current) wsRef.current.send(JSON.stringify({ forget: 'all', req_id: reqIdRef.current++ })); addLog(`⏹️ Stopped`) }
-  const resetBot = () => { stopBot(); setLogs(['System reset.']); setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setValidationError(''); setConfluenceScore(0); setBestMarket('Scanning...'); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = [] }
+  const resetBot = () => { stopBot(); setLogs(['System reset.']); setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setValidationError(''); setConfluenceScore(0); setBestMarket('Scanning...'); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []; historyLoadedRef.current = false }
   const rules = TIMEFRAME_RULES[tradeType]
   const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
   return (
