@@ -257,7 +257,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       try {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { await new Promise(r => setTimeout(r, 2000)); continue }
         const best = scanMarkets()
-        // Silent scanning: if no market meets 60%, just wait and rescan
+        // Silent scanning: if no market meets 60%, just wait and rescan (no spam)
         if (!best.symbol) { await new Promise(r => setTimeout(r, 1000)); continue }
         
         setBestMarket(Object.keys(SYMBOL_MAP).find(key => SYMBOL_MAP[key] === best.symbol) || best.symbol)
@@ -321,7 +321,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0
     currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []; historyLoadedRef.current = false
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); setLogs([])
-    addLog(` AUTOMATED BOT ACTIVATED`)
+    addLog(`⚡ AUTOMATED BOT ACTIVATED`)
     addLog(`Type: ${tradeType} | Stake: $${stake} | Martingale: ${martingaleFactor}x`)
     addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`)
     runTradeCycle()
