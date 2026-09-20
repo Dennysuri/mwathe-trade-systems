@@ -119,7 +119,6 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           } catch (e) {}
         }
         wsRef.current.addEventListener('message', onMessage)
-        // FIX: subscribe: 1 ensures the sliding window updates with live ticks
         wsRef.current.send(JSON.stringify({ ticks_history: sym, count: 50, end: 'latest', style: 'ticks', subscribe: 1, req_id: reqId }))
       })
       setTimeout(() => { historyLoadedRef.current = true; resolve() }, 8000)
@@ -224,46 +223,53 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const scanMarkets = () => {
     let bestSym = null, bestScore = -1, bestSignal = 'CALL', bestReasons = []
     const blacklisted = blacklistedMarketsRef.current
+    
+    // DUAL-MODE: Normal Mode (60%), Recovery Mode (80%)
+    const minScore = consecutiveLossesRef.current > 0 ? 80 : 60
+    
     Object.keys(SYMBOL_MAP).forEach(name => {
       const sym = SYMBOL_MAP[name]
+      // STRICT BLACKLIST: Never trade blacklisted markets
       if (blacklisted.includes(sym)) return
       if (tradeType === 'Digits' && !ALLOWED_DIGITS_MARKETS.includes(sym)) return
       const res = calculateConfluence(sym, predictedDigit)
-      // FIX: 60% threshold and at least 1 strategy firing prevents hanging
-      if (res.score >= 60 && res.reasons.length >= 1 && res.score > bestScore) { 
+      if (res.score >= minScore && res.reasons.length >= 1 && res.score > bestScore) { 
         bestScore = res.score; bestSym = sym; bestSignal = res.signal; bestReasons = res.reasons 
       }
     })
+    
+    // CRITICAL FIX: DO NOT clear blacklist if no market found. Return null to wait.
     if (!bestSym) {
-      blacklistedMarketsRef.current = []
-      Object.keys(SYMBOL_MAP).forEach(name => {
-        const sym = SYMBOL_MAP[name]
-        if (tradeType === 'Digits' && !ALLOWED_DIGITS_MARKETS.includes(sym)) return
-        const res = calculateConfluence(sym, predictedDigit)
-        if (res.score >= 60 && res.reasons.length >= 1 && res.score > bestScore) { 
-          bestScore = res.score; bestSym = sym; bestSignal = res.signal; bestReasons = res.reasons 
-        }
-      })
+      return { symbol: null, score: 0, signal: 'CALL', reasons: [] }
     }
+    
     return { symbol: bestSym, score: bestScore, signal: bestSignal, reasons: bestReasons }
   }
 
   const runTradeCycle = async () => {
     if (!historyLoadedRef.current) {
-      addLog('🔬 Analyzing markets...')
+      addLog(' Analyzing markets...')
       await loadAllHistory()
     }
     while (isRunningRef.current) {
       try {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { await new Promise(r => setTimeout(r, 2000)); continue }
+        
         const best = scanMarkets()
-        // Silent scanning: if no market meets 60%, just wait and rescan (no spam)
-        if (!best.symbol) { await new Promise(r => setTimeout(r, 1000)); continue }
+        
+        // If no market meets threshold, WAIT silently (Recovery mode will log a message)
+        if (!best.symbol) { 
+          if (consecutiveLossesRef.current > 0) {
+            addLog(`️ RECOVERY MODE: Waiting for 80%+ setup...`)
+          }
+          await new Promise(r => setTimeout(r, 2000)); 
+          continue 
+        }
         
         setBestMarket(Object.keys(SYMBOL_MAP).find(key => SYMBOL_MAP[key] === best.symbol) || best.symbol)
         setConfluenceScore(best.score)
-        addLog(`🎯 LOCKED: ${best.symbol} | Score: ${best.score}%`)
-        addLog(`🚀 EXECUTING IMMEDIATELY...`)
+        addLog(` LOCKED: ${best.symbol} | Score: ${best.score}%`)
+        addLog(` EXECUTING IMMEDIATELY...`)
         
         const contractType = getContractType()
         const tradeStake = roundStake(currentStakeRef.current)
@@ -285,17 +291,22 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         sessionPLRef.current += profit
         
         if (isWin) {
-          winsRef.current += 1; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []
+          winsRef.current += 1; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake)
+          blacklistedMarketsRef.current = [] // Clear blacklist ONLY on win
           addLog(`✅ WON +$${profit.toFixed(2)} | Stake reset to base`)
+          addLog(` NORMAL MODE ACTIVATED`)
         } else {
-          lossesRef.current += 1; consecutiveLossesRef.current += 1; blacklistedMarketsRef.current.push(best.symbol)
+          lossesRef.current += 1; consecutiveLossesRef.current += 1
+          // STRICT BLACKLIST: Add to blacklist and NEVER clear until win
+          if (!blacklistedMarketsRef.current.includes(best.symbol)) {
+            blacklistedMarketsRef.current.push(best.symbol)
+          }
           addLog(`🛡️ Blacklisted ${best.symbol} to prevent consecutive loss.`)
           const martingale = parseFloat(martingaleFactor) || 1.5
           currentStakeRef.current = roundStake(currentStakeRef.current * martingale)
-          addLog(`❌ LOST -$${profit.toFixed(2)} | Martingale ${martingale}x applied → Next: $${currentStakeRef.current.toFixed(2)}`)
+          addLog(`🔴 RECOVERY MODE ACTIVATED | Martingale ${martingale}x applied → Next: $${currentStakeRef.current.toFixed(2)}`)
         }
         
-        // CRITICAL: Sync refs to state immediately
         setTotalTrades(totalTradesRef.current); setWins(winsRef.current); setLosses(lossesRef.current); 
         setConsecutiveLosses(consecutiveLossesRef.current); setCurrentStake(currentStakeRef.current); 
         setCurrentPL(sessionPLRef.current)
@@ -303,7 +314,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         if (sessionPLRef.current >= parseFloat(targetProfit)) { addLog(`🎯 TARGET HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
         if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog(`🛑 STOP LOSS HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
         
-        addLog(` Session: P/L $${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
+        addLog(`📊 Session: P/L $${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
         addLog('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
         await new Promise(r => setTimeout(r, 500))
       } catch (error) {
@@ -363,7 +374,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col">
         <div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">EXECUTION LOG (Scrollable)</span></div>
         <div ref={logRef} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5" style={{scrollBehavior: 'auto'}}>
-          {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('TARGET') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') || log.includes('Error') || log.includes('CRITICAL') ? 'text-red-500' : log.includes('🚀') || log.includes('🎯') || log.includes('🔬') ? 'text-sky-400' : log.includes('⏹️') || log.includes('⚠️') || log.includes('LOCKDOWN') ? 'text-orange-400' : log.includes('━━') ? 'text-gray-600' : 'text-gray-400'}>{log}</p>)}
+          {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('TARGET') || log.includes('NORMAL') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') || log.includes('Error') || log.includes('RECOVERY') ? 'text-red-500' : log.includes('🚀') || log.includes('🎯') || log.includes('🔬') || log.includes('🛡️') ? 'text-sky-400' : log.includes('️') || log.includes('⚠️') || log.includes('LOCKDOWN') ? 'text-orange-400' : log.includes('━━') ? 'text-gray-600' : 'text-gray-400'}>{log}</p>)}
         </div>
       </div>
     </div>
