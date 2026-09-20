@@ -188,33 +188,33 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     const td = parseInt(targetDigit)
     if (tradeType === 'Digits') {
       const markovProb = calcMarkov(digits, td, 2)
-      if (markovProb > 0.25) { score += 15; reasons.push(`Markov: ${(markovProb*100).toFixed(0)}%`) }
+      if (markovProb > 0.25) { score += 15; reasons.push('markov') }
       const entropy = calcEntropy(digits)
-      if (entropy < 2.8) { score += 15; reasons.push(`Low Entropy: ${entropy.toFixed(2)}`) }
+      if (entropy < 2.8) { score += 15; reasons.push('entropy') }
       const chi = calcChiSquare(digits, td)
-      if (chi < -0.2) { score += 15; reasons.push(`Chi-Sq: Digit ${td} is due`) }
+      if (chi < -0.2) { score += 15; reasons.push('chisq') }
       const freq = digits.filter(d => d === td).length / digits.length
-      if (freq < 0.08) { score += 10; reasons.push(`Frequency: ${td} is cold`) }
+      if (freq < 0.08) { score += 10; reasons.push('freq') }
       signal = (option === 'Over' && td < 5) || (option === 'Under' && td > 4) ? 'CALL' : 'PUT'
     } else if (tradeType === 'Ups & Downs') {
       const hurst = calcHurst(ticks)
-      if (hurst > 0.6) { score += 20; reasons.push(`Hurst: Strong Trend (${hurst.toFixed(2)})`) }
+      if (hurst > 0.6) { score += 20; reasons.push('hurst') }
       const kalman = calcKalman(ticks)
-      if (ticks[ticks.length-1] > kalman) { score += 15; signal = 'CALL'; reasons.push('Kalman: Bullish') }
-      else { score += 15; signal = 'PUT'; reasons.push('Kalman: Bearish') }
+      if (ticks[ticks.length-1] > kalman) { score += 15; signal = 'CALL'; reasons.push('kalman') }
+      else { score += 15; signal = 'PUT'; reasons.push('kalman') }
       const rsi = calcRSI(ticks)
-      if (rsi < 30 && signal === 'CALL') { score += 15; reasons.push(`RSI Oversold: ${rsi.toFixed(1)}`) }
-      else if (rsi > 70 && signal === 'PUT') { score += 15; reasons.push(`RSI Overbought: ${rsi.toFixed(1)}`) }
+      if (rsi < 30 && signal === 'CALL') { score += 15; reasons.push('rsi') }
+      else if (rsi > 70 && signal === 'PUT') { score += 15; reasons.push('rsi') }
       const vel = ticks[ticks.length-1] - ticks[ticks.length-5]
-      if ((vel > 0 && signal === 'CALL') || (vel < 0 && signal === 'PUT')) { score += 10; reasons.push('Velocity aligned') }
+      if ((vel > 0 && signal === 'CALL') || (vel < 0 && signal === 'PUT')) { score += 10; reasons.push('vel') }
     } else {
       const hurst = calcHurst(ticks)
-      if (hurst > 0.55) { score += 25; signal = 'CALL'; reasons.push('Hurst: Uptrend') }
-      else { score += 25; signal = 'PUT'; reasons.push('Hurst: Downtrend') }
+      if (hurst > 0.55) { score += 25; signal = 'CALL'; reasons.push('hurst') }
+      else { score += 25; signal = 'PUT'; reasons.push('hurst') }
       const rsi = calcRSI(ticks)
       if ((rsi > 50 && signal === 'CALL') || (rsi < 50 && signal === 'PUT')) score += 20
       const atr = calcATR(ticks)
-      if (atr > 0.001) { score += 15; reasons.push('Volatility sufficient') }
+      if (atr > 0.001) { score += 15; reasons.push('atr') }
     }
     return { score: Math.min(score, 99), signal, reasons }
   }
@@ -227,15 +227,21 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       if (blacklisted.includes(sym)) return
       if (tradeType === 'Digits' && !ALLOWED_DIGITS_MARKETS.includes(sym)) return
       const res = calculateConfluence(sym, predictedDigit)
-      if (res.score > bestScore) { bestScore = res.score; bestSym = sym; bestSignal = res.signal; bestReasons = res.reasons }
+      // CRITICAL FIX: Only consider markets with 75%+ score AND at least 2 strategies aligned
+      if (res.score >= 75 && res.reasons.length >= 2 && res.score > bestScore) { 
+        bestScore = res.score; bestSym = sym; bestSignal = res.signal; bestReasons = res.reasons 
+      }
     })
+    // Fallback: Clear blacklist if no valid market found
     if (!bestSym) {
       blacklistedMarketsRef.current = []
       Object.keys(SYMBOL_MAP).forEach(name => {
         const sym = SYMBOL_MAP[name]
         if (tradeType === 'Digits' && !ALLOWED_DIGITS_MARKETS.includes(sym)) return
         const res = calculateConfluence(sym, predictedDigit)
-        if (res.score > bestScore) { bestScore = res.score; bestSym = sym; bestSignal = res.signal; bestReasons = res.reasons }
+        if (res.score >= 75 && res.reasons.length >= 2 && res.score > bestScore) { 
+          bestScore = res.score; bestSym = sym; bestSignal = res.signal; bestReasons = res.reasons 
+        }
       })
     }
     return { symbol: bestSym, score: bestScore, signal: bestSignal, reasons: bestReasons }
@@ -243,18 +249,18 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
 
   const runTradeCycle = async () => {
     if (!historyLoadedRef.current) {
-      addLog('🔬 Analyzing markets...')
+      addLog(' Analyzing markets...')
       await loadAllHistory()
     }
     while (isRunningRef.current) {
       try {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { await new Promise(r => setTimeout(r, 2000)); continue }
         const best = scanMarkets()
+        // SILENT SCANNING: If no market meets 75% threshold, just wait and rescan (no log message)
         if (!best.symbol) { await new Promise(r => setTimeout(r, 1000)); continue }
         setBestMarket(Object.keys(SYMBOL_MAP).find(key => SYMBOL_MAP[key] === best.symbol) || best.symbol)
         setConfluenceScore(best.score)
-        addLog(`🎯 LOCKED: ${best.symbol} | Score: ${best.score}% | Signal: ${best.signal}`)
-        if (best.reasons.length > 0) addLog(`📊 Reasons: ${best.reasons.join(' | ')}`)
+        addLog(`🎯 LOCKED: ${best.symbol} | Score: ${best.score}%`)
         addLog(`🚀 EXECUTING IMMEDIATELY...`)
         const contractType = getContractType()
         const tradeStake = roundStake(currentStakeRef.current)
@@ -282,7 +288,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           addLog(`❌ LOST -$${profit.toFixed(2)} | Martingale ${martingale}x applied → Next: $${currentStakeRef.current.toFixed(2)}`)
         }
         setTotalTrades(totalTradesRef.current); setWins(winsRef.current); setLosses(lossesRef.current); setConsecutiveLosses(consecutiveLossesRef.current); setCurrentStake(currentStakeRef.current); setCurrentPL(sessionPLRef.current)
-        if (sessionPLRef.current >= parseFloat(targetProfit)) { addLog(`🎯 TARGET HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
+        if (sessionPLRef.current >= parseFloat(targetProfit)) { addLog(` TARGET HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
         if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog(`🛑 STOP LOSS HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
         addLog(` Session: P/L $${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
         addLog('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
@@ -302,7 +308,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0
     currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []; historyLoadedRef.current = false
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); setLogs([])
-    addLog(` AUTOMATED BOT ACTIVATED`)
+    addLog(`⚡ AUTOMATED BOT ACTIVATED`)
     addLog(`Type: ${tradeType} | Stake: $${stake} | Martingale: ${martingaleFactor}x`)
     addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`)
     runTradeCycle()
@@ -344,7 +350,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col">
         <div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">EXECUTION LOG (Scrollable)</span></div>
         <div ref={logRef} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5" style={{scrollBehavior: 'auto'}}>
-          {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('TARGET') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') || log.includes('Error') || log.includes('CRITICAL') ? 'text-red-500' : log.includes('🚀') || log.includes('🎯') || log.includes('🔬') ? 'text-sky-400' : log.includes('⏹️') || log.includes('⚠️') || log.includes('LOCKDOWN') ? 'text-orange-400' : log.includes('━━') ? 'text-gray-600' : 'text-gray-400'}>{log}</p>)}
+          {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('TARGET') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') || log.includes('Error') || log.includes('CRITICAL') ? 'text-red-500' : log.includes('') || log.includes('🎯') || log.includes('🔬') ? 'text-sky-400' : log.includes('⏹️') || log.includes('⚠️') || log.includes('LOCKDOWN') ? 'text-orange-400' : log.includes('━━') ? 'text-gray-600' : 'text-gray-400'}>{log}</p>)}
         </div>
       </div>
     </div>
