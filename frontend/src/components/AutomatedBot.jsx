@@ -11,13 +11,24 @@ const TIMEFRAME_RULES = { 'Accumulators': { units: ['Ticks'], defaultUnit: 'Tick
 const ALLOWED_DIGITS_MARKETS = ['R_10', 'R_25', 'R_50', 'R_75', 'R_100']
 const roundStake = (v) => Math.round(v * 100) / 100
 
-const calcEntropy = (arr) => { const f={}; arr.forEach(x=>f[x]=(f[x]||0)+1); let e=0; Object.values(f).forEach(c=>{const p=c/arr.length; e-=p*Math.log2(p)}); return e }
-const calcChiSquare = (digits, target) => { const f=Array(10).fill(0); digits.forEach(d=>f[d]++); const exp=digits.length/10; return (f[target]-exp)/exp }
-const calcMarkov = (digits, target, order=2) => { if(digits.length<order+1) return 0.1; const seq=digits.slice(-order); let match=0, total=0; for(let i=0;i<digits.length-order;i++){ let isMatch=true; for(let j=0;j<order;j++) if(digits[i+j]!==seq[j]) isMatch=false; if(isMatch){ total++; if(digits[i+order]===target) match++ } } return total===0 ? 0.1 : match/total }
+// --- OPTIMIZED FAST MATH STRATEGIES (Prevents Lag) ---
+const calcFastEntropy = (arr) => { 
+  const recent = arr.slice(-20)
+  const unique = new Set(recent).size
+  // If unique digits are low, pattern is predictable
+  return unique <= 4 ? 2.0 : 3.2 
+}
+const calcFastMarkov = (digits, target) => { 
+  const recent = digits.slice(-20)
+  const matches = recent.filter(d => d === target).length
+  return matches >= 4 ? 0.40 : 0.10 
+}
+const calcFastFrequency = (digits, target) => {
+  const freq = digits.filter(d => d === target).length / digits.length
+  return freq < 0.07 ? true : false
+}
 const calcHurst = (ticks) => { if(ticks.length<20) return 0.5; const n=ticks.length; const mean=ticks.reduce((a,b)=>a+b,0)/n; const dev=ticks.map(t=>t-mean); const cum=dev.reduce((acc,d,i)=>[...acc,(acc[i-1]||0)+d],[]); const range=Math.max(...cum)-Math.min(...cum); const std=Math.sqrt(dev.map(d=>d*d).reduce((a,b)=>a+b,0)/n); return Math.log(range/(std||1))/Math.log(n) }
 const calcRSI = (ticks, p=14) => { if(ticks.length<p+1) return 50; let g=0,l=0; for(let i=ticks.length-p;i<ticks.length;i++){const c=ticks[i]-ticks[i-1]; if(c>0)g+=c; else l-=c} const rs=g/(l||1); return 100-(100/(1+rs)) }
-const calcATR = (ticks, p=14) => { if(ticks.length<p+1) return 0; let tr=0; for(let i=ticks.length-p;i<ticks.length;i++) tr+=Math.abs(ticks[i]-ticks[i-1]); return tr/p }
-const calcKalman = (ticks) => { let x=ticks[0], p=1, q=0.01, r=0.1; for(let i=1;i<ticks.length;i++){ const k=p/(p+r); x=x+k*(ticks[i]-x); p=(1-k)*p+q } return x }
 
 export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const [tradeType, setTradeType] = useState('Digits')
@@ -56,8 +67,8 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const consecutiveLossesRef = useRef(0)
   const blacklistedMarketsRef = useRef([])
   const historyLoadedRef = useRef(false)
-  const recoveryLogAddedRef = useRef(false) // Ensures recovery message only shows once
-  const cooldownActiveRef = useRef(false) // Prevents 3rd consecutive loss
+  const recoveryLogAddedRef = useRef(false)
+  const cooldownActiveRef = useRef(false)
 
   const addLog = (msg) => setLogs(prev => [...prev.slice(-50), `[${new Date().toLocaleTimeString()}] ${msg}`])
   useEffect(() => { if (logRef.current) requestAnimationFrame(() => { logRef.current.scrollTop = logRef.current.scrollHeight }) }, [logs])
@@ -185,39 +196,23 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
 
   const calculateConfluence = (symbol, targetDigit) => {
     const ticks = tickDataRef.current[symbol]
-    if (!ticks || ticks.length < 20) return { score: 50, signal: 'CALL', reasons: [] }
+    if (!ticks || ticks.length < 30) return { score: 50, signal: 'CALL', reasons: [] }
+    
     let score = 50, reasons = [], signal = 'CALL'
     const digits = ticks.map(t => parseInt(t.toString().slice(-1)))
     const td = parseInt(targetDigit)
+    
     if (tradeType === 'Digits') {
-      const markovProb = calcMarkov(digits, td, 2)
-      if (markovProb > 0.25) { score += 15; reasons.push('m') }
-      const entropy = calcEntropy(digits)
-      if (entropy < 2.8) { score += 15; reasons.push('e') }
-      const chi = calcChiSquare(digits, td)
-      if (chi < -0.2) { score += 15; reasons.push('c') }
-      const freq = digits.filter(d => d === td).length / digits.length
-      if (freq < 0.08) { score += 10; reasons.push('f') }
+      if (calcFastMarkov(digits, td) > 0.35) { score += 20; reasons.push('m') }
+      if (calcFastEntropy(digits) < 2.5) { score += 20; reasons.push('e') }
+      if (calcFastFrequency(digits, td)) { score += 20; reasons.push('f') }
       signal = (option === 'Over' && td < 5) || (option === 'Under' && td > 4) ? 'CALL' : 'PUT'
-    } else if (tradeType === 'Ups & Downs') {
-      const hurst = calcHurst(ticks)
-      if (hurst > 0.6) { score += 20; reasons.push('h') }
-      const kalman = calcKalman(ticks)
-      if (ticks[ticks.length-1] > kalman) { score += 15; signal = 'CALL'; reasons.push('k') }
-      else { score += 15; signal = 'PUT'; reasons.push('k') }
-      const rsi = calcRSI(ticks)
-      if (rsi < 30 && signal === 'CALL') { score += 15; reasons.push('r') }
-      else if (rsi > 70 && signal === 'PUT') { score += 15; reasons.push('r') }
-      const vel = ticks[ticks.length-1] - ticks[ticks.length-5]
-      if ((vel > 0 && signal === 'CALL') || (vel < 0 && signal === 'PUT')) { score += 10; reasons.push('v') }
     } else {
       const hurst = calcHurst(ticks)
-      if (hurst > 0.55) { score += 25; signal = 'CALL'; reasons.push('h') }
-      else { score += 25; signal = 'PUT'; reasons.push('h') }
+      if (hurst > 0.65) { score += 30; reasons.push('h') }
       const rsi = calcRSI(ticks)
-      if ((rsi > 50 && signal === 'CALL') || (rsi < 50 && signal === 'PUT')) score += 20
-      const atr = calcATR(ticks)
-      if (atr > 0.001) { score += 15; reasons.push('a') }
+      if (rsi < 30 || rsi > 70) { score += 25; reasons.push('r') }
+      if (hurst > 0.5) signal = 'CALL' else signal = 'PUT'
     }
     return { score: Math.min(score, 99), signal, reasons }
   }
@@ -225,26 +220,21 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const scanMarkets = () => {
     let bestSym = null, bestScore = -1, bestSignal = 'CALL', bestReasons = []
     const blacklisted = blacklistedMarketsRef.current
-    const isRecovery = consecutiveLossesRef.current > 0
     
-    // FIGHT FREQUENT LOSSES: Require 2 strategies in Normal, 3 in Recovery
-    const minReasons = isRecovery ? 3 : 2 
-    
+    // SCAN ALL 13 MARKETS
     Object.keys(SYMBOL_MAP).forEach(name => {
       const sym = SYMBOL_MAP[name]
       if (blacklisted.includes(sym)) return
       if (tradeType === 'Digits' && !ALLOWED_DIGITS_MARKETS.includes(sym)) return
+      
       const res = calculateConfluence(sym, predictedDigit)
-      // Only execute if enough strategies align
-      if (res.reasons.length >= minReasons && res.score > bestScore) { 
+      // STRICT: Require 3 strategies to align (Normal & Recovery)
+      if (res.reasons.length >= 3 && res.score > bestScore) { 
         bestScore = res.score; bestSym = sym; bestSignal = res.signal; bestReasons = res.reasons 
       }
     })
     
-    if (!bestSym) {
-      return { symbol: null, score: 0, signal: 'CALL', reasons: [] }
-    }
-    
+    if (!bestSym) return { symbol: null, score: 0, signal: 'CALL', reasons: [] }
     return { symbol: bestSym, score: bestScore, signal: bestSignal, reasons: bestReasons }
   }
 
@@ -253,36 +243,42 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       addLog('🔬 Analyzing markets...')
       await loadAllHistory()
     }
+    
+    let lastLossTime = 0
+    
     while (isRunningRef.current) {
       try {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { await new Promise(r => setTimeout(r, 2000)); continue }
         
-        // PREVENT 3RD LOSS: Hard 30-second cooldown if 2 consecutive losses occur
+        // 15s Cooldown after ANY loss
+        if (Date.now() - lastLossTime < 15000) {
+          await new Promise(r => setTimeout(r, 2000)); continue
+        }
+        
+        // 30s Hard Cooldown after 2 consecutive losses
         if (consecutiveLossesRef.current >= 2 && !cooldownActiveRef.current) {
-          addLog(`🛑 2 CONSECUTIVE LOSSES DETECTED. INITIATING 30-SECOND MARKET COOLDOWN...`)
+          addLog(`🛑 2 CONSECUTIVE LOSSES. 30-SECOND COOLDOWN...`)
           cooldownActiveRef.current = true
           await new Promise(r => setTimeout(r, 30000))
           cooldownActiveRef.current = false
-          recoveryLogAddedRef.current = false // Reset to allow recovery log if needed again
+          recoveryLogAddedRef.current = false
           continue
         }
 
         const best = scanMarkets()
         
-        // SILENT WAITING WITH 'O' SYMBOL
         if (!best.symbol) { 
           if (consecutiveLossesRef.current > 0 && !recoveryLogAddedRef.current) {
-            addLog(`🔴 RECOVERY MODE: ⏳ [O]`)
+            addLog(` RECOVERY MODE: ⏳ [O]`)
             recoveryLogAddedRef.current = true
           }
-          await new Promise(r => setTimeout(r, 2000)); 
-          continue 
+          await new Promise(r => setTimeout(r, 2000)); continue 
         }
         
         setBestMarket(Object.keys(SYMBOL_MAP).find(key => SYMBOL_MAP[key] === best.symbol) || best.symbol)
         setConfluenceScore(best.score)
         addLog(`🎯 LOCKED: ${best.symbol} | Score: ${best.score}%`)
-        addLog(`🚀 EXECUTING IMMEDIATELY...`)
+        addLog(`🚀 EXECUTING...`)
         
         const contractType = getContractType()
         const tradeStake = roundStake(currentStakeRef.current)
@@ -294,7 +290,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const buyRes = await wsRequest({ buy: proposalRes.proposal.id, price: proposalRes.proposal.ask_price })
         if (!isRunningRef.current) break
         
-        addLog(`✅ Contract purchased: ${buyRes.buy.contract_id}`)
+        addLog(`✅ Contract: ${buyRes.buy.contract_id}`)
         const contractResult = await monitorContract(buyRes.buy.contract_id)
         if (!isRunningRef.current || !contractResult) break
         
@@ -307,17 +303,16 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           winsRef.current += 1; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake)
           blacklistedMarketsRef.current = []
           recoveryLogAddedRef.current = false
-          addLog(`✅ WON +$${profit.toFixed(2)} | Stake reset to base`)
-          addLog(`🟢 NORMAL MODE ACTIVATED`)
+          addLog(`✅ WON +$${profit.toFixed(2)}`)
+          addLog(` NORMAL MODE`)
         } else {
           lossesRef.current += 1; consecutiveLossesRef.current += 1
-          if (!blacklistedMarketsRef.current.includes(best.symbol)) {
-            blacklistedMarketsRef.current.push(best.symbol)
-          }
-          addLog(`🛡️ Blacklisted ${best.symbol} to prevent consecutive loss.`)
+          lastLossTime = Date.now()
+          if (!blacklistedMarketsRef.current.includes(best.symbol)) blacklistedMarketsRef.current.push(best.symbol)
+          addLog(`🛡️ Blacklisted ${best.symbol}`)
           const martingale = parseFloat(martingaleFactor) || 1.5
           currentStakeRef.current = roundStake(currentStakeRef.current * martingale)
-          addLog(`❌ LOST -$${profit.toFixed(2)} | Martingale ${martingale}x applied → Next: $${currentStakeRef.current.toFixed(2)}`)
+          addLog(`❌ LOST -$${profit.toFixed(2)} | Next: $${currentStakeRef.current.toFixed(2)}`)
         }
         
         setTotalTrades(totalTradesRef.current); setWins(winsRef.current); setLosses(lossesRef.current); 
@@ -325,11 +320,10 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         setCurrentPL(sessionPLRef.current)
         
         if (sessionPLRef.current >= parseFloat(targetProfit)) { addLog(`🎯 TARGET HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
-        if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog(`🛑 STOP LOSS HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
+        if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog(`🛑 STOP LOSS HIT!`); setIsRunning(false); isRunningRef.current = false; break }
         
-        addLog(`📊 Session: P/L $${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
-        addLog('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-        await new Promise(r => setTimeout(r, 500))
+        addLog(`📊 P/L: $${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
+        await new Promise(r => setTimeout(r, 1000))
       } catch (error) {
         if (!isRunningRef.current) break
         addLog(`❌ Error: ${error.message}`)
