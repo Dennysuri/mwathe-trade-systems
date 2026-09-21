@@ -56,6 +56,8 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const consecutiveLossesRef = useRef(0)
   const blacklistedMarketsRef = useRef([])
   const historyLoadedRef = useRef(false)
+  const recoveryLogAddedRef = useRef(false) // Ensures recovery message only shows once
+  const cooldownActiveRef = useRef(false) // Prevents 3rd consecutive loss
 
   const addLog = (msg) => setLogs(prev => [...prev.slice(-50), `[${new Date().toLocaleTimeString()}] ${msg}`])
   useEffect(() => { if (logRef.current) requestAnimationFrame(() => { logRef.current.scrollTop = logRef.current.scrollHeight }) }, [logs])
@@ -223,22 +225,22 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const scanMarkets = () => {
     let bestSym = null, bestScore = -1, bestSignal = 'CALL', bestReasons = []
     const blacklisted = blacklistedMarketsRef.current
+    const isRecovery = consecutiveLossesRef.current > 0
     
-    // DUAL-MODE: Normal Mode (60%), Recovery Mode (80%)
-    const minScore = consecutiveLossesRef.current > 0 ? 80 : 60
+    // FIGHT FREQUENT LOSSES: Require 2 strategies in Normal, 3 in Recovery
+    const minReasons = isRecovery ? 3 : 2 
     
     Object.keys(SYMBOL_MAP).forEach(name => {
       const sym = SYMBOL_MAP[name]
-      // STRICT BLACKLIST: Never trade blacklisted markets
       if (blacklisted.includes(sym)) return
       if (tradeType === 'Digits' && !ALLOWED_DIGITS_MARKETS.includes(sym)) return
       const res = calculateConfluence(sym, predictedDigit)
-      if (res.score >= minScore && res.reasons.length >= 1 && res.score > bestScore) { 
+      // Only execute if enough strategies align
+      if (res.reasons.length >= minReasons && res.score > bestScore) { 
         bestScore = res.score; bestSym = sym; bestSignal = res.signal; bestReasons = res.reasons 
       }
     })
     
-    // CRITICAL FIX: DO NOT clear blacklist if no market found. Return null to wait.
     if (!bestSym) {
       return { symbol: null, score: 0, signal: 'CALL', reasons: [] }
     }
@@ -248,19 +250,30 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
 
   const runTradeCycle = async () => {
     if (!historyLoadedRef.current) {
-      addLog(' Analyzing markets...')
+      addLog('🔬 Analyzing markets...')
       await loadAllHistory()
     }
     while (isRunningRef.current) {
       try {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { await new Promise(r => setTimeout(r, 2000)); continue }
         
+        // PREVENT 3RD LOSS: Hard 30-second cooldown if 2 consecutive losses occur
+        if (consecutiveLossesRef.current >= 2 && !cooldownActiveRef.current) {
+          addLog(`🛑 2 CONSECUTIVE LOSSES DETECTED. INITIATING 30-SECOND MARKET COOLDOWN...`)
+          cooldownActiveRef.current = true
+          await new Promise(r => setTimeout(r, 30000))
+          cooldownActiveRef.current = false
+          recoveryLogAddedRef.current = false // Reset to allow recovery log if needed again
+          continue
+        }
+
         const best = scanMarkets()
         
-        // If no market meets threshold, WAIT silently (Recovery mode will log a message)
+        // SILENT WAITING WITH 'O' SYMBOL
         if (!best.symbol) { 
-          if (consecutiveLossesRef.current > 0) {
-            addLog(`️ RECOVERY MODE: Waiting for 80%+ setup...`)
+          if (consecutiveLossesRef.current > 0 && !recoveryLogAddedRef.current) {
+            addLog(`🔴 RECOVERY MODE: ⏳ [O]`)
+            recoveryLogAddedRef.current = true
           }
           await new Promise(r => setTimeout(r, 2000)); 
           continue 
@@ -268,8 +281,8 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         
         setBestMarket(Object.keys(SYMBOL_MAP).find(key => SYMBOL_MAP[key] === best.symbol) || best.symbol)
         setConfluenceScore(best.score)
-        addLog(` LOCKED: ${best.symbol} | Score: ${best.score}%`)
-        addLog(` EXECUTING IMMEDIATELY...`)
+        addLog(`🎯 LOCKED: ${best.symbol} | Score: ${best.score}%`)
+        addLog(`🚀 EXECUTING IMMEDIATELY...`)
         
         const contractType = getContractType()
         const tradeStake = roundStake(currentStakeRef.current)
@@ -292,19 +305,19 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         
         if (isWin) {
           winsRef.current += 1; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake)
-          blacklistedMarketsRef.current = [] // Clear blacklist ONLY on win
+          blacklistedMarketsRef.current = []
+          recoveryLogAddedRef.current = false
           addLog(`✅ WON +$${profit.toFixed(2)} | Stake reset to base`)
-          addLog(` NORMAL MODE ACTIVATED`)
+          addLog(`🟢 NORMAL MODE ACTIVATED`)
         } else {
           lossesRef.current += 1; consecutiveLossesRef.current += 1
-          // STRICT BLACKLIST: Add to blacklist and NEVER clear until win
           if (!blacklistedMarketsRef.current.includes(best.symbol)) {
             blacklistedMarketsRef.current.push(best.symbol)
           }
           addLog(`🛡️ Blacklisted ${best.symbol} to prevent consecutive loss.`)
           const martingale = parseFloat(martingaleFactor) || 1.5
           currentStakeRef.current = roundStake(currentStakeRef.current * martingale)
-          addLog(`🔴 RECOVERY MODE ACTIVATED | Martingale ${martingale}x applied → Next: $${currentStakeRef.current.toFixed(2)}`)
+          addLog(`❌ LOST -$${profit.toFixed(2)} | Martingale ${martingale}x applied → Next: $${currentStakeRef.current.toFixed(2)}`)
         }
         
         setTotalTrades(totalTradesRef.current); setWins(winsRef.current); setLosses(lossesRef.current); 
@@ -331,6 +344,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     isRunningRef.current = true; setIsRunning(true)
     sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0
     currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []; historyLoadedRef.current = false
+    recoveryLogAddedRef.current = false; cooldownActiveRef.current = false
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); setLogs([])
     addLog(`⚡ AUTOMATED BOT ACTIVATED`)
     addLog(`Type: ${tradeType} | Stake: $${stake} | Martingale: ${martingaleFactor}x`)
@@ -339,7 +353,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   }
 
   const stopBot = () => { isRunningRef.current = false; setIsRunning(false); if (wsRef.current) wsRef.current.send(JSON.stringify({ forget: 'all', req_id: reqIdRef.current++ })); addLog(`⏹️ Stopped`) }
-  const resetBot = () => { stopBot(); setLogs(['System reset.']); setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setValidationError(''); setConfluenceScore(0); setBestMarket('Scanning...'); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []; historyLoadedRef.current = false }
+  const resetBot = () => { stopBot(); setLogs(['System reset.']); setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setValidationError(''); setConfluenceScore(0); setBestMarket('Scanning...'); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []; historyLoadedRef.current = false; recoveryLogAddedRef.current = false; cooldownActiveRef.current = false }
   const rules = TIMEFRAME_RULES[tradeType]
   const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
   return (
@@ -372,9 +386,9 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       </div>
       <div className="grid grid-cols-3 gap-2 flex-shrink-0 mb-2"><button onClick={startBot} disabled={isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${isRunning ? 'bg-gray-800 text-gray-500' : 'bg-green-500 text-black'}`}><Play size={14} /> Run</button><button onClick={stopBot} disabled={!isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${!isRunning ? 'bg-gray-800 text-gray-500' : 'bg-red-500 text-white'}`}><Square size={14} /> Stop</button><button onClick={resetBot} className="py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs bg-gray-800 border border-gray-700 text-orange-400"><RefreshCw size={14} /> Reset</button></div>
       <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col">
-        <div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">EXECUTION LOG (Scrollable)</span></div>
+        <div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">EXECUTION LOG</span></div>
         <div ref={logRef} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5" style={{scrollBehavior: 'auto'}}>
-          {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('TARGET') || log.includes('NORMAL') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') || log.includes('Error') || log.includes('RECOVERY') ? 'text-red-500' : log.includes('🚀') || log.includes('🎯') || log.includes('🔬') || log.includes('🛡️') ? 'text-sky-400' : log.includes('️') || log.includes('⚠️') || log.includes('LOCKDOWN') ? 'text-orange-400' : log.includes('━━') ? 'text-gray-600' : 'text-gray-400'}>{log}</p>)}
+          {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('TARGET') || log.includes('NORMAL') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') || log.includes('Error') || log.includes('RECOVERY') || log.includes('COOLDOWN') ? 'text-red-500' : log.includes('🚀') || log.includes('🎯') || log.includes('') || log.includes('🛡️') || log.includes('⏳') ? 'text-sky-400' : log.includes('️') || log.includes('⚠️') || log.includes('LOCKDOWN') ? 'text-orange-400' : log.includes('━━') ? 'text-gray-600' : 'text-gray-400'}>{log}</p>)}
         </div>
       </div>
     </div>
