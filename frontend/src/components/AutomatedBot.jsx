@@ -91,7 +91,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
             if (msg.msg_type === 'balance' && onBalanceUpdate) onBalanceUpdate(parseFloat(msg.balance.balance))
           } catch (e) {}
         }
-      } catch (err) { addLog(`❌ Connection failed`) }
+      } catch (err) { addLog(` Connection failed`) }
     }
     connectWS()
     return () => { if (wsRef.current) wsRef.current.close() }
@@ -222,26 +222,31 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       try {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { await new Promise(r => setTimeout(r, 2000)); continue }
         if (Date.now() - lastLossTime < 15000) { await new Promise(r => setTimeout(r, 2000)); continue }
+        
+        // FIX: Cooldown no longer resets the recoveryLogAddedRef flag
         if (consecutiveLossesRef.current >= 2 && !cooldownActiveRef.current) {
           addLog('🛑 2 CONSECUTIVE LOSSES. 30-SECOND COOLDOWN...')
           cooldownActiveRef.current = true
           await new Promise(r => setTimeout(r, 30000))
           cooldownActiveRef.current = false
-          recoveryLogAddedRef.current = false
           continue
         }
+
         const best = scanMarkets()
+        
+        // FIX: Silent waiting. Only logs ONCE per loss streak.
         if (!best.symbol) { 
           if (consecutiveLossesRef.current > 0 && !recoveryLogAddedRef.current) {
-            addLog('🔴 RECOVERY MODE: ⏳ [O]')
+            addLog(' RECOVERY MODE: ⏳ [O]')
             recoveryLogAddedRef.current = true
           }
           await new Promise(r => setTimeout(r, 2000)); continue 
         }
+        
         setBestMarket(Object.keys(SYMBOL_MAP).find(key => SYMBOL_MAP[key] === best.symbol) || best.symbol)
         setConfluenceScore(best.score)
         addLog(`🎯 LOCKED: ${best.symbol} | Score: ${best.score}%`)
-        addLog('🚀 EXECUTING...')
+        addLog(' EXECUTING...')
         
         const proposalReq = { proposal: 1, amount: roundStake(currentStakeRef.current), basis: 'stake', contract_type: getContractType(), currency: 'USD', duration: durationValue, duration_unit: timeframeUnit === 'Minutes' ? 'm' : 't', underlying_symbol: best.symbol }
         if (tradeType === 'Digits' && subTradeType === 'Over/Under' && predictedDigit) proposalReq.barrier = predictedDigit
@@ -264,11 +269,11 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           winsRef.current += 1; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake)
           blacklistedMarketsRef.current = []; recoveryLogAddedRef.current = false
           addLog(`✅ WON +$${profit.toFixed(2)}`)
-          addLog('🟢 NORMAL MODE')
+          addLog(' NORMAL MODE')
         } else {
           lossesRef.current += 1; consecutiveLossesRef.current += 1; lastLossTime = Date.now()
           if (!blacklistedMarketsRef.current.includes(best.symbol)) blacklistedMarketsRef.current.push(best.symbol)
-          addLog(`🛡️ Blacklisted ${best.symbol}`)
+          addLog(`️ Blacklisted ${best.symbol}`)
           currentStakeRef.current = roundStake(currentStakeRef.current * (parseFloat(martingaleFactor) || 1.5))
           addLog(`❌ LOST -$${profit.toFixed(2)} | Next: $${currentStakeRef.current.toFixed(2)}`)
         }
@@ -283,7 +288,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         await new Promise(r => setTimeout(r, 1000))
       } catch (error) {
         if (!isRunningRef.current) break
-        addLog(`❌ Error: ${error.message}`)
+        addLog(` Error: ${error.message}`)
         await new Promise(r => setTimeout(r, 2000))
       }
     }
