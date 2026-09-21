@@ -1,199 +1,3 @@
-import { useState, useRef, useEffect } from 'react'
-import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Activity, Zap } from 'lucide-react'
-
-const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
-const SYMBOL_MAP = { 'Volatility 10 (1s) Index': 'R_10', 'Volatility 10 Index': 'R_10', 'Volatility 15 (1s) Index': 'R_15', 'Volatility 25 (1s) Index': 'R_25', 'Volatility 25 Index': 'R_25', 'Volatility 30 (1s) Index': 'R_30', 'Volatility 50 (1s) Index': 'R_50', 'Volatility 50 Index': 'R_50', 'Volatility 75 (1s) Index': 'R_75', 'Volatility 75 Index': 'R_75', 'Volatility 90 (1s) Index': 'R_90', 'Volatility 100 (1s) Index': 'R_100', 'Volatility 100 Index': 'R_100' }
-const TRADE_TYPES = ['Multipliers', 'Ups & Downs', 'Touch & No Touch', 'Digits', 'Accumulators', 'Vanillas', 'Turbos']
-const SUB_TRADE_TYPES = { 'Accumulators': [], 'Vanillas': ['Call/Put'], 'Turbos': ['Turbos'], 'Multipliers': ['Multipliers'], 'Ups & Downs': ['Rise/Fall', 'Higher/Lower'], 'Touch & No Touch': ['Touch/No Touch'], 'Digits': ['Over/Under', 'Matches/Differs', 'Even/Odd'] }
-const OPTIONS = { 'Over/Under': ['Over', 'Under', 'Both'], 'Even/Odd': ['Even', 'Odd', 'Both'], 'Matches/Differs': ['Matches', 'Differs', 'Both'], 'Turbos': ['Up', 'Down', 'Both'], 'Rise/Fall': ['Rise', 'Fall', 'Both'], 'Higher/Lower': ['Higher', 'Lower', 'Both'], 'Touch/No Touch': ['Touch', 'No Touch', 'Both'], 'Call/Put': ['Call', 'Put', 'Both'], 'Multipliers': ['Up', 'Down', 'Both'] }
-const TIMEFRAME_RULES = { 'Accumulators': { units: ['Ticks'], defaultUnit: 'Ticks', min: 1, max: 85, fixed: true, label: '1 - 85 ticks' }, 'Multipliers': { units: ['Auto'], defaultUnit: 'Auto', min: 1, max: 1, fixed: true, label: 'Auto' }, 'Digits': { units: ['Ticks'], defaultUnit: 'Ticks', min: 1, max: 10, fixed: false }, 'Turbos': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false }, 'Ups & Downs': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false }, 'Touch & No Touch': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false }, 'Vanillas': { units: ['Minutes', 'Hours', 'Days'], defaultUnit: 'Minutes', min: 1, maxMap: { 'Minutes': 1440, 'Hours': 24, 'Days': 30 }, fixed: false } }
-
-const ALLOWED_DIGITS_MARKETS = ['R_10', 'R_25', 'R_50', 'R_75', 'R_100']
-const roundStake = (v) => Math.round(v * 100) / 100
-
-// --- OPTIMIZED FAST MATH STRATEGIES (Prevents Lag) ---
-const calcFastEntropy = (arr) => { 
-  const recent = arr.slice(-20)
-  const unique = new Set(recent).size
-  // If unique digits are low, pattern is predictable
-  return unique <= 4 ? 2.0 : 3.2 
-}
-const calcFastMarkov = (digits, target) => { 
-  const recent = digits.slice(-20)
-  const matches = recent.filter(d => d === target).length
-  return matches >= 4 ? 0.40 : 0.10 
-}
-const calcFastFrequency = (digits, target) => {
-  const freq = digits.filter(d => d === target).length / digits.length
-  return freq < 0.07 ? true : false
-}
-const calcHurst = (ticks) => { if(ticks.length<20) return 0.5; const n=ticks.length; const mean=ticks.reduce((a,b)=>a+b,0)/n; const dev=ticks.map(t=>t-mean); const cum=dev.reduce((acc,d,i)=>[...acc,(acc[i-1]||0)+d],[]); const range=Math.max(...cum)-Math.min(...cum); const std=Math.sqrt(dev.map(d=>d*d).reduce((a,b)=>a+b,0)/n); return Math.log(range/(std||1))/Math.log(n) }
-const calcRSI = (ticks, p=14) => { if(ticks.length<p+1) return 50; let g=0,l=0; for(let i=ticks.length-p;i<ticks.length;i++){const c=ticks[i]-ticks[i-1]; if(c>0)g+=c; else l-=c} const rs=g/(l||1); return 100-(100/(1+rs)) }
-
-export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
-  const [tradeType, setTradeType] = useState('Digits')
-  const [subTradeType, setSubTradeType] = useState('Over/Under')
-  const [option, setOption] = useState('Over')
-  const [predictedDigit, setPredictedDigit] = useState('3')
-  const [timeframeUnit, setTimeframeUnit] = useState('Ticks')
-  const [durationValue, setDurationValue] = useState(1)
-  const [stake, setStake] = useState('1.00')
-  const [targetProfit, setTargetProfit] = useState('50.00')
-  const [stopLoss, setStopLoss] = useState('20.00')
-  const [martingaleFactor, setMartingaleFactor] = useState('1.5')
-  
-  const [isRunning, setIsRunning] = useState(false)
-  const [validationError, setValidationError] = useState('')
-  const [logs, setLogs] = useState(['System initialized.'])
-  const [currentPL, setCurrentPL] = useState(0.00)
-  const [totalTrades, setTotalTrades] = useState(0)
-  const [wins, setWins] = useState(0)
-  const [losses, setLosses] = useState(0)
-  const [currentStake, setCurrentStake] = useState(1.00)
-  const [consecutiveLosses, setConsecutiveLosses] = useState(0)
-  const [bestMarket, setBestMarket] = useState('Scanning...')
-  const [confluenceScore, setConfluenceScore] = useState(0)
-  
-  const logRef = useRef(null)
-  const wsRef = useRef(null)
-  const isRunningRef = useRef(false)
-  const reqIdRef = useRef(1)
-  const tickDataRef = useRef({})
-  const currentStakeRef = useRef(1.00)
-  const sessionPLRef = useRef(0.00)
-  const totalTradesRef = useRef(0)
-  const winsRef = useRef(0)
-  const lossesRef = useRef(0)
-  const consecutiveLossesRef = useRef(0)
-  const blacklistedMarketsRef = useRef([])
-  const historyLoadedRef = useRef(false)
-  const recoveryLogAddedRef = useRef(false)
-  const cooldownActiveRef = useRef(false)
-
-  const addLog = (msg) => setLogs(prev => [...prev.slice(-50), `[${new Date().toLocaleTimeString()}] ${msg}`])
-  useEffect(() => { if (logRef.current) requestAnimationFrame(() => { logRef.current.scrollTop = logRef.current.scrollHeight }) }, [logs])
-  useEffect(() => { if (SUB_TRADE_TYPES[tradeType]?.length > 0) setSubTradeType(SUB_TRADE_TYPES[tradeType][0]); else setSubTradeType('') }, [tradeType])
-  useEffect(() => { if (subTradeType && OPTIONS[subTradeType]) setOption(OPTIONS[subTradeType][0]) }, [subTradeType])
-  useEffect(() => { const rules = TIMEFRAME_RULES[tradeType]; setTimeframeUnit(rules.defaultUnit); setDurationValue(rules.min) }, [tradeType])
-  useEffect(() => { if (!isRunning) { const s = parseFloat(stake) || 1.00; setCurrentStake(s); currentStakeRef.current = s } }, [stake, isRunning])
-
-  useEffect(() => {
-    if (!token || !accountId) return
-    const connectWS = async () => {
-      try {
-        const response = await fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' } })
-        const data = await response.json()
-        const wsUrl = data.data?.url
-        if (!wsUrl) throw new Error('No WebSocket URL')
-        if (wsRef.current) wsRef.current.close()
-        const ws = new WebSocket(wsUrl)
-        wsRef.current = ws
-        ws.onopen = () => { ws.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: reqIdRef.current++ })) }
-        ws.onmessage = (event) => {
-          try {
-            const msg = JSON.parse(event.data)
-            if (msg.msg_type === 'history') {
-              const sym = msg.history.symbol
-              if (msg.history.prices && msg.history.prices.length > 0) tickDataRef.current[sym] = msg.history.prices.map(p => parseFloat(p))
-            }
-            if (msg.msg_type === 'tick') {
-              const sym = msg.tick.symbol
-              if (!tickDataRef.current[sym]) tickDataRef.current[sym] = []
-              tickDataRef.current[sym] = [...tickDataRef.current[sym], msg.tick.quote].slice(-100)
-            }
-            if (msg.msg_type === 'balance' && onBalanceUpdate) onBalanceUpdate(parseFloat(msg.balance.balance))
-          } catch (e) {}
-        }
-        ws.onerror = () => {}
-        ws.onclose = () => {}
-      } catch (err) { addLog(`❌ Connection failed`) }
-    }
-    connectWS()
-    return () => { if (wsRef.current) wsRef.current.close() }
-  }, [token, accountId])
-
-  const loadAllHistory = () => {
-    return new Promise((resolve) => {
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return resolve()
-      let loadedCount = 0
-      const totalMarkets = Object.values(SYMBOL_MAP).length
-      const checkDone = () => { loadedCount++; if (loadedCount >= totalMarkets) { historyLoadedRef.current = true; resolve() } }
-      
-      Object.values(SYMBOL_MAP).forEach(sym => {
-        const reqId = reqIdRef.current++
-        const onMessage = (event) => {
-          try {
-            const msg = JSON.parse(event.data)
-            if (msg.req_id === reqId && msg.msg_type === 'history') {
-              wsRef.current.removeEventListener('message', onMessage)
-              if (msg.history.prices) tickDataRef.current[sym] = msg.history.prices.map(p => parseFloat(p))
-              checkDone()
-            }
-          } catch (e) {}
-        }
-        wsRef.current.addEventListener('message', onMessage)
-        wsRef.current.send(JSON.stringify({ ticks_history: sym, count: 50, end: 'latest', style: 'ticks', subscribe: 1, req_id: reqId }))
-      })
-      setTimeout(() => { historyLoadedRef.current = true; resolve() }, 8000)
-    })
-  }
-
-  const wsRequest = (request) => {
-    return new Promise((resolve, reject) => {
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return reject(new Error('WebSocket not connected'))
-      const req_id = reqIdRef.current++
-      const requestWithId = { ...request, req_id }
-      const onMessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data)
-          if (msg.req_id === req_id) {
-            wsRef.current.removeEventListener('message', onMessage)
-            if (msg.error) reject(new Error(msg.error.message || 'API Error'))
-            else resolve(msg)
-          }
-        } catch (e) {}
-      }
-      wsRef.current.addEventListener('message', onMessage)
-      wsRef.current.send(JSON.stringify(requestWithId))
-      setTimeout(() => { wsRef.current.removeEventListener('message', onMessage); reject(new Error('Timeout')) }, 15000)
-    })
-  }
-
-  const monitorContract = (contract_id) => {
-    return new Promise((resolve) => {
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return resolve(null)
-      let sub_id = null
-      const onMessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data)
-          if (msg.msg_type === 'proposal_open_contract' && msg.proposal_open_contract?.contract_id === contract_id) {
-            if (msg.subscription?.id) sub_id = msg.subscription.id
-            if (msg.proposal_open_contract.is_sold) {
-              wsRef.current.removeEventListener('message', onMessage)
-              if (sub_id) wsRef.current.send(JSON.stringify({ forget: sub_id, req_id: reqIdRef.current++ }))
-              resolve(msg.proposal_open_contract)
-            } else {
-              const livePL = parseFloat(msg.proposal_open_contract.profit || 0)
-              setCurrentPL(sessionPLRef.current + livePL)
-            }
-          }
-        } catch (e) {}
-      }
-      wsRef.current.addEventListener('message', onMessage)
-      wsRef.current.send(JSON.stringify({ proposal_open_contract: 1, contract_id: contract_id, subscribe: 1, req_id: reqIdRef.current++ }))
-    })
-  }
-
-  const getContractType = () => {
-    if (tradeType === 'Digits') {
-      if (subTradeType === 'Over/Under') return option === 'Over' ? 'DIGITOVER' : 'DIGITUNDER'
-      if (subTradeType === 'Even/Odd') return option === 'Even' ? 'DIGITEVEN' : 'DIGITODD'
-      return 'DIGITDIFF'
-    }
-    if (tradeType === 'Ups & Downs') return option === 'Rise' || option === 'Higher' ? 'CALL' : 'PUT'
-    return 'CALL'
-  }
-
   const calculateConfluence = (symbol, targetDigit) => {
     const ticks = tickDataRef.current[symbol]
     if (!ticks || ticks.length < 30) return { score: 50, signal: 'CALL', reasons: [] }
@@ -212,7 +16,8 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       if (hurst > 0.65) { score += 30; reasons.push('h') }
       const rsi = calcRSI(ticks)
       if (rsi < 30 || rsi > 70) { score += 25; reasons.push('r') }
-      if (hurst > 0.5) signal = 'CALL' else signal = 'PUT'
+      // FIXED SYNTAX: Use ternary operator for clean inline assignment
+      signal = hurst > 0.5 ? 'CALL' : 'PUT'
     }
     return { score: Math.min(score, 99), signal, reasons }
   }
@@ -269,7 +74,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         
         if (!best.symbol) { 
           if (consecutiveLossesRef.current > 0 && !recoveryLogAddedRef.current) {
-            addLog(` RECOVERY MODE: ⏳ [O]`)
+            addLog(`🔴 RECOVERY MODE: ⏳ [O]`)
             recoveryLogAddedRef.current = true
           }
           await new Promise(r => setTimeout(r, 2000)); continue 
@@ -304,7 +109,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           blacklistedMarketsRef.current = []
           recoveryLogAddedRef.current = false
           addLog(`✅ WON +$${profit.toFixed(2)}`)
-          addLog(` NORMAL MODE`)
+          addLog(`🟢 NORMAL MODE`)
         } else {
           lossesRef.current += 1; consecutiveLossesRef.current += 1
           lastLossTime = Date.now()

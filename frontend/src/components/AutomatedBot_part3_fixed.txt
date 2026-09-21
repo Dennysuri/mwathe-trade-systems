@@ -1,0 +1,157 @@
+  const calculateConfluence = (symbol, targetDigit) => {
+    const ticks = tickDataRef.current[symbol]
+    if (!ticks || ticks.length < 30) return { score: 50, signal: 'CALL', reasons: [] }
+    
+    let score = 50, reasons = [], signal = 'CALL'
+    const digits = ticks.map(t => parseInt(t.toString().slice(-1)))
+    const td = parseInt(targetDigit)
+    
+    if (tradeType === 'Digits') {
+      if (calcFastMarkov(digits, td) > 0.35) { score += 20; reasons.push('m') }
+      if (calcFastEntropy(digits) < 2.5) { score += 20; reasons.push('e') }
+      if (calcFastFrequency(digits, td)) { score += 20; reasons.push('f') }
+      signal = (option === 'Over' && td < 5) || (option === 'Under' && td > 4) ? 'CALL' : 'PUT'
+    } else {
+      const hurst = calcHurst(ticks)
+      if (hurst > 0.65) { score += 30; reasons.push('h') }
+      const rsi = calcRSI(ticks)
+      if (rsi < 30 || rsi > 70) { score += 25; reasons.push('r') }
+      // FIXED SYNTAX: Use ternary operator for clean inline assignment
+      signal = hurst > 0.5 ? 'CALL' : 'PUT'
+    }
+    return { score: Math.min(score, 99), signal, reasons }
+  }
+
+  const scanMarkets = () => {
+    let bestSym = null, bestScore = -1, bestSignal = 'CALL', bestReasons = []
+    const blacklisted = blacklistedMarketsRef.current
+    
+    // SCAN ALL 13 MARKETS
+    Object.keys(SYMBOL_MAP).forEach(name => {
+      const sym = SYMBOL_MAP[name]
+      if (blacklisted.includes(sym)) return
+      if (tradeType === 'Digits' && !ALLOWED_DIGITS_MARKETS.includes(sym)) return
+      
+      const res = calculateConfluence(sym, predictedDigit)
+      // STRICT: Require 3 strategies to align (Normal & Recovery)
+      if (res.reasons.length >= 3 && res.score > bestScore) { 
+        bestScore = res.score; bestSym = sym; bestSignal = res.signal; bestReasons = res.reasons 
+      }
+    })
+    
+    if (!bestSym) return { symbol: null, score: 0, signal: 'CALL', reasons: [] }
+    return { symbol: bestSym, score: bestScore, signal: bestSignal, reasons: bestReasons }
+  }
+
+  const runTradeCycle = async () => {
+    if (!historyLoadedRef.current) {
+      addLog('🔬 Analyzing markets...')
+      await loadAllHistory()
+    }
+    
+    let lastLossTime = 0
+    
+    while (isRunningRef.current) {
+      try {
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { await new Promise(r => setTimeout(r, 2000)); continue }
+        
+        // 15s Cooldown after ANY loss
+        if (Date.now() - lastLossTime < 15000) {
+          await new Promise(r => setTimeout(r, 2000)); continue
+        }
+        
+        // 30s Hard Cooldown after 2 consecutive losses
+        if (consecutiveLossesRef.current >= 2 && !cooldownActiveRef.current) {
+          addLog(`🛑 2 CONSECUTIVE LOSSES. 30-SECOND COOLDOWN...`)
+          cooldownActiveRef.current = true
+          await new Promise(r => setTimeout(r, 30000))
+          cooldownActiveRef.current = false
+          recoveryLogAddedRef.current = false
+          continue
+        }
+
+        const best = scanMarkets()
+        
+        if (!best.symbol) { 
+          if (consecutiveLossesRef.current > 0 && !recoveryLogAddedRef.current) {
+            addLog(`🔴 RECOVERY MODE: ⏳ [O]`)
+            recoveryLogAddedRef.current = true
+          }
+          await new Promise(r => setTimeout(r, 2000)); continue 
+        }
+        
+        setBestMarket(Object.keys(SYMBOL_MAP).find(key => SYMBOL_MAP[key] === best.symbol) || best.symbol)
+        setConfluenceScore(best.score)
+        addLog(`🎯 LOCKED: ${best.symbol} | Score: ${best.score}%`)
+        addLog(`🚀 EXECUTING...`)
+        
+        const contractType = getContractType()
+        const tradeStake = roundStake(currentStakeRef.current)
+        const proposalReq = { proposal: 1, amount: tradeStake, basis: 'stake', contract_type: contractType, currency: 'USD', duration: durationValue, duration_unit: timeframeUnit === 'Minutes' ? 'm' : 't', underlying_symbol: best.symbol }
+        if (tradeType === 'Digits' && subTradeType === 'Over/Under' && predictedDigit) proposalReq.barrier = predictedDigit
+        
+        const proposalRes = await wsRequest(proposalReq)
+        if (!isRunningRef.current) break
+        const buyRes = await wsRequest({ buy: proposalRes.proposal.id, price: proposalRes.proposal.ask_price })
+        if (!isRunningRef.current) break
+        
+        addLog(`✅ Contract: ${buyRes.buy.contract_id}`)
+        const contractResult = await monitorContract(buyRes.buy.contract_id)
+        if (!isRunningRef.current || !contractResult) break
+        
+        const profit = parseFloat(contractResult.profit || 0)
+        const isWin = profit > 0
+        totalTradesRef.current += 1
+        sessionPLRef.current += profit
+        
+        if (isWin) {
+          winsRef.current += 1; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake)
+          blacklistedMarketsRef.current = []
+          recoveryLogAddedRef.current = false
+          addLog(`✅ WON +$${profit.toFixed(2)}`)
+          addLog(`🟢 NORMAL MODE`)
+        } else {
+          lossesRef.current += 1; consecutiveLossesRef.current += 1
+          lastLossTime = Date.now()
+          if (!blacklistedMarketsRef.current.includes(best.symbol)) blacklistedMarketsRef.current.push(best.symbol)
+          addLog(`🛡️ Blacklisted ${best.symbol}`)
+          const martingale = parseFloat(martingaleFactor) || 1.5
+          currentStakeRef.current = roundStake(currentStakeRef.current * martingale)
+          addLog(`❌ LOST -$${profit.toFixed(2)} | Next: $${currentStakeRef.current.toFixed(2)}`)
+        }
+        
+        setTotalTrades(totalTradesRef.current); setWins(winsRef.current); setLosses(lossesRef.current); 
+        setConsecutiveLosses(consecutiveLossesRef.current); setCurrentStake(currentStakeRef.current); 
+        setCurrentPL(sessionPLRef.current)
+        
+        if (sessionPLRef.current >= parseFloat(targetProfit)) { addLog(`🎯 TARGET HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
+        if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog(`🛑 STOP LOSS HIT!`); setIsRunning(false); isRunningRef.current = false; break }
+        
+        addLog(`📊 P/L: $${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
+        await new Promise(r => setTimeout(r, 1000))
+      } catch (error) {
+        if (!isRunningRef.current) break
+        addLog(`❌ Error: ${error.message}`)
+        await new Promise(r => setTimeout(r, 2000))
+      }
+    }
+  }
+
+  const startBot = () => {
+    setValidationError('')
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }
+    isRunningRef.current = true; setIsRunning(true)
+    sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0
+    currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []; historyLoadedRef.current = false
+    recoveryLogAddedRef.current = false; cooldownActiveRef.current = false
+    setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); setLogs([])
+    addLog(`⚡ AUTOMATED BOT ACTIVATED`)
+    addLog(`Type: ${tradeType} | Stake: $${stake} | Martingale: ${martingaleFactor}x`)
+    addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`)
+    runTradeCycle()
+  }
+
+  const stopBot = () => { isRunningRef.current = false; setIsRunning(false); if (wsRef.current) wsRef.current.send(JSON.stringify({ forget: 'all', req_id: reqIdRef.current++ })); addLog(`⏹️ Stopped`) }
+  const resetBot = () => { stopBot(); setLogs(['System reset.']); setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setValidationError(''); setConfluenceScore(0); setBestMarket('Scanning...'); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []; historyLoadedRef.current = false; recoveryLogAddedRef.current = false; cooldownActiveRef.current = false }
+  const rules = TIMEFRAME_RULES[tradeType]
+  const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
