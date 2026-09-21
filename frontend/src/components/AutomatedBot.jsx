@@ -11,9 +11,10 @@ const TIMEFRAME_RULES = { 'Accumulators': { units: ['Ticks'], defaultUnit: 'Tick
 const ALLOWED_DIGITS_MARKETS = ['R_10', 'R_25', 'R_50', 'R_75', 'R_100']
 const roundStake = (v) => Math.round(v * 100) / 100
 
-const calcFastEntropy = (arr) => { const unique = new Set(arr.slice(-20)).size; return unique <= 4 ? 2.0 : 3.2 }
-const calcFastMarkov = (digits, target) => { const matches = digits.slice(-20).filter(d => d === target).length; return matches >= 4 ? 0.40 : 0.10 }
-const calcFastFrequency = (digits, target) => (digits.filter(d => d === target).length / digits.length) < 0.07
+// TIGHTENED THRESHOLDS to prevent 50% win rate
+const calcFastEntropy = (arr) => { const unique = new Set(arr.slice(-20)).size; return unique <= 3 ? 1.5 : 3.2 }
+const calcFastMarkov = (digits, target) => { const matches = digits.slice(-20).filter(d => d === target).length; return matches >= 5 ? 0.45 : 0.10 }
+const calcFastFrequency = (digits, target) => (digits.filter(d => d === target).length / digits.length) < 0.05
 const calcHurst = (ticks) => { if(ticks.length<20) return 0.5; const n=ticks.length; const mean=ticks.reduce((a,b)=>a+b,0)/n; const dev=ticks.map(t=>t-mean); const cum=dev.reduce((acc,d,i)=>[...acc,(acc[i-1]||0)+d],[]); const range=Math.max(...cum)-Math.min(...cum); const std=Math.sqrt(dev.map(d=>d*d).reduce((a,b)=>a+b,0)/n); return Math.log(range/(std||1))/Math.log(n) }
 const calcRSI = (ticks, p=14) => { if(ticks.length<p+1) return 50; let g=0,l=0; for(let i=ticks.length-p;i<ticks.length;i++){const c=ticks[i]-ticks[i-1]; if(c>0)g+=c; else l-=c} const rs=g/(l||1); return 100-(100/(1+rs)) }
 
@@ -54,7 +55,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const consecutiveLossesRef = useRef(0)
   const blacklistedMarketsRef = useRef([])
   const historyLoadedRef = useRef(false)
-  const recoveryLogAddedRef = useRef(false)
+  const hasLoggedRecoveryRef = useRef(false)
   const cooldownActiveRef = useRef(false)
 
   const addLog = (msg) => setLogs(prev => [...prev.slice(-50), `[${new Date().toLocaleTimeString()}] ${msg}`])
@@ -183,8 +184,8 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     const td = parseInt(targetDigit)
     
     if (tradeType === 'Digits') {
-      if (calcFastMarkov(digits, td) > 0.35) { score += 20; reasons.push('m') }
-      if (calcFastEntropy(digits) < 2.5) { score += 20; reasons.push('e') }
+      if (calcFastMarkov(digits, td) > 0.40) { score += 20; reasons.push('m') }
+      if (calcFastEntropy(digits) < 2.0) { score += 20; reasons.push('e') }
       if (calcFastFrequency(digits, td)) { score += 20; reasons.push('f') }
       signal = (option === 'Over' && td < 5) || (option === 'Under' && td > 4) ? 'CALL' : 'PUT'
     } else {
@@ -205,6 +206,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       if (blacklisted.includes(sym)) return
       if (tradeType === 'Digits' && !ALLOWED_DIGITS_MARKETS.includes(sym)) return
       const res = calculateConfluence(sym, predictedDigit)
+      // STRICT: Requires 3 strategies to align
       if (res.reasons.length >= 3 && res.score > bestScore) { 
         bestScore = res.score; bestSym = sym; bestSignal = res.signal; bestReasons = res.reasons 
       }
@@ -223,7 +225,6 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { await new Promise(r => setTimeout(r, 2000)); continue }
         if (Date.now() - lastLossTime < 15000) { await new Promise(r => setTimeout(r, 2000)); continue }
         
-        // FIX: Cooldown no longer resets the recoveryLogAddedRef flag
         if (consecutiveLossesRef.current >= 2 && !cooldownActiveRef.current) {
           addLog('🛑 2 CONSECUTIVE LOSSES. 30-SECOND COOLDOWN...')
           cooldownActiveRef.current = true
@@ -234,11 +235,11 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
 
         const best = scanMarkets()
         
-        // FIX: Silent waiting. Only logs ONCE per loss streak.
+        // FIX: SILENT RECOVERY. Logs exactly ONCE.
         if (!best.symbol) { 
-          if (consecutiveLossesRef.current > 0 && !recoveryLogAddedRef.current) {
-            addLog(' RECOVERY MODE: ⏳ [O]')
-            recoveryLogAddedRef.current = true
+          if (consecutiveLossesRef.current > 0 && !hasLoggedRecoveryRef.current) {
+            addLog('🔴 RECOVERY MODE:  [O]')
+            hasLoggedRecoveryRef.current = true
           }
           await new Promise(r => setTimeout(r, 2000)); continue 
         }
@@ -267,28 +268,29 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         
         if (isWin) {
           winsRef.current += 1; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake)
-          blacklistedMarketsRef.current = []; recoveryLogAddedRef.current = false
+          blacklistedMarketsRef.current = []
+          hasLoggedRecoveryRef.current = false // ONLY reset flag on a WIN
           addLog(`✅ WON +$${profit.toFixed(2)}`)
-          addLog(' NORMAL MODE')
+          addLog('🟢 NORMAL MODE')
         } else {
           lossesRef.current += 1; consecutiveLossesRef.current += 1; lastLossTime = Date.now()
           if (!blacklistedMarketsRef.current.includes(best.symbol)) blacklistedMarketsRef.current.push(best.symbol)
-          addLog(`️ Blacklisted ${best.symbol}`)
+          addLog(`🛡️ Blacklisted ${best.symbol}`)
           currentStakeRef.current = roundStake(currentStakeRef.current * (parseFloat(martingaleFactor) || 1.5))
-          addLog(`❌ LOST -$${profit.toFixed(2)} | Next: $${currentStakeRef.current.toFixed(2)}`)
+          addLog(` LOST -$${profit.toFixed(2)} | Next: $${currentStakeRef.current.toFixed(2)}`)
         }
         
         setTotalTrades(totalTradesRef.current); setWins(winsRef.current); setLosses(lossesRef.current)
         setConsecutiveLosses(consecutiveLossesRef.current); setCurrentStake(currentStakeRef.current); setCurrentPL(sessionPLRef.current)
         
         if (sessionPLRef.current >= parseFloat(targetProfit)) { addLog(`🎯 TARGET HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
-        if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog('🛑 STOP LOSS HIT!'); setIsRunning(false); isRunningRef.current = false; break }
+        if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog(' STOP LOSS HIT!'); setIsRunning(false); isRunningRef.current = false; break }
         
         addLog(`📊 P/L: $${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
         await new Promise(r => setTimeout(r, 1000))
       } catch (error) {
         if (!isRunningRef.current) break
-        addLog(` Error: ${error.message}`)
+        addLog(`❌ Error: ${error.message}`)
         await new Promise(r => setTimeout(r, 2000))
       }
     }
@@ -300,7 +302,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     isRunningRef.current = true; setIsRunning(true)
     sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0
     currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []; historyLoadedRef.current = false
-    recoveryLogAddedRef.current = false; cooldownActiveRef.current = false
+    hasLoggedRecoveryRef.current = false; cooldownActiveRef.current = false
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); setLogs([])
     addLog('⚡ AUTOMATED BOT ACTIVATED')
     addLog(`Type: ${tradeType} | Stake: $${stake} | Martingale: ${martingaleFactor}x`)
@@ -309,7 +311,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   }
 
   const stopBot = () => { isRunningRef.current = false; setIsRunning(false); if (wsRef.current) wsRef.current.send(JSON.stringify({ forget: 'all', req_id: reqIdRef.current++ })); addLog('⏹️ Stopped') }
-  const resetBot = () => { stopBot(); setLogs(['System reset.']); setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setValidationError(''); setConfluenceScore(0); setBestMarket('Scanning...'); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []; historyLoadedRef.current = false; recoveryLogAddedRef.current = false; cooldownActiveRef.current = false }
+  const resetBot = () => { stopBot(); setLogs(['System reset.']); setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setValidationError(''); setConfluenceScore(0); setBestMarket('Scanning...'); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []; historyLoadedRef.current = false; hasLoggedRecoveryRef.current = false; cooldownActiveRef.current = false }
   
   const rules = TIMEFRAME_RULES[tradeType]
   const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
