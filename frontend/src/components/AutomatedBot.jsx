@@ -76,7 +76,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
             if (msg.msg_type === 'balance' && onBalanceUpdate) onBalanceUpdate(parseFloat(msg.balance.balance))
           } catch (e) {}
         }
-      } catch (err) { addLog(` Connection failed`) }
+      } catch (err) { addLog(`❌ Connection failed`) }
     }
     connectWS()
     return () => { if (wsRef.current) wsRef.current.close() }
@@ -237,18 +237,9 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       const sym = SYMBOL_MAP[name]
       if (blacklisted.includes(sym)) return
       const res = calculateConfluence(sym)
-      // STRICT 75% THRESHOLD - Only accept high-probability signals
-      if (res.score >= 75) {
-        scoredMarkets.push({ 
-          symbol: sym, 
-          score: res.score, 
-          name, 
-          selectedDigit: res.selectedDigit, 
-          selectedOption: res.selectedOption 
-        })
-      }
+      // STRICT 75% THRESHOLD
+      if (res.score >= 75) scoredMarkets.push({ symbol: sym, score: res.score, name, selectedDigit: res.selectedDigit, selectedOption: res.selectedOption })
     })
-    // Sort by score (highest first) - this is the BEST market
     scoredMarkets.sort((a, b) => b.score - a.score)
     return scoredMarkets
   }
@@ -263,20 +254,16 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { await new Promise(r => setTimeout(r, 2000)); continue }
         
         if (recoveryIndex >= recoveryQueue.length) {
-          addLog('🔬 Scanning 13 markets for 75%+ signals...')
+          addLog('🔬 Scanning 13 markets for 75%+ setups...')
           recoveryQueue = scanMarkets()
           recoveryIndex = 0
-          if (recoveryQueue.length === 0) { 
-            addLog('⏳ No 75%+ signals found. Waiting...')
-            await new Promise(r => setTimeout(r, 3000)); 
-            continue 
-          }
+          if (recoveryQueue.length === 0) { await new Promise(r => setTimeout(r, 3000)); continue }
         }
 
         const currentTarget = recoveryQueue[recoveryIndex]
         setBestMarket(currentTarget.name)
         setConfluenceScore(currentTarget.score)
-        addLog(`🎯 BEST SIGNAL: ${currentTarget.name} | Score: ${currentTarget.score}%`)
+        addLog(`🎯 LOCKED: ${currentTarget.name} | Score: ${currentTarget.score}%`)
         addLog('🚀 EXECUTING...')
         
         let barrier = null
@@ -314,7 +301,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           lossesRef.current += 1
           recoveryIndex++
           currentStakeRef.current = roundStake(currentStakeRef.current * (parseFloat(martingaleFactor) || 1.5))
-          addLog(`❌ LOST -$${profit.toFixed(2)} | Rotating to next best market → Next: $${currentStakeRef.current.toFixed(2)}`)
+          addLog(`❌ LOST -$${profit.toFixed(2)} | Rotating to next market → Next: $${currentStakeRef.current.toFixed(2)}`)
         }
         
         setTotalTrades(totalTradesRef.current); setWins(winsRef.current); setLosses(lossesRef.current)
@@ -375,7 +362,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       <div className="bg-gray-900 rounded-lg p-2 border border-green-500/30 mb-2 flex-shrink-0">
         <h3 className="text-white font-bold text-xs mb-1 flex items-center gap-1"><TrendingUp size={12} className="text-green-500" /> Performance</h3>
         <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Best Market:</span><span className="text-[10px] text-orange-400 font-bold">{bestMarket}</span></div>
-        <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Signal Score:</span><span className={`text-[10px] font-bold ${confluenceScore >= 75 ? 'text-green-400' : 'text-orange-400'}`}>{confluenceScore.toFixed(0)}%</span></div>
+        <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Confluence Score:</span><span className={`text-[10px] font-bold ${confluenceScore >= 75 ? 'text-green-400' : 'text-orange-400'}`}>{confluenceScore.toFixed(0)}%</span></div>
         <div className="grid grid-cols-4 gap-1 text-center mb-1">
           <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">P/L</p><p className={`font-bold text-xs ${currentPL >= 0 ? 'text-green-500' : 'text-red-500'}`}>{currentPL >= 0 ? '+' : ''}{currentPL.toFixed(2)}</p></div>
           <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Win Rate</p><p className="text-sky-400 font-bold text-xs">{winRate}%</p></div>
