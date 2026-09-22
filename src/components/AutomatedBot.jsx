@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Activity, Zap } from 'lucide-react'
+import { Play, Square, Terminal, Zap } from 'lucide-react'
 
 const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
 const SYMBOL_MAP = { 'Volatility 10 (1s) Index': 'R_10', 'Volatility 10 Index': 'R_10', 'Volatility 15 (1s) Index': 'R_15', 'Volatility 25 (1s) Index': 'R_25', 'Volatility 25 Index': 'R_25', 'Volatility 30 (1s) Index': 'R_30', 'Volatility 50 (1s) Index': 'R_50', 'Volatility 50 Index': 'R_50', 'Volatility 75 (1s) Index': 'R_75', 'Volatility 75 Index': 'R_75', 'Volatility 90 (1s) Index': 'R_90', 'Volatility 100 (1s) Index': 'R_100', 'Volatility 100 Index': 'R_100' }
@@ -48,8 +48,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const winsRef = useRef(0)
   const lossesRef = useRef(0)
   const consecutiveLossesRef = useRef(0)
-  const blacklistedMarketsRef = useRef([])
-  const historyLoadedRef = useRef(false)
+  const subscribedSymbolsRef = useRef(new Set())
 
   const addLog = (msg) => setLogs(prev => [...prev.slice(-50), `[${new Date().toLocaleTimeString()}] ${msg}`])
   useEffect(() => { if (logRef.current) requestAnimationFrame(() => { logRef.current.scrollTop = logRef.current.scrollHeight }) }, [logs])
@@ -73,14 +72,10 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         ws.onmessage = (event) => {
           try {
             const msg = JSON.parse(event.data)
-            if (msg.msg_type === 'history') {
-              const sym = msg.history.symbol
-              if (msg.history.prices && msg.history.prices.length > 0) tickDataRef.current[sym] = msg.history.prices.map(p => parseFloat(p))
-            }
             if (msg.msg_type === 'tick') {
               const sym = msg.tick.symbol
               if (!tickDataRef.current[sym]) tickDataRef.current[sym] = []
-              tickDataRef.current[sym] = [...tickDataRef.current[sym], msg.tick.quote].slice(-100)
+              tickDataRef.current[sym] = [...tickDataRef.current[sym], msg.tick.quote].slice(-20)
             }
             if (msg.msg_type === 'balance' && onBalanceUpdate) onBalanceUpdate(parseFloat(msg.balance.balance))
           } catch (e) {}
@@ -91,52 +86,12 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     return () => { if (wsRef.current) wsRef.current.close() }
   }, [token, accountId])
 
-  const loadAllHistory = () => {
-    return new Promise((resolve) => {
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return resolve()
-      let loadedCount = 0
-      const totalMarkets = Object.values(SYMBOL_MAP).length
-      let isResolved = false
-      
-      const finishLoading = () => {
-        if (isResolved) return
-        isResolved = true
-        historyLoadedRef.current = true
-        resolve()
-      }
-
-      const checkDone = () => { 
-        loadedCount++ 
-        if (loadedCount >= totalMarkets) finishLoading() 
-      }
-
-      Object.values(SYMBOL_MAP).forEach(sym => {
-        const reqId = reqIdRef.current++
-        const onMessage = (event) => {
-          try {
-            const msg = JSON.parse(event.data)
-            if (msg.req_id === reqId && msg.msg_type === 'history') {
-              wsRef.current.removeEventListener('message', onMessage)
-              if (msg.history.prices) tickDataRef.current[sym] = msg.history.prices.map(p => parseFloat(p))
-              checkDone()
-            }
-          } catch (e) {}
-        }
-        wsRef.current.addEventListener('message', onMessage)
-        wsRef.current.send(JSON.stringify({ ticks_history: sym, count: 60, end: 'latest', style: 'ticks', subscribe: 1, req_id: reqId }))
-      })
-
-      setTimeout(() => { finishLoading() }, 3500)
-    })
-  }
-
   const findBestMarket = () => {
     let best = null
     let highestScore = 0
 
     for (const [sym, ticks] of Object.entries(tickDataRef.current)) {
-      if (!ticks || ticks.length < 20) continue
-      if (blacklistedMarketsRef.current.includes(sym)) continue
+      if (!ticks || ticks.length < 10) continue // Wait until at least 10 ticks accumulate continuously
 
       const digits = ticks.map(t => parseInt(t.toString().slice(-1)))
       const lastDigit = digits[digits.length - 1]
@@ -145,7 +100,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       const markov = calcFastMarkov(digits, lastDigit)
       const dormancy = calcDormancy(digits, lastDigit)
       
-      const score = (entropy > 2.0 ? 40 : 10) + (markov < 0.2 ? 40 : 10) + (dormancy > 15 ? 20 : 5)
+      const score = (entropy > 2.0 ? 40 : 10) + (markov < 0.2 ? 40 : 10) + (dormancy > 10 ? 20 : 5)
 
       if (score > highestScore) {
         highestScore = score
@@ -261,7 +216,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     }
   }
 
-  const startBot = async () => {
+  const startBot = () => {
     setIsRunning(true)
     isRunningRef.current = true
     sessionPLRef.current = 0.00
@@ -280,12 +235,19 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
 
     addLog('⚡ AUTOMATED BOT ACTIVATED')
     addLog(`Type: ${tradeType} | Stake: $${initialS} | Martingale: ${martingaleFactor}x`)
-    addLog('⏳ Accumulating initial tick buffers (20+ ticks per market)...')
+    addLog('📡 Subscribing to continuous tick streams across all markets...')
 
-    await loadAllHistory()
-    historyLoadedRef.current = true
-    addLog('🎯 Initial analysis complete. Entering live sniper loop.')
+    // Subscribe to live ticks for all symbols immediately on start
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      Object.values(SYMBOL_MAP).forEach(sym => {
+        if (!subscribedSymbolsRef.current.has(sym)) {
+          subscribedSymbolsRef.current.add(sym)
+          wsRef.current.send(JSON.stringify({ ticks: sym, subscribe: 1, req_id: reqIdRef.current++ }))
+        }
+      })
+    }
 
+    addLog('🔄 Collecting ticks continuously. Analyzing buffer...')
     runTradingLoop()
   }
 
@@ -294,12 +256,12 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
 
     const { bestMarket: foundMarket, score } = findBestMarket()
     
-    if (foundMarket && score >= 70) {
+    if (foundMarket && score >= 60) {
       setBestMarket(foundMarket)
       setConfluenceScore(score)
       executeTrade(foundMarket)
     } else {
-      setBestMarket('Scanning live streams...')
+      setBestMarket('Collecting ticks...')
       setConfluenceScore(score)
     }
 
