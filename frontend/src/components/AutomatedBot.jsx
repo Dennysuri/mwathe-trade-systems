@@ -1,13 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Activity, Zap } from 'lucide-react'
 
-// Only 5 markets for speed and accuracy
 const SYMBOL_MAP = { 
-  'Volatility 10 (1s) Index': 'R_10', 
-  'Volatility 25 (1s) Index': 'R_25', 
-  'Volatility 50 (1s) Index': 'R_50', 
-  'Volatility 75 (1s) Index': 'R_75', 
-  'Volatility 100 (1s) Index': 'R_100' 
+  'Volatility 10 (1s) Index': 'R_10', 'Volatility 25 (1s) Index': 'R_25', 
+  'Volatility 50 (1s) Index': 'R_50', 'Volatility 75 (1s) Index': 'R_75', 'Volatility 100 (1s) Index': 'R_100' 
 }
 const TRADE_TYPES = ['Digits']
 const SUB_TRADE_TYPES = { 'Digits': ['Over/Under', 'Matches/Differs', 'Even/Odd'] }
@@ -17,7 +13,6 @@ const TIMEFRAME_RULES = { 'Digits': { units: ['Ticks'], defaultUnit: 'Ticks', mi
 const ALLOWED_DIGITS_MARKETS = ['R_10', 'R_25', 'R_50', 'R_75', 'R_100']
 const roundStake = (v) => Math.round(v * 100) / 100
 
-// TIGHTENED THRESHOLDS
 const calcFastEntropy = (arr) => { const unique = new Set(arr.slice(-20)).size; return unique <= 3 ? 1.5 : 3.2 }
 const calcFastMarkov = (digits, target) => { const matches = digits.slice(-20).filter(d => d === target).length; return matches >= 5 ? 0.45 : 0.10 }
 const calcFastFrequency = (digits, target) => (digits.filter(d => d === target).length / digits.length) < 0.05
@@ -48,21 +43,11 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const [bestMarket, setBestMarket] = useState('Scanning...')
   const [confluenceScore, setConfluenceScore] = useState(0)
   
-  const logRef = useRef(null)
-  const wsRef = useRef(null)
-  const isRunningRef = useRef(false)
-  const reqIdRef = useRef(1)
-  const tickDataRef = useRef({})
-  const currentStakeRef = useRef(1.00)
-  const sessionPLRef = useRef(0.00)
-  const totalTradesRef = useRef(0)
-  const winsRef = useRef(0)
-  const lossesRef = useRef(0)
-  const consecutiveLossesRef = useRef(0)
-  const blacklistedMarketsRef = useRef([])
-  const historyLoadedRef = useRef(false)
-  const hasLoggedRecoveryRef = useRef(false)
-  const cooldownActiveRef = useRef(false)
+  const logRef = useRef(null); const wsRef = useRef(null); const isRunningRef = useRef(false); const reqIdRef = useRef(1)
+  const tickDataRef = useRef({}); const currentStakeRef = useRef(1.00); const sessionPLRef = useRef(0.00)
+  const totalTradesRef = useRef(0); const winsRef = useRef(0); const lossesRef = useRef(0)
+  const consecutiveLossesRef = useRef(0); const blacklistedMarketsRef = useRef([])
+  const historyLoadedRef = useRef(false); const hasLoggedRecoveryRef = useRef(false); const cooldownActiveRef = useRef(false)
 
   const addLog = (msg) => setLogs(prev => [...prev.slice(-50), `[${new Date().toLocaleTimeString()}] ${msg}`])
   useEffect(() => { if (logRef.current) requestAnimationFrame(() => { logRef.current.scrollTop = logRef.current.scrollHeight }) }, [logs])
@@ -77,28 +62,23 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       try {
         const response = await fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' } })
         const data = await response.json()
-        const wsUrl = data.data?.url
-        if (!wsUrl) throw new Error('No WebSocket URL')
+        if (!data.data?.url) throw new Error('No WebSocket URL')
         if (wsRef.current) wsRef.current.close()
-        const ws = new WebSocket(wsUrl)
+        const ws = new WebSocket(data.data.url)
         wsRef.current = ws
         ws.onopen = () => { ws.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: reqIdRef.current++ })) }
         ws.onmessage = (event) => {
           try {
             const msg = JSON.parse(event.data)
-            if (msg.msg_type === 'history') {
-              const sym = msg.history.symbol
-              if (msg.history.prices && msg.history.prices.length > 0) tickDataRef.current[sym] = msg.history.prices.map(p => parseFloat(p))
-            }
+            if (msg.msg_type === 'history' && msg.history.prices) tickDataRef.current[msg.history.symbol] = msg.history.prices.map(p => parseFloat(p))
             if (msg.msg_type === 'tick') {
-              const sym = msg.tick.symbol
-              if (!tickDataRef.current[sym]) tickDataRef.current[sym] = []
-              tickDataRef.current[sym] = [...tickDataRef.current[sym], msg.tick.quote].slice(-100)
+              if (!tickDataRef.current[msg.tick.symbol]) tickDataRef.current[msg.tick.symbol] = []
+              tickDataRef.current[msg.tick.symbol] = [...tickDataRef.current[msg.tick.symbol], msg.tick.quote].slice(-100)
             }
             if (msg.msg_type === 'balance' && onBalanceUpdate) onBalanceUpdate(parseFloat(msg.balance.balance))
           } catch (e) {}
         }
-      } catch (err) { addLog(` Connection failed`) }
+      } catch (err) { addLog(`❌ Connection failed`) }
     }
     connectWS()
     return () => { if (wsRef.current) wsRef.current.close() }
@@ -108,7 +88,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     return new Promise((resolve) => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return resolve()
       let loadedCount = 0
-      const totalMarkets = Object.values(SYMBOL_MAP).length // Only 5 markets
+      const totalMarkets = Object.values(SYMBOL_MAP).length
       const checkDone = () => { loadedCount++; if (loadedCount >= totalMarkets) { historyLoadedRef.current = true; resolve() } }
       Object.values(SYMBOL_MAP).forEach(sym => {
         const reqId = reqIdRef.current++
@@ -125,61 +105,8 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         wsRef.current.addEventListener('message', onMessage)
         wsRef.current.send(JSON.stringify({ ticks_history: sym, count: 50, end: 'latest', style: 'ticks', subscribe: 1, req_id: reqId }))
       })
-      setTimeout(() => { historyLoadedRef.current = true; resolve() }, 3000) // Reduced to 3 seconds for 5 markets
+      setTimeout(() => { historyLoadedRef.current = true; resolve() }, 3000)
     })
-  }
-
-  const wsRequest = (request) => {
-    return new Promise((resolve, reject) => {
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return reject(new Error('WebSocket not connected'))
-      const req_id = reqIdRef.current++
-      const onMessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data)
-          if (msg.req_id === req_id) {
-            wsRef.current.removeEventListener('message', onMessage)
-            if (msg.error) reject(new Error(msg.error.message || 'API Error'))
-            else resolve(msg)
-          }
-        } catch (e) {}
-      }
-      wsRef.current.addEventListener('message', onMessage)
-      wsRef.current.send(JSON.stringify({ ...request, req_id }))
-      setTimeout(() => { wsRef.current.removeEventListener('message', onMessage); reject(new Error('Timeout')) }, 15000)
-    })
-  }
-
-  const monitorContract = (contract_id) => {
-    return new Promise((resolve) => {
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return resolve(null)
-      let sub_id = null
-      const onMessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data)
-          if (msg.msg_type === 'proposal_open_contract' && msg.proposal_open_contract?.contract_id === contract_id) {
-            if (msg.subscription?.id) sub_id = msg.subscription.id
-            if (msg.proposal_open_contract.is_sold) {
-              wsRef.current.removeEventListener('message', onMessage)
-              if (sub_id) wsRef.current.send(JSON.stringify({ forget: sub_id, req_id: reqIdRef.current++ }))
-              resolve(msg.proposal_open_contract)
-            } else {
-              setCurrentPL(sessionPLRef.current + parseFloat(msg.proposal_open_contract.profit || 0))
-            }
-          }
-        } catch (e) {}
-      }
-      wsRef.current.addEventListener('message', onMessage)
-      wsRef.current.send(JSON.stringify({ proposal_open_contract: 1, contract_id, subscribe: 1, req_id: reqIdRef.current++ }))
-    })
-  }
-
-  const getContractType = () => {
-    if (tradeType === 'Digits') {
-      if (subTradeType === 'Over/Under') return option === 'Over' ? 'DIGITOVER' : 'DIGITUNDER'
-      if (subTradeType === 'Even/Odd') return option === 'Even' ? 'DIGITEVEN' : 'DIGITODD'
-      return 'DIGITDIFF'
-    }
-    return 'CALL'
   }
 
   const wsRequest = (request) => {
@@ -241,7 +168,6 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     let score = 50, reasons = [], signal = 'CALL'
     const digits = ticks.map(t => parseInt(t.toString().slice(-1)))
     const td = parseInt(targetDigit)
-    
     if (tradeType === 'Digits') {
       if (calcFastMarkov(digits, td) > 0.40) { score += 20; reasons.push('m') }
       if (calcFastEntropy(digits) < 2.0) { score += 20; reasons.push('e') }
@@ -264,7 +190,6 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       const sym = SYMBOL_MAP[name]
       if (blacklisted.includes(sym)) return
       const res = calculateConfluence(sym, predictedDigit)
-      // STRICT: Requires 3 strategies to align
       if (res.reasons.length >= 3 && res.score > bestScore) { 
         bestScore = res.score; bestSym = sym; bestSignal = res.signal; bestReasons = res.reasons 
       }
@@ -273,106 +198,62 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   }
 
   const runTradeCycle = async () => {
-    if (!historyLoadedRef.current) {
-      addLog('🔬 Analyzing 5 markets...')
-      await loadAllHistory()
-    }
+    if (!historyLoadedRef.current) { addLog('🔬 Analyzing 5 markets...'); await loadAllHistory() }
     let lastLossTime = 0
     while (isRunningRef.current) {
       try {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { await new Promise(r => setTimeout(r, 2000)); continue }
         if (Date.now() - lastLossTime < 15000) { await new Promise(r => setTimeout(r, 2000)); continue }
-        
         if (consecutiveLossesRef.current >= 2 && !cooldownActiveRef.current) {
           addLog('🛑 2 CONSECUTIVE LOSSES. 30-SECOND COOLDOWN...')
-          cooldownActiveRef.current = true
-          await new Promise(r => setTimeout(r, 30000))
-          cooldownActiveRef.current = false
-          continue
+          cooldownActiveRef.current = true; await new Promise(r => setTimeout(r, 30000)); cooldownActiveRef.current = false; continue
         }
-
         const best = scanMarkets()
-        
-        // SILENT RECOVERY: Logs exactly ONCE
         if (!best.symbol) { 
-          if (consecutiveLossesRef.current > 0 && !hasLoggedRecoveryRef.current) {
-            addLog(' RECOVERY MODE:  [O]')
-            hasLoggedRecoveryRef.current = true
-          }
+          if (consecutiveLossesRef.current > 0 && !hasLoggedRecoveryRef.current) { addLog('🔴 RECOVERY MODE: ⏳ [O]'); hasLoggedRecoveryRef.current = true }
           await new Promise(r => setTimeout(r, 2000)); continue 
         }
-        
         setBestMarket(Object.keys(SYMBOL_MAP).find(key => SYMBOL_MAP[key] === best.symbol) || best.symbol)
         setConfluenceScore(best.score)
-        addLog(`🎯 LOCKED: ${best.symbol} | Score: ${best.score}%`)
-        addLog(' EXECUTING...')
+        addLog(`🎯 LOCKED: ${best.symbol} | Score: ${best.score}%`); addLog('🚀 EXECUTING...')
         
         const proposalReq = { proposal: 1, amount: roundStake(currentStakeRef.current), basis: 'stake', contract_type: getContractType(), currency: 'USD', duration: durationValue, duration_unit: timeframeUnit === 'Minutes' ? 'm' : 't', underlying_symbol: best.symbol }
         if (tradeType === 'Digits' && subTradeType === 'Over/Under' && predictedDigit) proposalReq.barrier = predictedDigit
         
-        const proposalRes = await wsRequest(proposalReq)
-        if (!isRunningRef.current) break
-        const buyRes = await wsRequest({ buy: proposalRes.proposal.id, price: proposalRes.proposal.ask_price })
-        if (!isRunningRef.current) break
-        
+        const proposalRes = await wsRequest(proposalReq); if (!isRunningRef.current) break
+        const buyRes = await wsRequest({ buy: proposalRes.proposal.id, price: proposalRes.proposal.ask_price }); if (!isRunningRef.current) break
         addLog(`✅ Contract: ${buyRes.buy.contract_id}`)
-        const contractResult = await monitorContract(buyRes.buy.contract_id)
-        if (!isRunningRef.current || !contractResult) break
+        const contractResult = await monitorContract(buyRes.buy.contract_id); if (!isRunningRef.current || !contractResult) break
         
-        const profit = parseFloat(contractResult.profit || 0)
-        const isWin = profit > 0
-        totalTradesRef.current += 1
-        sessionPLRef.current += profit
-        
+        const profit = parseFloat(contractResult.profit || 0); const isWin = profit > 0; totalTradesRef.current += 1; sessionPLRef.current += profit
         if (isWin) {
-          winsRef.current += 1; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake)
-          blacklistedMarketsRef.current = []
-          hasLoggedRecoveryRef.current = false
-          addLog(`✅ WON +$${profit.toFixed(2)}`)
-          addLog('🟢 NORMAL MODE')
+          winsRef.current += 1; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []; hasLoggedRecoveryRef.current = false
+          addLog(`✅ WON +$${profit.toFixed(2)}`); addLog('🟢 NORMAL MODE')
         } else {
           lossesRef.current += 1; consecutiveLossesRef.current += 1; lastLossTime = Date.now()
           if (!blacklistedMarketsRef.current.includes(best.symbol)) blacklistedMarketsRef.current.push(best.symbol)
-          addLog(`🛡️ Blacklisted ${best.symbol}`)
-          currentStakeRef.current = roundStake(currentStakeRef.current * (parseFloat(martingaleFactor) || 1.5))
-          addLog(` LOST -$${profit.toFixed(2)} | Next: $${currentStakeRef.current.toFixed(2)}`)
+          addLog(`🛡️ Blacklisted ${best.symbol}`); currentStakeRef.current = roundStake(currentStakeRef.current * (parseFloat(martingaleFactor) || 1.5))
+          addLog(`❌ LOST -$${profit.toFixed(2)} | Next: $${currentStakeRef.current.toFixed(2)}`)
         }
-        
-        setTotalTrades(totalTradesRef.current); setWins(winsRef.current); setLosses(lossesRef.current)
-        setConsecutiveLosses(consecutiveLossesRef.current); setCurrentStake(currentStakeRef.current); setCurrentPL(sessionPLRef.current)
-        
+        setTotalTrades(totalTradesRef.current); setWins(winsRef.current); setLosses(lossesRef.current); setConsecutiveLosses(consecutiveLossesRef.current); setCurrentStake(currentStakeRef.current); setCurrentPL(sessionPLRef.current)
         if (sessionPLRef.current >= parseFloat(targetProfit)) { addLog(`🎯 TARGET HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
-        if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog(' STOP LOSS HIT!'); setIsRunning(false); isRunningRef.current = false; break }
-        
-        addLog(`📊 P/L: $${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
-        await new Promise(r => setTimeout(r, 1000))
-      } catch (error) {
-        if (!isRunningRef.current) break
-        addLog(`❌ Error: ${error.message}`)
-        await new Promise(r => setTimeout(r, 2000))
-      }
+        if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog('🛑 STOP LOSS HIT!'); setIsRunning(false); isRunningRef.current = false; break }
+        addLog(`📊 P/L: $${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`); await new Promise(r => setTimeout(r, 1000))
+      } catch (error) { if (!isRunningRef.current) break; addLog(`❌ Error: ${error.message}`); await new Promise(r => setTimeout(r, 2000)) }
     }
   }
 
   const startBot = () => {
-    setValidationError('')
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }
-    isRunningRef.current = true; setIsRunning(true)
-    sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0
-    currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []; historyLoadedRef.current = false
-    hasLoggedRecoveryRef.current = false; cooldownActiveRef.current = false
+    setValidationError(''); if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }
+    isRunningRef.current = true; setIsRunning(true); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0
+    currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []; historyLoadedRef.current = false; hasLoggedRecoveryRef.current = false; cooldownActiveRef.current = false
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); setLogs([])
-    addLog('⚡ AUTOMATED BOT ACTIVATED (5 Markets)')
-    addLog(`Type: ${tradeType} | Stake: $${stake} | Martingale: ${martingaleFactor}x`)
-    addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`)
-    runTradeCycle()
+    addLog('⚡ AUTOMATED BOT ACTIVATED (5 Markets)'); addLog(`Type: ${tradeType} | Stake: $${stake} | Martingale: ${martingaleFactor}x`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); runTradeCycle()
   }
 
   const stopBot = () => { isRunningRef.current = false; setIsRunning(false); if (wsRef.current) wsRef.current.send(JSON.stringify({ forget: 'all', req_id: reqIdRef.current++ })); addLog('⏹️ Stopped') }
   const resetBot = () => { stopBot(); setLogs(['System reset.']); setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setValidationError(''); setConfluenceScore(0); setBestMarket('Scanning...'); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []; historyLoadedRef.current = false; hasLoggedRecoveryRef.current = false; cooldownActiveRef.current = false }
-  
-  const rules = TIMEFRAME_RULES[tradeType]
-  const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
+  const rules = TIMEFRAME_RULES[tradeType]; const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
 
   return (
     <div className="h-full flex flex-col bg-gray-950 text-white p-2 overflow-hidden">
