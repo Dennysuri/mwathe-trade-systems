@@ -1,17 +1,23 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Activity, Zap } from 'lucide-react'
 
-const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
-const SYMBOL_MAP = { 'Volatility 10 (1s) Index': 'R_10', 'Volatility 10 Index': 'R_10', 'Volatility 15 (1s) Index': 'R_15', 'Volatility 25 (1s) Index': 'R_25', 'Volatility 25 Index': 'R_25', 'Volatility 30 (1s) Index': 'R_30', 'Volatility 50 (1s) Index': 'R_50', 'Volatility 50 Index': 'R_50', 'Volatility 75 (1s) Index': 'R_75', 'Volatility 75 Index': 'R_75', 'Volatility 90 (1s) Index': 'R_90', 'Volatility 100 (1s) Index': 'R_100', 'Volatility 100 Index': 'R_100' }
-const TRADE_TYPES = ['Multipliers', 'Ups & Downs', 'Touch & No Touch', 'Digits', 'Accumulators', 'Vanillas', 'Turbos']
-const SUB_TRADE_TYPES = { 'Accumulators': [], 'Vanillas': ['Call/Put'], 'Turbos': ['Turbos'], 'Multipliers': ['Multipliers'], 'Ups & Downs': ['Rise/Fall', 'Higher/Lower'], 'Touch & No Touch': ['Touch/No Touch'], 'Digits': ['Over/Under', 'Matches/Differs', 'Even/Odd'] }
-const OPTIONS = { 'Over/Under': ['Over', 'Under', 'Both'], 'Even/Odd': ['Even', 'Odd', 'Both'], 'Matches/Differs': ['Matches', 'Differs', 'Both'], 'Turbos': ['Up', 'Down', 'Both'], 'Rise/Fall': ['Rise', 'Fall', 'Both'], 'Higher/Lower': ['Higher', 'Lower', 'Both'], 'Touch/No Touch': ['Touch', 'No Touch', 'Both'], 'Call/Put': ['Call', 'Put', 'Both'], 'Multipliers': ['Up', 'Down', 'Both'] }
-const TIMEFRAME_RULES = { 'Accumulators': { units: ['Ticks'], defaultUnit: 'Ticks', min: 1, max: 85, fixed: true, label: '1 - 85 ticks' }, 'Multipliers': { units: ['Auto'], defaultUnit: 'Auto', min: 1, max: 1, fixed: true, label: 'Auto' }, 'Digits': { units: ['Ticks'], defaultUnit: 'Ticks', min: 1, max: 10, fixed: false }, 'Turbos': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false }, 'Ups & Downs': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false }, 'Touch & No Touch': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false }, 'Vanillas': { units: ['Minutes', 'Hours', 'Days'], defaultUnit: 'Minutes', min: 1, maxMap: { 'Minutes': 1440, 'Hours': 24, 'Days': 30 }, fixed: false } }
+// Only 5 markets for speed and accuracy
+const SYMBOL_MAP = { 
+  'Volatility 10 (1s) Index': 'R_10', 
+  'Volatility 25 (1s) Index': 'R_25', 
+  'Volatility 50 (1s) Index': 'R_50', 
+  'Volatility 75 (1s) Index': 'R_75', 
+  'Volatility 100 (1s) Index': 'R_100' 
+}
+const TRADE_TYPES = ['Digits']
+const SUB_TRADE_TYPES = { 'Digits': ['Over/Under', 'Matches/Differs', 'Even/Odd'] }
+const OPTIONS = { 'Over/Under': ['Over', 'Under', 'Both'], 'Even/Odd': ['Even', 'Odd', 'Both'], 'Matches/Differs': ['Matches', 'Differs', 'Both'] }
+const TIMEFRAME_RULES = { 'Digits': { units: ['Ticks'], defaultUnit: 'Ticks', min: 1, max: 10, fixed: false } }
 
 const ALLOWED_DIGITS_MARKETS = ['R_10', 'R_25', 'R_50', 'R_75', 'R_100']
 const roundStake = (v) => Math.round(v * 100) / 100
 
-// TIGHTENED THRESHOLDS to prevent 50% win rate
+// TIGHTENED THRESHOLDS
 const calcFastEntropy = (arr) => { const unique = new Set(arr.slice(-20)).size; return unique <= 3 ? 1.5 : 3.2 }
 const calcFastMarkov = (digits, target) => { const matches = digits.slice(-20).filter(d => d === target).length; return matches >= 5 ? 0.45 : 0.10 }
 const calcFastFrequency = (digits, target) => (digits.filter(d => d === target).length / digits.length) < 0.05
@@ -102,7 +108,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     return new Promise((resolve) => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return resolve()
       let loadedCount = 0
-      const totalMarkets = Object.values(SYMBOL_MAP).length
+      const totalMarkets = Object.values(SYMBOL_MAP).length // Only 5 markets
       const checkDone = () => { loadedCount++; if (loadedCount >= totalMarkets) { historyLoadedRef.current = true; resolve() } }
       Object.values(SYMBOL_MAP).forEach(sym => {
         const reqId = reqIdRef.current++
@@ -119,7 +125,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         wsRef.current.addEventListener('message', onMessage)
         wsRef.current.send(JSON.stringify({ ticks_history: sym, count: 50, end: 'latest', style: 'ticks', subscribe: 1, req_id: reqId }))
       })
-      setTimeout(() => { historyLoadedRef.current = true; resolve() }, 8000)
+      setTimeout(() => { historyLoadedRef.current = true; resolve() }, 3000) // Reduced to 3 seconds for 5 markets
     })
   }
 
@@ -173,7 +179,60 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       if (subTradeType === 'Even/Odd') return option === 'Even' ? 'DIGITEVEN' : 'DIGITODD'
       return 'DIGITDIFF'
     }
-    return option === 'Rise' || option === 'Higher' || option === 'Up' || option === 'Call' || option === 'Touch' ? 'CALL' : 'PUT'
+    return 'CALL'
+  }
+
+  const wsRequest = (request) => {
+    return new Promise((resolve, reject) => {
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return reject(new Error('WebSocket not connected'))
+      const req_id = reqIdRef.current++
+      const onMessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data)
+          if (msg.req_id === req_id) {
+            wsRef.current.removeEventListener('message', onMessage)
+            if (msg.error) reject(new Error(msg.error.message || 'API Error'))
+            else resolve(msg)
+          }
+        } catch (e) {}
+      }
+      wsRef.current.addEventListener('message', onMessage)
+      wsRef.current.send(JSON.stringify({ ...request, req_id }))
+      setTimeout(() => { wsRef.current.removeEventListener('message', onMessage); reject(new Error('Timeout')) }, 15000)
+    })
+  }
+
+  const monitorContract = (contract_id) => {
+    return new Promise((resolve) => {
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return resolve(null)
+      let sub_id = null
+      const onMessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data)
+          if (msg.msg_type === 'proposal_open_contract' && msg.proposal_open_contract?.contract_id === contract_id) {
+            if (msg.subscription?.id) sub_id = msg.subscription.id
+            if (msg.proposal_open_contract.is_sold) {
+              wsRef.current.removeEventListener('message', onMessage)
+              if (sub_id) wsRef.current.send(JSON.stringify({ forget: sub_id, req_id: reqIdRef.current++ }))
+              resolve(msg.proposal_open_contract)
+            } else {
+              setCurrentPL(sessionPLRef.current + parseFloat(msg.proposal_open_contract.profit || 0))
+            }
+          }
+        } catch (e) {}
+      }
+      wsRef.current.addEventListener('message', onMessage)
+      wsRef.current.send(JSON.stringify({ proposal_open_contract: 1, contract_id, subscribe: 1, req_id: reqIdRef.current++ }))
+    })
+  }
+
+  const getContractType = () => {
+    if (tradeType === 'Digits') {
+      if (subTradeType === 'Over/Under') return option === 'Over' ? 'DIGITOVER' : 'DIGITUNDER'
+      if (subTradeType === 'Even/Odd') return option === 'Even' ? 'DIGITEVEN' : 'DIGITODD'
+      return 'DIGITDIFF'
+    }
+    return 'CALL'
   }
 
   const calculateConfluence = (symbol, targetDigit) => {
@@ -204,7 +263,6 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     Object.keys(SYMBOL_MAP).forEach(name => {
       const sym = SYMBOL_MAP[name]
       if (blacklisted.includes(sym)) return
-      if (tradeType === 'Digits' && !ALLOWED_DIGITS_MARKETS.includes(sym)) return
       const res = calculateConfluence(sym, predictedDigit)
       // STRICT: Requires 3 strategies to align
       if (res.reasons.length >= 3 && res.score > bestScore) { 
@@ -216,7 +274,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
 
   const runTradeCycle = async () => {
     if (!historyLoadedRef.current) {
-      addLog('🔬 Analyzing markets...')
+      addLog('🔬 Analyzing 5 markets...')
       await loadAllHistory()
     }
     let lastLossTime = 0
@@ -235,10 +293,10 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
 
         const best = scanMarkets()
         
-        // FIX: SILENT RECOVERY. Logs exactly ONCE.
+        // SILENT RECOVERY: Logs exactly ONCE
         if (!best.symbol) { 
           if (consecutiveLossesRef.current > 0 && !hasLoggedRecoveryRef.current) {
-            addLog('🔴 RECOVERY MODE:  [O]')
+            addLog(' RECOVERY MODE:  [O]')
             hasLoggedRecoveryRef.current = true
           }
           await new Promise(r => setTimeout(r, 2000)); continue 
@@ -269,7 +327,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         if (isWin) {
           winsRef.current += 1; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake)
           blacklistedMarketsRef.current = []
-          hasLoggedRecoveryRef.current = false // ONLY reset flag on a WIN
+          hasLoggedRecoveryRef.current = false
           addLog(`✅ WON +$${profit.toFixed(2)}`)
           addLog('🟢 NORMAL MODE')
         } else {
@@ -304,7 +362,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []; historyLoadedRef.current = false
     hasLoggedRecoveryRef.current = false; cooldownActiveRef.current = false
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); setLogs([])
-    addLog('⚡ AUTOMATED BOT ACTIVATED')
+    addLog('⚡ AUTOMATED BOT ACTIVATED (5 Markets)')
     addLog(`Type: ${tradeType} | Stake: $${stake} | Martingale: ${martingaleFactor}x`)
     addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`)
     runTradeCycle()
@@ -320,7 +378,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     <div className="h-full flex flex-col bg-gray-950 text-white p-2 overflow-hidden">
       <div className="flex items-center gap-2 pb-1 border-b border-gray-800 mb-2 flex-shrink-0">
         <div className="w-7 h-7 bg-gradient-to-br from-orange-500 to-green-500 rounded-lg flex items-center justify-center"><Zap size={16} className="text-white" /></div>
-        <div><h2 className="text-base font-bold text-white">Automated Bot</h2><p className="text-[10px] text-gray-400 flex items-center gap-1"><ShieldCheck size={10} /> Auto-Selects Best Market</p></div>
+        <div><h2 className="text-base font-bold text-white">Automated Bot</h2><p className="text-[10px] text-gray-400 flex items-center gap-1"><ShieldCheck size={10} /> 5 Markets Only</p></div>
       </div>
       {validationError && <div className="bg-red-900/20 border border-red-500/50 rounded-lg p-2 mb-2 flex items-center gap-2 flex-shrink-0"><AlertCircle size={12} className="text-red-500" /><p className="text-red-400 text-[10px] font-medium">{validationError}</p></div>}
       <div className="bg-gray-900 rounded-lg p-2 border border-gray-800 mb-2 flex-shrink-0 overflow-y-auto" style={{maxHeight: '28vh'}}>
