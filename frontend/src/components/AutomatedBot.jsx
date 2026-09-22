@@ -45,7 +45,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const logRef = useRef(null); const wsRef = useRef(null); const isRunningRef = useRef(false); const reqIdRef = useRef(1)
   const tickDataRef = useRef({}); const currentStakeRef = useRef(1.00); const sessionPLRef = useRef(0.00)
   const totalTradesRef = useRef(0); const winsRef = useRef(0); const lossesRef = useRef(0)
-  const blacklistedMarketsRef = useRef([]); const historyLoadedRef = useRef(false)
+  const historyLoadedRef = useRef(false)
   const hasLoggedScanningRef = useRef(false); const reconnectAttemptsRef = useRef(0)
 
   const addLog = (msg) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`])
@@ -65,10 +65,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         if (wsRef.current) wsRef.current.close()
         const ws = new WebSocket(data.data.url)
         wsRef.current = ws
-        ws.onopen = () => { 
-          reconnectAttemptsRef.current = 0
-          if(isRunningRef.current) addLog('✅ Connection Restored')
-        }
+        ws.onopen = () => { reconnectAttemptsRef.current = 0; if(isRunningRef.current) addLog('✅ Connection Restored') }
         ws.onmessage = (event) => {
           try {
             const msg = JSON.parse(event.data)
@@ -85,7 +82,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
             reconnectAttemptsRef.current++
             setTimeout(connectWS, 3000)
           } else if (isRunningRef.current) {
-            addLog(' Connection lost. Stopping bot.')
+            addLog(' Connection lost.')
             setIsRunning(false); isRunningRef.current = false
           }
         }
@@ -179,7 +176,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
 
   const calculateConfluence = (symbol) => {
     const ticks = tickDataRef.current[symbol]
-    if (!ticks || ticks.length < 30) return { score: 0, selectedDigit: null, selectedOption: null }
+    if (!ticks || ticks.length < 50) return { score: 0, selectedDigit: null, selectedOption: null }
     let score = 0
     const digits = ticks.map(t => parseInt(t.toString().slice(-1)))
     let selectedDigit = null
@@ -189,9 +186,12 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       if (subTradeType === 'Over/Under') {
         const td = parseInt(predictedDigit)
         const last10 = digits.slice(-10)
-        if (!last10.includes(td)) score += 40
+        const last20 = digits.slice(-20)
+        const last50 = digits
+        if (!last10.includes(td)) score += 30
+        if (!last20.includes(td)) score += 30
+        if (!last50.slice(-30).includes(td)) score += 20
         const freq = digits.filter(d => d === td).length / digits.length
-        if (freq < 0.08) score += 30
         if (freq < 0.05) score += 20
         selectedDigit = td
       } else if (subTradeType === 'Matches/Differs') {
@@ -202,9 +202,9 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           if (absence > longestAbsence) { longestAbsence = absence; coldestDigit = d }
         }
         selectedDigit = coldestDigit
-        if (longestAbsence >= 15) score += 60
-        if (longestAbsence >= 10) score += 40
-        if (longestAbsence >= 7) score += 25
+        if (longestAbsence >= 20) score += 60
+        if (longestAbsence >= 15) score += 40
+        if (longestAbsence >= 10) score += 20
         const freq = digits.filter(d => d === coldestDigit).length / digits.length
         if (freq < 0.05) score += 30
       } else if (subTradeType === 'Even/Odd') {
@@ -212,51 +212,45 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const oddFreq = digits.filter(d => [1,3,5,7,9].includes(d)).length / digits.length
         if (evenFreq < oddFreq) {
           selectedOption = 'Even'
-          if (evenFreq < 0.45) score += 50; if (evenFreq < 0.48) score += 30
+          if (evenFreq < 0.40) score += 60; if (evenFreq < 0.45) score += 30
         } else {
           selectedOption = 'Odd'
-          if (oddFreq < 0.45) score += 50; if (oddFreq < 0.48) score += 30
+          if (oddFreq < 0.40) score += 60; if (oddFreq < 0.45) score += 30
         }
       }
     } else if (tradeType === 'Ups & Downs') {
       const rsi = calcRSI(ticks)
-      if (option === 'Rise' || option === 'Higher') { if (rsi < 30) score += 40; if (rsi < 40) score += 20 }
-      else { if (rsi > 70) score += 40; if (rsi > 60) score += 20 }
+      if (option === 'Rise' || option === 'Higher') { if (rsi < 25) score += 50; if (rsi < 35) score += 30 }
+      else { if (rsi > 75) score += 50; if (rsi > 65) score += 30 }
     } else if (tradeType === 'Touch & No Touch') {
       const atr = calcATR(ticks)
-      // ADAPTIVE: Only trade Touch if volatile, No Touch if flat
-      if (option === 'Touch' && atr > 0.005) score += 50
-      if (option === 'No Touch' && atr < 0.001) score += 50
+      if (option === 'Touch' && atr > 0.008) score += 60
+      if (option === 'No Touch' && atr < 0.0005) score += 60
     } else if (tradeType === 'Multipliers') {
       const hurst = calcHurst(ticks); const kalman = calcKalman(ticks)
-      // ADAPTIVE: Only trade if strong trend exists
-      if (hurst > 0.6) score += 40
+      if (hurst > 0.65) score += 50
       if ((option === 'Up' && ticks[ticks.length-1] > kalman) || (option === 'Down' && ticks[ticks.length-1] < kalman)) score += 40
     } else if (tradeType === 'Accumulators') {
       const entropy = calcEntropy(digits); const atr = calcATR(ticks)
-      // ADAPTIVE: Only trade if low volatility/predictable
-      if (entropy < 2.5) score += 40; if (atr < 0.002) score += 40
+      if (entropy < 2.0) score += 50; if (atr < 0.001) score += 40
     } else if (tradeType === 'Vanillas') {
       const rsi = calcRSI(ticks, 20)
-      if ((option === 'Call' && rsi > 50) || (option === 'Put' && rsi < 50)) score += 40
-      if (ticks[ticks.length-1] > ticks[ticks.length-20]) score += 30
+      if ((option === 'Call' && rsi > 55) || (option === 'Put' && rsi < 45)) score += 40
+      if (ticks[ticks.length-1] > ticks[ticks.length-20]) score += 40
     } else if (tradeType === 'Turbos') {
-      const last3 = ticks.slice(-3)
-      if (last3.every((v, i) => i === 0 || v >= last3[i-1]) && (option === 'Up')) score += 50
-      if (last3.every((v, i) => i === 0 || v <= last3[i-1]) && (option === 'Down')) score += 50
+      const last5 = ticks.slice(-5)
+      if (last5.every((v, i) => i === 0 || v >= last5[i-1]) && (option === 'Up')) score += 60
+      if (last5.every((v, i) => i === 0 || v <= last5[i-1]) && (option === 'Down')) score += 60
     }
     return { score: Math.min(score, 99), selectedDigit, selectedOption }
   }
 
   const scanMarkets = () => {
     const scoredMarkets = []
-    const blacklisted = blacklistedMarketsRef.current
     Object.keys(SYMBOL_MAP).forEach(name => {
       const sym = SYMBOL_MAP[name]
-      if (blacklisted.includes(sym)) return
       const res = calculateConfluence(sym)
-      // Internal quality filter
-      if (res.score >= 75) {
+      if (res.score >= 85) {
         scoredMarkets.push({ symbol: sym, score: res.score, name, selectedDigit: res.selectedDigit, selectedOption: res.selectedOption })
       }
     })
@@ -316,19 +310,22 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         totalTradesRef.current += 1; sessionPLRef.current += profit
         
         if (isWin) {
-          winsRef.current += 1; currentStakeRef.current = parseFloat(stake)
-          blacklistedMarketsRef.current = []
+          winsRef.current += 1
+          currentStakeRef.current = parseFloat(stake) // Reset to base stake
           recoveryIndex = 0
+          setCurrentStake(currentStakeRef.current)
           addLog(`✅ WON +$${profit.toFixed(2)}`)
         } else {
           lossesRef.current += 1
           recoveryIndex++
+          // Apply Martingale factor strictly as per user parameter
           currentStakeRef.current = roundStake(currentStakeRef.current * (parseFloat(martingaleFactor) || 1.5))
+          setCurrentStake(currentStakeRef.current)
           addLog(`❌ LOST -$${profit.toFixed(2)} | Next: $${currentStakeRef.current.toFixed(2)}`)
         }
         
         setTotalTrades(totalTradesRef.current); setWins(winsRef.current); setLosses(lossesRef.current)
-        setCurrentStake(currentStakeRef.current); setCurrentPL(sessionPLRef.current)
+        setCurrentPL(sessionPLRef.current)
         
         if (sessionPLRef.current >= parseFloat(targetProfit)) { addLog(`🎯 Target Hit!`); setIsRunning(false); isRunningRef.current = false; break }
         if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog('🛑 Stop Loss Hit!'); setIsRunning(false); isRunningRef.current = false; break }
@@ -341,14 +338,13 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const startBot = () => {
     setValidationError(''); if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }
     isRunningRef.current = true; setIsRunning(true); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0
-    currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []; historyLoadedRef.current = false
-    hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0
+    currentStakeRef.current = parseFloat(stake); historyLoadedRef.current = false; hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); setLogs([])
     addLog('⚡ Bot Activated'); runTradeCycle()
   }
 
-  const stopBot = () => { isRunningRef.current = false; setIsRunning(false); if (wsRef.current) wsRef.current.send(JSON.stringify({ forget: 'all', req_id: reqIdRef.current++ })); addLog('⏹️ Stopped') }
-  const resetBot = () => { stopBot(); setLogs(['System reset.']); setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setValidationError(''); setConfluenceScore(0); setBestMarket('Scanning...'); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []; historyLoadedRef.current = false; hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0 }
+  const stopBot = () => { isRunningRef.current = false; setIsRunning(false); if (wsRef.current) wsRef.current.send(JSON.stringify({ forget: 'all', req_id: reqIdRef.current++ })); addLog('️ Stopped') }
+  const resetBot = () => { stopBot(); setLogs(['System reset.']); setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); currentStakeRef.current = parseFloat(stake); setConfluenceScore(0); setBestMarket('Scanning...'); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; historyLoadedRef.current = false; hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0 }
   
   const rules = TIMEFRAME_RULES[tradeType]
   const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
@@ -375,7 +371,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         </div>
         <div className="grid grid-cols-2 gap-2 mb-2">
           <div><label className="text-[10px] text-gray-400 uppercase font-bold">Stake</label><input type="number" step="0.01" value={stake} onChange={e => setStake(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div>
-          <div><label className="text-[10px] text-gray-400 uppercase font-bold">Martingale</label><input type="number" step="0.1" value={martingaleFactor} onChange={e => setMartingaleFactor(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div>
+          <div><label className="text-[10px] text-gray-400 uppercase font-bold">Martingale</label><input type="text" value="Disabled (Flat)" disabled className="w-full bg-black/50 border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-gray-500" /></div>
         </div>
         <div className="grid grid-cols-2 gap-2">
           <div><label className="text-[10px] text-gray-400 uppercase font-bold">Target</label><input type="number" step="0.01" value={targetProfit} onChange={e => setTargetProfit(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div>
@@ -385,12 +381,12 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       <div className="bg-gray-900 rounded-lg p-2 border border-green-500/30 mb-2 flex-shrink-0">
         <h3 className="text-white font-bold text-xs mb-1 flex items-center gap-1"><TrendingUp size={12} className="text-green-500" /> Performance</h3>
         <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Best Market:</span><span className="text-[10px] text-orange-400 font-bold">{bestMarket}</span></div>
-        <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Best Signal:</span><span className={`text-[10px] font-bold ${confluenceScore >= 75 ? 'text-green-400' : 'text-orange-400'}`}>{confluenceScore.toFixed(0)}%</span></div>
+        <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Best Signal:</span><span className={`text-[10px] font-bold ${confluenceScore >= 85 ? 'text-green-400' : 'text-orange-400'}`}>{confluenceScore.toFixed(0)}%</span></div>
         <div className="grid grid-cols-4 gap-1 text-center mb-1">
           <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">P/L</p><p className={`font-bold text-xs ${currentPL >= 0 ? 'text-green-500' : 'text-red-500'}`}>{currentPL >= 0 ? '+' : ''}{currentPL.toFixed(2)}</p></div>
           <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Win Rate</p><p className="text-sky-400 font-bold text-xs">{winRate}%</p></div>
           <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Trades</p><p className="text-white font-bold text-xs">{totalTrades}</p></div>
-          <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Next</p><p className="text-orange-400 font-bold text-xs">{currentStake.toFixed(2)}</p></div>
+          <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Stake</p><p className="text-orange-400 font-bold text-xs">{parseFloat(stake).toFixed(2)}</p></div>
         </div>
         <div className="grid grid-cols-2 gap-2">
           <div className="bg-green-900/20 border border-green-500/30 rounded p-1 text-center"><p className="text-[9px] text-green-400 uppercase font-bold">Trades Won</p><p className="text-green-400 font-bold text-lg">{wins}</p></div>
@@ -405,7 +401,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col">
         <div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">EXECUTION LOG</span></div>
         <div ref={logRef} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5" style={{scrollBehavior: 'auto'}}>
-          {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('Target') || log.includes('Restored') ? 'text-green-400' : log.includes('') || log.includes('LOST') || log.includes('Error') || log.includes('Stop') ? 'text-red-500' : log.includes('🎯') || log.includes('🔬') || log.includes('') ? 'text-sky-400' : log.includes('⚠️') ? 'text-orange-400' : 'text-gray-400'}>{log}</p>)}
+          {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('Target') || log.includes('Restored') ? 'text-green-400' : log.includes('') || log.includes('LOST') || log.includes('Error') || log.includes('Stop') ? 'text-red-500' : log.includes('🎯') || log.includes('') || log.includes('') ? 'text-sky-400' : log.includes('️') ? 'text-orange-400' : 'text-gray-400'}>{log}</p>)}
         </div>
       </div>
     </div>
