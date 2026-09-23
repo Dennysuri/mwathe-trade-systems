@@ -86,7 +86,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
             setIsRunning(false); isRunningRef.current = false
           }
         }
-      } catch (err) { addLog(`❌ Connection failed`) }
+      } catch (err) { addLog(` Connection failed`) }
     }
     connectWS()
     return () => { if (wsRef.current) wsRef.current.close() }
@@ -174,73 +174,317 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     return option === 'Call' ? 'CALL' : 'PUT'
   }
 
+  // POWERFUL MULTI-LAYERED ANALYSIS FOR ALL TRADE TYPES
   const calculateConfluence = (symbol) => {
     const ticks = tickDataRef.current[symbol]
-    if (!ticks || ticks.length < 30) return { score: 0, selectedDigit: null, selectedOption: null }
+    if (!ticks || ticks.length < 50) return { score: 0, selectedDigit: null, selectedOption: null }
+    
     let score = 0
     const digits = ticks.map(t => parseInt(t.toString().slice(-1)))
     let selectedDigit = null
     let selectedOption = null
     
+    // ========== DIGITS ANALYSIS (Multi-Layered) ==========
     if (tradeType === 'Digits') {
       if (subTradeType === 'Over/Under') {
         const td = parseInt(predictedDigit)
+        
+        // Layer 1: Recent Absence (Last 10 ticks)
         const last10 = digits.slice(-10)
-        const last15 = digits.slice(-15)
-        // Adjusted weights to hit 75% consistently but filter 50/50 trades
-        if (!last10.includes(td)) score += 35
-        if (!last15.includes(td)) score += 25
+        if (!last10.includes(td)) score += 25
+        
+        // Layer 2: Medium-Term Absence (Last 20 ticks)
+        const last20 = digits.slice(-20)
+        if (!last20.includes(td)) score += 25
+        
+        // Layer 3: Long-Term Absence (Last 30 ticks)
+        const last30 = digits.slice(-30)
+        if (!last30.includes(td)) score += 20
+        
+        // Layer 4: Frequency Analysis
         const freq = digits.filter(d => d === td).length / digits.length
-        if (freq < 0.08) score += 20
         if (freq < 0.05) score += 20
+        else if (freq < 0.08) score += 10
+        
+        // Layer 5: Pattern Consistency (Entropy)
+        const entropy = calcEntropy(digits)
+        if (entropy < 2.5) score += 10
+        
         selectedDigit = td
+        
       } else if (subTradeType === 'Matches/Differs') {
-        let coldestDigit = 0, longestAbsence = 0
+        // Find the coldest digit with multi-layered analysis
+        let coldestDigit = 0, longestAbsence = 0, bestScore = 0
+        
         for (let d = 0; d <= 9; d++) {
           let absence = 0
           for (let i = digits.length - 1; i >= 0; i--) { if (digits[i] === d) break; absence++ }
-          if (absence > longestAbsence) { longestAbsence = absence; coldestDigit = d }
+          
+          // Multi-layered scoring for each digit
+          let digitScore = 0
+          if (absence >= 15) digitScore += 40
+          else if (absence >= 10) digitScore += 25
+          else if (absence >= 7) digitScore += 15
+          
+          const freq = digits.filter(x => x === d).length / digits.length
+          if (freq < 0.05) digitScore += 30
+          else if (freq < 0.08) digitScore += 15
+          
+          if (digitScore > bestScore) {
+            bestScore = digitScore
+            coldestDigit = d
+            longestAbsence = absence
+          }
         }
+        
         selectedDigit = coldestDigit
-        if (longestAbsence >= 12) score += 50
-        if (longestAbsence >= 8) score += 30
-        const freq = digits.filter(d => d === coldestDigit).length / digits.length
-        if (freq < 0.08) score += 20
+        score = bestScore
+        
       } else if (subTradeType === 'Even/Odd') {
-        const evenFreq = digits.filter(d => [0,2,4,6,8].includes(d)).length / digits.length
-        const oddFreq = digits.filter(d => [1,3,5,7,9].includes(d)).length / digits.length
+        const evenDigits = [0, 2, 4, 6, 8]
+        const oddDigits = [1, 3, 5, 7, 9]
+        
+        // Multi-layered Even analysis
+        const evenFreq = digits.filter(d => evenDigits.includes(d)).length / digits.length
+        const evenAbsence = (() => {
+          for (let i = digits.length - 1; i >= 0; i--) {
+            if (evenDigits.includes(digits[i])) return digits.length - 1 - i
+          }
+          return digits.length
+        })()
+        
+        // Multi-layered Odd analysis
+        const oddFreq = digits.filter(d => oddDigits.includes(d)).length / digits.length
+        const oddAbsence = (() => {
+          for (let i = digits.length - 1; i >= 0; i--) {
+            if (oddDigits.includes(digits[i])) return digits.length - 1 - i
+          }
+          return digits.length
+        })()
+        
         if (evenFreq < oddFreq) {
           selectedOption = 'Even'
-          if (evenFreq < 0.42) score += 50; if (evenFreq < 0.46) score += 30
+          if (evenAbsence >= 5) score += 30
+          if (evenFreq < 0.42) score += 40
+          else if (evenFreq < 0.46) score += 20
         } else {
           selectedOption = 'Odd'
-          if (oddFreq < 0.42) score += 50; if (oddFreq < 0.46) score += 30
+          if (oddAbsence >= 5) score += 30
+          if (oddFreq < 0.42) score += 40
+          else if (oddFreq < 0.46) score += 20
         }
       }
+      
+    // ========== UPS & DOWNS ANALYSIS (Multi-Layered) ==========
     } else if (tradeType === 'Ups & Downs') {
-      const rsi = calcRSI(ticks)
-      if (option === 'Rise' || option === 'Higher') { if (rsi < 30) score += 40; if (rsi < 40) score += 20 }
-      else { if (rsi > 70) score += 40; if (rsi > 60) score += 20 }
+      const rsi14 = calcRSI(ticks, 14)
+      const rsi7 = calcRSI(ticks, 7)
+      const kalman = calcKalman(ticks)
+      const currentPrice = ticks[ticks.length - 1]
+      const prevPrice = ticks[ticks.length - 2]
+      
+      if (option === 'Rise' || option === 'Higher') {
+        // Layer 1: RSI Oversold (Multiple timeframes)
+        if (rsi14 < 30) score += 30
+        else if (rsi14 < 40) score += 15
+        
+        if (rsi7 < 30) score += 20
+        else if (rsi7 < 40) score += 10
+        
+        // Layer 2: Trend Alignment (Kalman Filter)
+        if (currentPrice > kalman) score += 25
+        
+        // Layer 3: Momentum
+        if (currentPrice > prevPrice) score += 15
+        
+        // Layer 4: Trend Strength (Hurst)
+        const hurst = calcHurst(ticks)
+        if (hurst > 0.6) score += 10
+        
+      } else {
+        // Layer 1: RSI Overbought
+        if (rsi14 > 70) score += 30
+        else if (rsi14 > 60) score += 15
+        
+        if (rsi7 > 70) score += 20
+        else if (rsi7 > 60) score += 10
+        
+        // Layer 2: Trend Alignment
+        if (currentPrice < kalman) score += 25
+        
+        // Layer 3: Momentum
+        if (currentPrice < prevPrice) score += 15
+        
+        // Layer 4: Trend Strength
+        const hurst = calcHurst(ticks)
+        if (hurst > 0.6) score += 10
+      }
+      
+    // ========== TOUCH & NO TOUCH ANALYSIS (Multi-Layered) ==========
     } else if (tradeType === 'Touch & No Touch') {
-      const atr = calcATR(ticks)
-      if (option === 'Touch' && atr > 0.005) score += 50
-      if (option === 'No Touch' && atr < 0.001) score += 50
+      const atr = calcATR(ticks, 14)
+      const atr7 = calcATR(ticks, 7)
+      const hurst = calcHurst(ticks)
+      const currentPrice = ticks[ticks.length - 1]
+      const barrier = parseFloat(predictedDigit || 0)
+      const distance = Math.abs(currentPrice - barrier)
+      
+      if (option === 'Touch') {
+        // Layer 1: High Volatility
+        if (atr > 0.008) score += 35
+        else if (atr > 0.005) score += 20
+        
+        // Layer 2: Recent Volatility Spike
+        if (atr7 > atr) score += 20
+        
+        // Layer 3: Trending Market
+        if (hurst > 0.6) score += 25
+        
+        // Layer 4: Close to Barrier
+        if (distance < 0.005) score += 20
+        
+      } else {
+        // Layer 1: Low Volatility
+        if (atr < 0.001) score += 35
+        else if (atr < 0.002) score += 20
+        
+        // Layer 2: Stable Market
+        if (atr7 < 0.001) score += 20
+        
+        // Layer 3: Mean Reverting
+        if (hurst < 0.4) score += 25
+        
+        // Layer 4: Far from Barrier
+        if (distance > 0.01) score += 20
+      }
+      
+    // ========== MULTIPLIERS ANALYSIS (Multi-Layered) ==========
     } else if (tradeType === 'Multipliers') {
-      const hurst = calcHurst(ticks); const kalman = calcKalman(ticks)
-      if (hurst > 0.6) score += 40
-      if ((option === 'Up' && ticks[ticks.length-1] > kalman) || (option === 'Down' && ticks[ticks.length-1] < kalman)) score += 40
+      const hurst = calcHurst(ticks)
+      const kalman = calcKalman(ticks)
+      const rsi = calcRSI(ticks, 14)
+      const currentPrice = ticks[ticks.length - 1]
+      const atr = calcATR(ticks, 14)
+      
+      if (option === 'Up') {
+        // Layer 1: Strong Trend (Hurst)
+        if (hurst > 0.65) score += 35
+        else if (hurst > 0.6) score += 20
+        
+        // Layer 2: Price Above Kalman
+        if (currentPrice > kalman) score += 30
+        
+        // Layer 3: Momentum
+        if (ticks[ticks.length-1] > ticks[ticks.length-3]) score += 20
+        
+        // Layer 4: RSI Confirmation
+        if (rsi > 50 && rsi < 70) score += 15
+        
+      } else {
+        // Layer 1: Strong Trend
+        if (hurst > 0.65) score += 35
+        else if (hurst > 0.6) score += 20
+        
+        // Layer 2: Price Below Kalman
+        if (currentPrice < kalman) score += 30
+        
+        // Layer 3: Momentum
+        if (ticks[ticks.length-1] < ticks[ticks.length-3]) score += 20
+        
+        // Layer 4: RSI Confirmation
+        if (rsi < 50 && rsi > 30) score += 15
+      }
+      
+    // ========== ACCUMULATORS ANALYSIS (Multi-Layered) ==========
     } else if (tradeType === 'Accumulators') {
-      const entropy = calcEntropy(digits); const atr = calcATR(ticks)
-      if (entropy < 2.5) score += 40; if (atr < 0.002) score += 40
+      const entropy = calcEntropy(digits)
+      const atr = calcATR(ticks, 14)
+      const hurst = calcHurst(ticks)
+      
+      // Layer 1: Low Entropy (Predictable)
+      if (entropy < 2.0) score += 35
+      else if (entropy < 2.5) score += 20
+      
+      // Layer 2: Low Volatility
+      if (atr < 0.001) score += 35
+      else if (atr < 0.002) score += 20
+      
+      // Layer 3: Stable Trend
+      if (hurst > 0.5 && hurst < 0.7) score += 30
+      
+    // ========== VANILLAS ANALYSIS (Multi-Layered) ==========
     } else if (tradeType === 'Vanillas') {
-      const rsi = calcRSI(ticks, 20)
-      if ((option === 'Call' && rsi > 50) || (option === 'Put' && rsi < 50)) score += 40
-      if (ticks[ticks.length-1] > ticks[ticks.length-20]) score += 30
+      const rsi20 = calcRSI(ticks, 20)
+      const rsi14 = calcRSI(ticks, 14)
+      const kalman = calcKalman(ticks)
+      const currentPrice = ticks[ticks.length - 1]
+      const price20Ago = ticks[ticks.length - 20] || ticks[0]
+      
+      if (option === 'Call') {
+        // Layer 1: RSI Momentum
+        if (rsi20 > 55) score += 30
+        else if (rsi20 > 50) score += 15
+        
+        // Layer 2: Multi-timeframe RSI
+        if (rsi14 > rsi20) score += 20
+        
+        // Layer 3: Trend
+        if (currentPrice > kalman) score += 25
+        
+        // Layer 4: Price Momentum
+        if (currentPrice > price20Ago) score += 25
+        
+      } else {
+        // Layer 1: RSI Momentum
+        if (rsi20 < 45) score += 30
+        else if (rsi20 < 50) score += 15
+        
+        // Layer 2: Multi-timeframe RSI
+        if (rsi14 < rsi20) score += 20
+        
+        // Layer 3: Trend
+        if (currentPrice < kalman) score += 25
+        
+        // Layer 4: Price Momentum
+        if (currentPrice < price20Ago) score += 25
+      }
+      
+    // ========== TURBOS ANALYSIS (Multi-Layered) ==========
     } else if (tradeType === 'Turbos') {
       const last3 = ticks.slice(-3)
-      if (last3.every((v, i) => i === 0 || v >= last3[i-1]) && (option === 'Up')) score += 50
-      if (last3.every((v, i) => i === 0 || v <= last3[i-1]) && (option === 'Down')) score += 50
+      const last5 = ticks.slice(-5)
+      const currentPrice = ticks[ticks.length - 1]
+      
+      if (option === 'Up') {
+        // Layer 1: Immediate Momentum (Last 3)
+        if (last3.every((v, i) => i === 0 || v >= last3[i-1])) score += 40
+        
+        // Layer 2: Extended Momentum (Last 5)
+        if (last5.every((v, i) => i === 0 || v >= last5[i-1])) score += 30
+        
+        // Layer 3: Strong Uptick
+        if (currentPrice > ticks[ticks.length-3]) score += 20
+        
+        // Layer 4: Velocity
+        const velocity = (currentPrice - ticks[ticks.length-5]) / ticks[ticks.length-5]
+        if (velocity > 0.001) score += 10
+        
+      } else {
+        // Layer 1: Immediate Momentum
+        if (last3.every((v, i) => i === 0 || v <= last3[i-1])) score += 40
+        
+        // Layer 2: Extended Momentum
+        if (last5.every((v, i) => i === 0 || v <= last5[i-1])) score += 30
+        
+        // Layer 3: Strong Downtick
+        if (currentPrice < ticks[ticks.length-3]) score += 20
+        
+        // Layer 4: Velocity
+        const velocity = (currentPrice - ticks[ticks.length-5]) / ticks[ticks.length-5]
+        if (velocity < -0.001) score += 10
+      }
     }
+    
     return { score: Math.min(score, 99), selectedDigit, selectedOption }
   }
 
@@ -249,8 +493,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     Object.keys(SYMBOL_MAP).forEach(name => {
       const sym = SYMBOL_MAP[name]
       const res = calculateConfluence(sym)
-      // 60% THRESHOLD: Filters garbage, allows consistent trading
-      if (res.score >= 60) {
+      if (res.score >= 75) {
         scoredMarkets.push({ symbol: sym, score: res.score, name, selectedDigit: res.selectedDigit, selectedOption: res.selectedOption })
       }
     })
@@ -275,13 +518,13 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           
           if (recoveryQueue.length === 0) { 
             if (!hasLoggedScanningRef.current) {
-              addLog('⏳ No 60%+ signals found. Waiting silently...')
+              addLog('⏳ Seeking perfect entry...')
               hasLoggedScanningRef.current = true
             }
             await new Promise(r => setTimeout(r, 3000)); continue 
           }
           hasLoggedScanningRef.current = false
-          addLog('🔬 Scanning 13 markets for 60%+ signals...')
+          addLog('🔬 Analyzing market conditions...')
         }
 
         const currentTarget = recoveryQueue[recoveryIndex]
@@ -343,7 +586,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     isRunningRef.current = true; setIsRunning(true); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0
     currentStakeRef.current = parseFloat(stake); historyLoadedRef.current = false; hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); setLogs([])
-    addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets)'); addLog(`Type: ${tradeType} | Stake: $${stake} | Martingale: ${martingaleFactor}x`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); runTradeCycle()
+    addLog(' AUTOMATED BOT ACTIVATED (13 Markets)'); addLog(`Type: ${tradeType} | Stake: $${stake} | Martingale: ${martingaleFactor}x`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); runTradeCycle()
   }
 
   const stopBot = () => { isRunningRef.current = false; setIsRunning(false); if (wsRef.current) wsRef.current.send(JSON.stringify({ forget: 'all', req_id: reqIdRef.current++ })); addLog('⏹️ Stopped') }
@@ -384,7 +627,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       <div className="bg-gray-900 rounded-lg p-2 border border-green-500/30 mb-2 flex-shrink-0">
         <h3 className="text-white font-bold text-xs mb-1 flex items-center gap-1"><TrendingUp size={12} className="text-green-500" /> Performance</h3>
         <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Best Market:</span><span className="text-[10px] text-orange-400 font-bold">{bestMarket}</span></div>
-        <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Confluence Score:</span><span className={`text-[10px] font-bold ${confluenceScore >= 60 ? 'text-green-400' : 'text-orange-400'}`}>{confluenceScore.toFixed(0)}%</span></div>
+        <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Confluence Score:</span><span className={`text-[10px] font-bold ${confluenceScore >= 75 ? 'text-green-400' : 'text-orange-400'}`}>{confluenceScore.toFixed(0)}%</span></div>
         <div className="grid grid-cols-4 gap-1 text-center mb-1">
           <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">P/L</p><p className={`font-bold text-xs ${currentPL >= 0 ? 'text-green-500' : 'text-red-500'}`}>{currentPL >= 0 ? '+' : ''}{currentPL.toFixed(2)}</p></div>
           <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Win Rate</p><p className="text-sky-400 font-bold text-xs">{winRate}%</p></div>
@@ -404,7 +647,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col">
         <div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">EXECUTION LOG</span></div>
         <div ref={logRef} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5" style={{scrollBehavior: 'auto'}}>
-          {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('TARGET') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') || log.includes('Error') || log.includes('STOP') ? 'text-red-500' : log.includes('🚀') || log.includes('') || log.includes('🔬') || log.includes('⏳') ? 'text-sky-400' : log.includes('⚠️') ? 'text-orange-400' : log.includes('━━') ? 'text-gray-600' : 'text-gray-400'}>{log}</p>)}
+          {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('TARGET') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') || log.includes('Error') || log.includes('STOP') ? 'text-red-500' : log.includes('🚀') || log.includes('') || log.includes('🔬') || log.includes('⏳') ? 'text-sky-400' : log.includes('️') ? 'text-orange-400' : log.includes('━━') ? 'text-gray-600' : 'text-gray-400'}>{log}</p>)}
         </div>
       </div>
     </div>
