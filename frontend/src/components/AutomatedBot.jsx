@@ -186,9 +186,12 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       if (subTradeType === 'Over/Under') {
         const td = parseInt(predictedDigit)
         const last10 = digits.slice(-10)
-        if (!last10.includes(td)) score += 40
+        const last15 = digits.slice(-15)
+        // Adjusted weights to hit 75% consistently but filter 50/50 trades
+        if (!last10.includes(td)) score += 35
+        if (!last15.includes(td)) score += 25
         const freq = digits.filter(d => d === td).length / digits.length
-        if (freq < 0.08) score += 30
+        if (freq < 0.08) score += 20
         if (freq < 0.05) score += 20
         selectedDigit = td
       } else if (subTradeType === 'Matches/Differs') {
@@ -199,8 +202,8 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           if (absence > longestAbsence) { longestAbsence = absence; coldestDigit = d }
         }
         selectedDigit = coldestDigit
-        if (longestAbsence >= 10) score += 50
-        if (longestAbsence >= 7) score += 30
+        if (longestAbsence >= 12) score += 50
+        if (longestAbsence >= 8) score += 30
         const freq = digits.filter(d => d === coldestDigit).length / digits.length
         if (freq < 0.08) score += 20
       } else if (subTradeType === 'Even/Odd') {
@@ -208,10 +211,10 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const oddFreq = digits.filter(d => [1,3,5,7,9].includes(d)).length / digits.length
         if (evenFreq < oddFreq) {
           selectedOption = 'Even'
-          if (evenFreq < 0.45) score += 50; if (evenFreq < 0.48) score += 30
+          if (evenFreq < 0.42) score += 50; if (evenFreq < 0.46) score += 30
         } else {
           selectedOption = 'Odd'
-          if (oddFreq < 0.45) score += 50; if (oddFreq < 0.48) score += 30
+          if (oddFreq < 0.42) score += 50; if (oddFreq < 0.46) score += 30
         }
       }
     } else if (tradeType === 'Ups & Downs') {
