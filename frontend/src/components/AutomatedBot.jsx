@@ -47,6 +47,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const totalTradesRef = useRef(0); const winsRef = useRef(0); const lossesRef = useRef(0)
   const historyLoadedRef = useRef(false)
   const hasLoggedScanningRef = useRef(false); const reconnectAttemptsRef = useRef(0)
+  const pingIntervalRef = useRef(null)
 
   const addLog = (msg) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`])
   useEffect(() => { if (logRef.current) requestAnimationFrame(() => { logRef.current.scrollTop = logRef.current.scrollHeight }) }, [logs])
@@ -65,7 +66,16 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         if (wsRef.current) wsRef.current.close()
         const ws = new WebSocket(data.data.url)
         wsRef.current = ws
-        ws.onopen = () => { reconnectAttemptsRef.current = 0; if(isRunningRef.current) addLog('✅ Connection Restored') }
+        
+        ws.onopen = () => { 
+          reconnectAttemptsRef.current = 0
+          if(isRunningRef.current) addLog('✅ Connection Restored')
+          // 12-Hour Stability: Ping server every 20 seconds to prevent timeout
+          if (pingIntervalRef.current) clearInterval(pingIntervalRef.current)
+          pingIntervalRef.current = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ ping: 1, req_id: reqIdRef.current++ }))
+          }, 20000)
+        }
         ws.onmessage = (event) => {
           try {
             const msg = JSON.parse(event.data)
@@ -78,18 +88,19 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           } catch (e) {}
         }
         ws.onclose = () => {
-          if (isRunningRef.current && reconnectAttemptsRef.current < 5) {
+          if (pingIntervalRef.current) clearInterval(pingIntervalRef.current)
+          if (isRunningRef.current && reconnectAttemptsRef.current < 10) {
             reconnectAttemptsRef.current++
             setTimeout(connectWS, 3000)
           } else if (isRunningRef.current) {
-            addLog('❌ Connection lost.')
+            addLog('❌ Connection lost permanently. Stopping bot.')
             setIsRunning(false); isRunningRef.current = false
           }
         }
       } catch (err) { addLog(`❌ Connection failed`) }
     }
     connectWS()
-    return () => { if (wsRef.current) wsRef.current.close() }
+    return () => { if (wsRef.current) wsRef.current.close(); if (pingIntervalRef.current) clearInterval(pingIntervalRef.current) }
   }, [token, accountId])
 
   const loadAllHistory = () => {
@@ -161,151 +172,108 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     })
   }
 
-  const getContractType = () => {
+  const getContractType = (direction) => {
+    const dir = direction || option
     if (tradeType === 'Digits') {
-      if (subTradeType === 'Over/Under') return option === 'Over' ? 'DIGITOVER' : 'DIGITUNDER'
-      if (subTradeType === 'Even/Odd') return option === 'Even' ? 'DIGITEVEN' : 'DIGITODD'
-      if (subTradeType === 'Matches/Differs') return option === 'Matches' ? 'DIGITMATCH' : 'DIGITDIFF'
+      if (subTradeType === 'Over/Under') return dir === 'Over' ? 'DIGITOVER' : 'DIGITUNDER'
+      if (subTradeType === 'Even/Odd') return dir === 'Even' ? 'DIGITEVEN' : 'DIGITODD'
+      if (subTradeType === 'Matches/Differs') return dir === 'Matches' ? 'DIGITMATCH' : 'DIGITDIFF'
       return 'DIGITDIFF'
     }
-    if (tradeType === 'Ups & Downs') return option === 'Rise' || option === 'Higher' ? 'CALL' : 'PUT'
-    if (tradeType === 'Touch & No Touch') return option === 'Touch' ? 'TOUCH' : 'NOTOUCH'
-    if (tradeType === 'Multipliers' || tradeType === 'Turbos') return option === 'Up' ? 'CALL' : 'PUT'
-    return option === 'Call' ? 'CALL' : 'PUT'
+    if (tradeType === 'Ups & Downs') return (dir === 'Rise' || dir === 'Higher' || dir === 'Up') ? 'CALL' : 'PUT'
+    if (tradeType === 'Touch & No Touch') return dir === 'Touch' ? 'TOUCH' : 'NOTOUCH'
+    if (tradeType === 'Multipliers' || tradeType === 'Turbos') return dir === 'Up' ? 'CALL' : 'PUT'
+    return dir === 'Call' ? 'CALL' : 'PUT'
   }
 
   const calculateConfluence = (symbol) => {
     const ticks = tickDataRef.current[symbol]
-    // Lowered requirement to 30 ticks to ensure Digits trades
     if (!ticks || ticks.length < 30) return { score: 0, selectedDigit: null, selectedOption: null }
     
     let score = 0
     const digits = ticks.map(t => parseInt(t.toString().slice(-1)))
     let selectedDigit = null
-    let selectedOption = null
+    let selectedOption = option // Default to user selection
     
     if (tradeType === 'Digits') {
       if (subTradeType === 'Over/Under') {
         const td = parseInt(predictedDigit)
         const last10 = digits.slice(-10)
         const last20 = digits.slice(-20)
-        
-        // Layer 1: Recent Absence
         if (!last10.includes(td)) score += 30
-        // Layer 2: Medium Absence
         if (!last20.includes(td)) score += 30
-        
-        // Layer 3: Frequency
         const freq = digits.filter(d => d === td).length / digits.length
         if (freq < 0.06) score += 25
         else if (freq < 0.09) score += 15
+        if (calcEntropy(digits) < 2.5) score += 15
         
-        // Layer 4: Pattern Consistency
-        const entropy = calcEntropy(digits)
-        if (entropy < 2.5) score += 15
-        
+        if (option === 'Both') {
+          selectedOption = freq > 0.12 ? 'Under' : 'Over'
+          score += 10
+        }
         selectedDigit = td
-        
       } else if (subTradeType === 'Matches/Differs') {
         let coldestDigit = 0, bestScore = 0
         for (let d = 0; d <= 9; d++) {
           let absence = 0
           for (let i = digits.length - 1; i >= 0; i--) { if (digits[i] === d) break; absence++ }
-          
           let digitScore = 0
-          if (absence >= 12) digitScore += 40
-          else if (absence >= 8) digitScore += 25
-          
+          if (absence >= 12) digitScore += 40; else if (absence >= 8) digitScore += 25
           const freq = digits.filter(x => x === d).length / digits.length
-          if (freq < 0.06) digitScore += 35
-          else if (freq < 0.09) digitScore += 20
-          
+          if (freq < 0.06) digitScore += 35; else if (freq < 0.09) digitScore += 20
           if (digitScore > bestScore) { bestScore = digitScore; coldestDigit = d }
         }
         selectedDigit = coldestDigit
         score = bestScore
-        
+        if (option === 'Both') selectedOption = bestScore > 60 ? 'Matches' : 'Differs'
       } else if (subTradeType === 'Even/Odd') {
         const evenFreq = digits.filter(d => [0,2,4,6,8].includes(d)).length / digits.length
         const oddFreq = digits.filter(d => [1,3,5,7,9].includes(d)).length / digits.length
-        
-        if (evenFreq < oddFreq) {
-          selectedOption = 'Even'
-          if (evenFreq < 0.44) score += 50
-          else if (evenFreq < 0.48) score += 30
-        } else {
-          selectedOption = 'Odd'
-          if (oddFreq < 0.44) score += 50
-          else if (oddFreq < 0.48) score += 30
+        if (option === 'Both') {
+          selectedOption = evenFreq < oddFreq ? 'Even' : 'Odd'
         }
+        const targetFreq = selectedOption === 'Even' ? evenFreq : oddFreq
+        if (targetFreq < 0.44) score += 50; else if (targetFreq < 0.48) score += 30
       }
     } else if (tradeType === 'Ups & Downs') {
-      const rsi14 = calcRSI(ticks, 14); const rsi7 = calcRSI(ticks, 7)
-      const kalman = calcKalman(ticks); const currentPrice = ticks[ticks.length - 1]
-      if (option === 'Rise' || option === 'Higher') {
-        if (rsi14 < 30) score += 30; else if (rsi14 < 40) score += 15
-        if (rsi7 < 30) score += 20; else if (rsi7 < 40) score += 10
-        if (currentPrice > kalman) score += 25
-        if (ticks[ticks.length-1] > ticks[ticks.length-2]) score += 15
+      const rsi14 = calcRSI(ticks, 14); const kalman = calcKalman(ticks)
+      const currentPrice = ticks[ticks.length - 1]
+      if (option === 'Both') selectedOption = currentPrice > kalman ? 'Rise' : 'Fall'
+      const isRise = selectedOption === 'Rise' || selectedOption === 'Higher'
+      if (isRise) {
+        if (rsi14 < 40) score += 40; if (currentPrice > kalman) score += 30; if (ticks[ticks.length-1] > ticks[ticks.length-2]) score += 20
       } else {
-        if (rsi14 > 70) score += 30; else if (rsi14 > 60) score += 15
-        if (rsi7 > 70) score += 20; else if (rsi7 > 60) score += 10
-        if (currentPrice < kalman) score += 25
-        if (ticks[ticks.length-1] < ticks[ticks.length-2]) score += 15
+        if (rsi14 > 60) score += 40; if (currentPrice < kalman) score += 30; if (ticks[ticks.length-1] < ticks[ticks.length-2]) score += 20
       }
     } else if (tradeType === 'Touch & No Touch') {
-      const atr = calcATR(ticks, 14); const hurst = calcHurst(ticks)
-      const currentPrice = ticks[ticks.length - 1]
+      const atr = calcATR(ticks, 14); const currentPrice = ticks[ticks.length - 1]
       const barrier = parseFloat(predictedDigit || 0); const distance = Math.abs(currentPrice - barrier)
-      if (option === 'Touch') {
-        if (atr > 0.008) score += 35; else if (atr > 0.005) score += 20
-        if (hurst > 0.6) score += 25
-        if (distance < 0.005) score += 20
+      if (option === 'Both') selectedOption = atr > 0.005 ? 'Touch' : 'No Touch'
+      if (selectedOption === 'Touch') {
+        if (atr > 0.008) score += 40; if (distance < 0.005) score += 40
       } else {
-        if (atr < 0.001) score += 35; else if (atr < 0.002) score += 20
-        if (hurst < 0.4) score += 25
-        if (distance > 0.01) score += 20
+        if (atr < 0.001) score += 40; if (distance > 0.01) score += 40
       }
-    } else if (tradeType === 'Multipliers') {
+    } else if (tradeType === 'Multipliers' || tradeType === 'Turbos') {
       const hurst = calcHurst(ticks); const kalman = calcKalman(ticks)
       const currentPrice = ticks[ticks.length - 1]
-      if (option === 'Up') {
-        if (hurst > 0.65) score += 35; else if (hurst > 0.6) score += 20
-        if (currentPrice > kalman) score += 30
-        if (ticks[ticks.length-1] > ticks[ticks.length-3]) score += 20
+      if (option === 'Both') selectedOption = currentPrice > kalman ? 'Up' : 'Down'
+      if (selectedOption === 'Up') {
+        if (hurst > 0.6) score += 40; if (currentPrice > kalman) score += 40
       } else {
-        if (hurst > 0.65) score += 35; else if (hurst > 0.6) score += 20
-        if (currentPrice < kalman) score += 30
-        if (ticks[ticks.length-1] < ticks[ticks.length-3]) score += 20
+        if (hurst > 0.6) score += 40; if (currentPrice < kalman) score += 40
       }
     } else if (tradeType === 'Accumulators') {
       const entropy = calcEntropy(digits); const atr = calcATR(ticks, 14)
-      if (entropy < 2.0) score += 35; else if (entropy < 2.5) score += 20
-      if (atr < 0.001) score += 35; else if (atr < 0.002) score += 20
-      if (calcHurst(ticks) > 0.5 && calcHurst(ticks) < 0.7) score += 30
+      if (entropy < 2.0) score += 40; if (atr < 0.001) score += 40
     } else if (tradeType === 'Vanillas') {
       const rsi20 = calcRSI(ticks, 20); const kalman = calcKalman(ticks)
       const currentPrice = ticks[ticks.length - 1]
-      if (option === 'Call') {
-        if (rsi20 > 55) score += 30; else if (rsi20 > 50) score += 15
-        if (currentPrice > kalman) score += 25
-        if (currentPrice > ticks[ticks.length-20]) score += 25
+      if (option === 'Both') selectedOption = currentPrice > kalman ? 'Call' : 'Put'
+      if (selectedOption === 'Call') {
+        if (rsi20 > 50) score += 40; if (currentPrice > kalman) score += 40
       } else {
-        if (rsi20 < 45) score += 30; else if (rsi20 < 50) score += 15
-        if (currentPrice < kalman) score += 25
-        if (currentPrice < ticks[ticks.length-20]) score += 25
-      }
-    } else if (tradeType === 'Turbos') {
-      const last3 = ticks.slice(-3); const last5 = ticks.slice(-5)
-      const currentPrice = ticks[ticks.length - 1]
-      if (option === 'Up') {
-        if (last3.every((v, i) => i === 0 || v >= last3[i-1])) score += 40
-        if (last5.every((v, i) => i === 0 || v >= last5[i-1])) score += 30
-        if (currentPrice > ticks[ticks.length-3]) score += 20
-      } else {
-        if (last3.every((v, i) => i === 0 || v <= last3[i-1])) score += 40
-        if (last5.every((v, i) => i === 0 || v <= last5[i-1])) score += 30
-        if (currentPrice < ticks[ticks.length-3]) score += 20
+        if (rsi20 < 50) score += 40; if (currentPrice < kalman) score += 40
       }
     }
     return { score: Math.min(score, 99), selectedDigit, selectedOption }
@@ -313,9 +281,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
 
   const scanMarkets = (isRecovery) => {
     const scoredMarkets = []
-    // Dynamic Threshold: 70% for Recovery, 65% for Normal
     const threshold = isRecovery ? 70 : 65;
-    
     Object.keys(SYMBOL_MAP).forEach(name => {
       const sym = SYMBOL_MAP[name]
       const res = calculateConfluence(sym)
@@ -338,38 +304,35 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           await new Promise(r => setTimeout(r, 3000)); continue 
         }
         
-        // Check if we are in recovery mode (Stake is higher than base)
         const isRecovery = currentStakeRef.current > parseFloat(stake);
-        const modeLabel = isRecovery ? 'Recovery (70%)' : 'Normal (65%)';
         
         if (recoveryIndex >= recoveryQueue.length) {
           recoveryQueue = scanMarkets(isRecovery)
           recoveryIndex = 0
-          
           if (recoveryQueue.length === 0) { 
             if (!hasLoggedScanningRef.current) {
-              addLog(`⏳ Seeking ${modeLabel} entry...`)
+              addLog('⏳ Seeking perfect entry...')
               hasLoggedScanningRef.current = true
             }
             await new Promise(r => setTimeout(r, 3000)); continue 
           }
           hasLoggedScanningRef.current = false
-          addLog(`🔬 Scanning for ${modeLabel} setup...`)
         }
 
         const currentTarget = recoveryQueue[recoveryIndex]
+        const tradeDirection = currentTarget.selectedOption || option;
+        
         setBestMarket(currentTarget.name)
         setConfluenceScore(currentTarget.score)
-        addLog(`🎯 LOCKED: ${currentTarget.name} | Score: ${currentTarget.score}%`)
-        addLog('🚀 EXECUTING...')
+        addLog(`🎯 LOCKED: ${currentTarget.name} | Score: ${currentTarget.score}% | Direction: ${tradeDirection}`)
+        addLog(' EXECUTING...')
         
         let barrier = null
-        let contractType = getContractType()
+        let contractType = getContractType(tradeDirection)
         
         if (tradeType === 'Digits') {
           if (subTradeType === 'Over/Under') barrier = predictedDigit
           else if (subTradeType === 'Matches/Differs' && currentTarget.selectedDigit !== null) barrier = currentTarget.selectedDigit.toString()
-          else if (subTradeType === 'Even/Odd' && currentTarget.selectedOption) contractType = currentTarget.selectedOption === 'Even' ? 'DIGITEVEN' : 'DIGITODD'
         } else if (tradeType === 'Touch & No Touch' && predictedDigit) {
           barrier = predictedDigit
         }
@@ -402,8 +365,8 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         setTotalTrades(totalTradesRef.current); setWins(winsRef.current); setLosses(lossesRef.current)
         setCurrentPL(sessionPLRef.current)
         
-        if (sessionPLRef.current >= parseFloat(targetProfit)) { addLog(`🎯 TARGET HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
-        if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog('🛑 STOP LOSS HIT!'); setIsRunning(false); isRunningRef.current = false; break }
+        if (sessionPLRef.current >= parseFloat(targetProfit)) { addLog(` TARGET HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
+        if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog(' STOP LOSS HIT!'); setIsRunning(false); isRunningRef.current = false; break }
         
         addLog(`📊 P/L: $${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
         await new Promise(r => setTimeout(r, 1000))
@@ -419,7 +382,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets)'); addLog(`Type: ${tradeType} | Stake: $${stake} | Martingale: ${martingaleFactor}x`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); runTradeCycle()
   }
 
-  const stopBot = () => { isRunningRef.current = false; setIsRunning(false); if (wsRef.current) wsRef.current.send(JSON.stringify({ forget: 'all', req_id: reqIdRef.current++ })); addLog('⏹️ Stopped') }
+  const stopBot = () => { isRunningRef.current = false; setIsRunning(false); if (wsRef.current) wsRef.current.send(JSON.stringify({ forget: 'all', req_id: reqIdRef.current++ })); addLog('️ Stopped') }
   const resetBot = () => { stopBot(); setLogs(['System reset.']); setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); currentStakeRef.current = parseFloat(stake); setConfluenceScore(0); setBestMarket('Scanning...'); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; historyLoadedRef.current = false; hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0 }
   
   const rules = TIMEFRAME_RULES[tradeType]
@@ -477,7 +440,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col">
         <div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">EXECUTION LOG</span></div>
         <div ref={logRef} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5" style={{scrollBehavior: 'auto'}}>
-          {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('TARGET') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') || log.includes('Error') || log.includes('STOP') ? 'text-red-500' : log.includes('🚀') || log.includes('🎯') || log.includes('') || log.includes('⏳') ? 'text-sky-400' : log.includes('⚠️') ? 'text-orange-400' : log.includes('━━') ? 'text-gray-600' : 'text-gray-400'}>{log}</p>)}
+          {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('TARGET') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') || log.includes('Error') || log.includes('STOP') ? 'text-red-500' : log.includes('🚀') || log.includes('') || log.includes('') || log.includes('⏳') ? 'text-sky-400' : log.includes('⚠️') ? 'text-orange-400' : log.includes('━━') ? 'text-gray-600' : 'text-gray-400'}>{log}</p>)}
         </div>
       </div>
     </div>
