@@ -45,7 +45,8 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const logRef = useRef(null); const wsRef = useRef(null); const isRunningRef = useRef(false); const reqIdRef = useRef(1)
   const tickDataRef = useRef({}); const currentStakeRef = useRef(1.00); const sessionPLRef = useRef(0.00)
   const totalTradesRef = useRef(0); const winsRef = useRef(0); const lossesRef = useRef(0)
-  const blacklistedMarketsRef = useRef([]); const historyLoadedRef = useRef(false)
+  const historyLoadedRef = useRef(false)
+  const hasLoggedScanningRef = useRef(false); const reconnectAttemptsRef = useRef(0)
 
   const addLog = (msg) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`])
   useEffect(() => { if (logRef.current) requestAnimationFrame(() => { logRef.current.scrollTop = logRef.current.scrollHeight }) }, [logs])
@@ -64,7 +65,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         if (wsRef.current) wsRef.current.close()
         const ws = new WebSocket(data.data.url)
         wsRef.current = ws
-        ws.onopen = () => { ws.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: reqIdRef.current++ })) }
+        ws.onopen = () => { reconnectAttemptsRef.current = 0; if(isRunningRef.current) addLog('✅ Connection Restored') }
         ws.onmessage = (event) => {
           try {
             const msg = JSON.parse(event.data)
@@ -75,6 +76,15 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
             }
             if (msg.msg_type === 'balance' && onBalanceUpdate) onBalanceUpdate(parseFloat(msg.balance.balance))
           } catch (e) {}
+        }
+        ws.onclose = () => {
+          if (isRunningRef.current && reconnectAttemptsRef.current < 5) {
+            reconnectAttemptsRef.current++
+            setTimeout(connectWS, 3000)
+          } else if (isRunningRef.current) {
+            addLog('❌ Connection lost.')
+            setIsRunning(false); isRunningRef.current = false
+          }
         }
       } catch (err) { addLog(`❌ Connection failed`) }
     }
@@ -106,285 +116,3 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       setTimeout(() => { historyLoadedRef.current = true; resolve() }, 4000)
     })
   }
-
-  const wsRequest = (request) => {
-    return new Promise((resolve, reject) => {
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return reject(new Error('WebSocket not connected'))
-      const req_id = reqIdRef.current++
-      const onMessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data)
-          if (msg.req_id === req_id) {
-            wsRef.current.removeEventListener('message', onMessage)
-            if (msg.error) reject(new Error(msg.error.message || 'API Error'))
-            else resolve(msg)
-          }
-        } catch (e) {}
-      }
-      wsRef.current.addEventListener('message', onMessage)
-      wsRef.current.send(JSON.stringify({ ...request, req_id }))
-      setTimeout(() => { wsRef.current.removeEventListener('message', onMessage); reject(new Error('Timeout')) }, 15000)
-    })
-  }
-
-  const monitorContract = (contract_id) => {
-    return new Promise((resolve) => {
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return resolve(null)
-      let sub_id = null
-      const onMessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data)
-          if (msg.msg_type === 'proposal_open_contract' && msg.proposal_open_contract?.contract_id === contract_id) {
-            if (msg.subscription?.id) sub_id = msg.subscription.id
-            if (msg.proposal_open_contract.is_sold) {
-              wsRef.current.removeEventListener('message', onMessage)
-              if (sub_id) wsRef.current.send(JSON.stringify({ forget: sub_id, req_id: reqIdRef.current++ }))
-              resolve(msg.proposal_open_contract)
-            } else {
-              setCurrentPL(sessionPLRef.current + parseFloat(msg.proposal_open_contract.profit || 0))
-            }
-          }
-        } catch (e) {}
-      }
-      wsRef.current.addEventListener('message', onMessage)
-      wsRef.current.send(JSON.stringify({ proposal_open_contract: 1, contract_id, subscribe: 1, req_id: reqIdRef.current++ }))
-    })
-  }
-
-  const getContractType = () => {
-    if (tradeType === 'Digits') {
-      if (subTradeType === 'Over/Under') return option === 'Over' ? 'DIGITOVER' : 'DIGITUNDER'
-      if (subTradeType === 'Even/Odd') return option === 'Even' ? 'DIGITEVEN' : 'DIGITODD'
-      return 'DIGITDIFF'
-    }
-    if (tradeType === 'Ups & Downs') return option === 'Rise' || option === 'Higher' ? 'CALL' : 'PUT'
-    if (tradeType === 'Touch & No Touch') return option === 'Touch' ? 'TOUCH' : 'NOTOUCH'
-    if (tradeType === 'Multipliers' || tradeType === 'Turbos') return option === 'Up' ? 'CALL' : 'PUT'
-    return option === 'Call' ? 'CALL' : 'PUT'
-  }
-
-  const calculateConfluence = (symbol) => {
-    const ticks = tickDataRef.current[symbol]
-    if (!ticks || ticks.length < 30) return { score: 0, selectedDigit: null, selectedOption: null }
-    let score = 0
-    const digits = ticks.map(t => parseInt(t.toString().slice(-1)))
-    let selectedDigit = null
-    let selectedOption = null
-    
-    if (tradeType === 'Digits') {
-      if (subTradeType === 'Over/Under') {
-        const td = parseInt(predictedDigit)
-        const last10 = digits.slice(-10)
-        if (!last10.includes(td)) score += 40
-        const freq = digits.filter(d => d === td).length / digits.length
-        if (freq < 0.08) score += 30
-        if (freq < 0.05) score += 20
-        selectedDigit = td
-      } else if (subTradeType === 'Matches/Differs') {
-        let coldestDigit = 0, longestAbsence = 0
-        for (let d = 0; d <= 9; d++) {
-          let absence = 0
-          for (let i = digits.length - 1; i >= 0; i--) { if (digits[i] === d) break; absence++ }
-          if (absence > longestAbsence) { longestAbsence = absence; coldestDigit = d }
-        }
-        selectedDigit = coldestDigit
-        if (longestAbsence >= 10) score += 50
-        if (longestAbsence >= 7) score += 30
-        const freq = digits.filter(d => d === coldestDigit).length / digits.length
-        if (freq < 0.08) score += 20
-      } else if (subTradeType === 'Even/Odd') {
-        const evenFreq = digits.filter(d => [0,2,4,6,8].includes(d)).length / digits.length
-        const oddFreq = digits.filter(d => [1,3,5,7,9].includes(d)).length / digits.length
-        if (evenFreq < oddFreq) {
-          selectedOption = 'Even'
-          if (evenFreq < 0.45) score += 50; if (evenFreq < 0.48) score += 30
-        } else {
-          selectedOption = 'Odd'
-          if (oddFreq < 0.45) score += 50; if (oddFreq < 0.48) score += 30
-        }
-      }
-    } else if (tradeType === 'Ups & Downs') {
-      const rsi = calcRSI(ticks)
-      if (option === 'Rise' || option === 'Higher') { if (rsi < 30) score += 40; if (rsi < 40) score += 20 }
-      else { if (rsi > 70) score += 40; if (rsi > 60) score += 20 }
-    } else if (tradeType === 'Touch & No Touch') {
-      const atr = calcATR(ticks)
-      if (option === 'Touch' && atr > 0.005) score += 50
-      if (option === 'No Touch' && atr < 0.001) score += 50
-    } else if (tradeType === 'Multipliers') {
-      const hurst = calcHurst(ticks); const kalman = calcKalman(ticks)
-      if (hurst > 0.6) score += 40
-      if ((option === 'Up' && ticks[ticks.length-1] > kalman) || (option === 'Down' && ticks[ticks.length-1] < kalman)) score += 40
-    } else if (tradeType === 'Accumulators') {
-      const entropy = calcEntropy(digits); const atr = calcATR(ticks)
-      if (entropy < 2.5) score += 40; if (atr < 0.002) score += 40
-    } else if (tradeType === 'Vanillas') {
-      const rsi = calcRSI(ticks, 20)
-      if ((option === 'Call' && rsi > 50) || (option === 'Put' && rsi < 50)) score += 40
-      if (ticks[ticks.length-1] > ticks[ticks.length-20]) score += 30
-    } else if (tradeType === 'Turbos') {
-      const last3 = ticks.slice(-3)
-      if (last3.every((v, i) => i === 0 || v >= last3[i-1]) && (option === 'Up')) score += 50
-      if (last3.every((v, i) => i === 0 || v <= last3[i-1]) && (option === 'Down')) score += 50
-    }
-    return { score: Math.min(score, 99), selectedDigit, selectedOption }
-  }
-
-  const scanMarkets = () => {
-    const scoredMarkets = []
-    const blacklisted = blacklistedMarketsRef.current
-    Object.keys(SYMBOL_MAP).forEach(name => {
-      const sym = SYMBOL_MAP[name]
-      if (blacklisted.includes(sym)) return
-      const res = calculateConfluence(sym)
-      // STRICT 75% THRESHOLD
-      if (res.score >= 75) scoredMarkets.push({ symbol: sym, score: res.score, name, selectedDigit: res.selectedDigit, selectedOption: res.selectedOption })
-    })
-    scoredMarkets.sort((a, b) => b.score - a.score)
-    return scoredMarkets
-  }
-
-  const runTradeCycle = async () => {
-    if (!historyLoadedRef.current) { addLog('🔬 Analyzing 13 markets...'); await loadAllHistory() }
-    let recoveryQueue = []
-    let recoveryIndex = 0
-    
-    while (isRunningRef.current) {
-      try {
-        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { await new Promise(r => setTimeout(r, 2000)); continue }
-        
-        if (recoveryIndex >= recoveryQueue.length) {
-          addLog('🔬 Scanning 13 markets for 75%+ setups...')
-          recoveryQueue = scanMarkets()
-          recoveryIndex = 0
-          if (recoveryQueue.length === 0) { await new Promise(r => setTimeout(r, 3000)); continue }
-        }
-
-        const currentTarget = recoveryQueue[recoveryIndex]
-        setBestMarket(currentTarget.name)
-        setConfluenceScore(currentTarget.score)
-        addLog(`🎯 LOCKED: ${currentTarget.name} | Score: ${currentTarget.score}%`)
-        addLog('🚀 EXECUTING...')
-        
-        let barrier = null
-        let contractType = getContractType()
-        
-        if (tradeType === 'Digits') {
-          if (subTradeType === 'Over/Under') {
-            barrier = predictedDigit
-          } else if (subTradeType === 'Matches/Differs' && currentTarget.selectedDigit !== null) {
-            barrier = currentTarget.selectedDigit.toString()
-          } else if (subTradeType === 'Even/Odd' && currentTarget.selectedOption) {
-            contractType = currentTarget.selectedOption === 'Even' ? 'DIGITEVEN' : 'DIGITODD'
-          }
-        } else if (tradeType === 'Touch & No Touch' && predictedDigit) {
-          barrier = predictedDigit
-        }
-        
-        const proposalReq = { proposal: 1, amount: roundStake(currentStakeRef.current), basis: 'stake', contract_type: contractType, currency: 'USD', duration: durationValue, duration_unit: timeframeUnit === 'Minutes' ? 'm' : 't', underlying_symbol: currentTarget.symbol }
-        if (barrier) proposalReq.barrier = barrier
-        
-        const proposalRes = await wsRequest(proposalReq); if (!isRunningRef.current) break
-        const buyRes = await wsRequest({ buy: proposalRes.proposal.id, price: proposalRes.proposal.ask_price }); if (!isRunningRef.current) break
-        addLog(`✅ Contract: ${buyRes.buy.contract_id}`)
-        
-        const contractResult = await monitorContract(buyRes.buy.contract_id); if (!isRunningRef.current || !contractResult) break
-        const profit = parseFloat(contractResult.profit || 0); const isWin = profit > 0
-        totalTradesRef.current += 1; sessionPLRef.current += profit
-        
-        if (isWin) {
-          winsRef.current += 1; currentStakeRef.current = parseFloat(stake)
-          blacklistedMarketsRef.current = []
-          recoveryIndex = 0
-          addLog(`✅ WON +$${profit.toFixed(2)} | Stake reset to base`)
-        } else {
-          lossesRef.current += 1
-          recoveryIndex++
-          currentStakeRef.current = roundStake(currentStakeRef.current * (parseFloat(martingaleFactor) || 1.5))
-          addLog(`❌ LOST -$${profit.toFixed(2)} | Rotating to next market → Next: $${currentStakeRef.current.toFixed(2)}`)
-        }
-        
-        setTotalTrades(totalTradesRef.current); setWins(winsRef.current); setLosses(lossesRef.current)
-        setCurrentStake(currentStakeRef.current); setCurrentPL(sessionPLRef.current)
-        
-        if (sessionPLRef.current >= parseFloat(targetProfit)) { addLog(`🎯 TARGET HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
-        if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog('🛑 STOP LOSS HIT!'); setIsRunning(false); isRunningRef.current = false; break }
-        
-        addLog(`📊 P/L: $${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
-        await new Promise(r => setTimeout(r, 1000))
-      } catch (error) { if (!isRunningRef.current) break; addLog(`❌ Error: ${error.message}`); await new Promise(r => setTimeout(r, 2000)) }
-    }
-  }
-
-  const startBot = () => {
-    setValidationError(''); if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }
-    isRunningRef.current = true; setIsRunning(true); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0
-    currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []; historyLoadedRef.current = false
-    setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); setLogs([])
-    addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets | 75% Threshold)'); addLog(`Type: ${tradeType} | Stake: $${stake} | Martingale: ${martingaleFactor}x`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); runTradeCycle()
-  }
-
-  const stopBot = () => { isRunningRef.current = false; setIsRunning(false); if (wsRef.current) wsRef.current.send(JSON.stringify({ forget: 'all', req_id: reqIdRef.current++ })); addLog('⏹️ Stopped') }
-  const resetBot = () => { stopBot(); setLogs(['System reset.']); setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setValidationError(''); setConfluenceScore(0); setBestMarket('Scanning...'); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; currentStakeRef.current = parseFloat(stake); blacklistedMarketsRef.current = []; historyLoadedRef.current = false }
-  
-  const rules = TIMEFRAME_RULES[tradeType]
-  const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
-
-  return (
-    <div className="h-full flex flex-col bg-gray-950 text-white p-2 overflow-hidden">
-      <div className="flex items-center gap-2 pb-1 border-b border-gray-800 mb-2 flex-shrink-0">
-        <div className="w-7 h-7 bg-gradient-to-br from-orange-500 to-green-500 rounded-lg flex items-center justify-center"><Zap size={16} className="text-white" /></div>
-        <div><h2 className="text-base font-bold text-white">Automated Bot</h2><p className="text-[10px] text-gray-400 flex items-center gap-1"><ShieldCheck size={10} /> 13 Markets | 75% Threshold</p></div>
-      </div>
-      {validationError && <div className="bg-red-900/20 border border-red-500/50 rounded-lg p-2 mb-2 flex items-center gap-2 flex-shrink-0"><AlertCircle size={12} className="text-red-500" /><p className="text-red-400 text-[10px] font-medium">{validationError}</p></div>}
-      <div className="bg-gray-900 rounded-lg p-2 border border-gray-800 mb-2 flex-shrink-0 overflow-y-auto" style={{maxHeight: '28vh'}}>
-        <h3 className="text-white font-bold text-xs flex items-center gap-1 mb-2"><Target size={12} className="text-orange-500" /> Parameters</h3>
-        <div className="grid grid-cols-2 gap-2 mb-2">
-          <div><label className="text-[10px] text-gray-400 uppercase font-bold">Type</label><select value={tradeType} onChange={e => setTradeType(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white">{TRADE_TYPES.map(t => <option key={t} className="text-white">{t}</option>)}</select></div>
-          {SUB_TRADE_TYPES[tradeType]?.length > 0 && <div><label className="text-[10px] text-gray-400 uppercase font-bold">Sub Type</label><select value={subTradeType} onChange={e => setSubTradeType(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white">{SUB_TRADE_TYPES[tradeType].map(t => <option key={t} className="text-white">{t}</option>)}</select></div>}
-        </div>
-        {subTradeType && OPTIONS[subTradeType] && <div className="mb-2"><label className="text-[10px] text-gray-400 uppercase font-bold mb-1 block">Option</label><div className="grid grid-cols-3 gap-1">{OPTIONS[subTradeType].map(opt => <button key={opt} onClick={() => setOption(opt)} disabled={isRunning} className={`py-1.5 rounded text-xs font-bold border ${option === opt ? 'bg-green-500/20 border-green-500 text-green-400' : 'bg-black border-gray-700 text-gray-400'}`}>{opt}</button>)}</div></div>}
-        {(tradeType === 'Digits' && subTradeType === 'Over/Under') && <div className="mb-2"><label className="text-[10px] text-gray-400 uppercase font-bold">Barrier/Digit (Over/Under only)</label><input type="number" min="0" max="9" value={predictedDigit} onChange={e => setPredictedDigit(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div>}
-        {tradeType === 'Touch & No Touch' && <div className="mb-2"><label className="text-[10px] text-gray-400 uppercase font-bold">Barrier (Touch/No Touch)</label><input type="number" value={predictedDigit} onChange={e => setPredictedDigit(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div>}
-        <div className="grid grid-cols-2 gap-2 mb-2">
-          <div><label className="text-[10px] text-gray-400 uppercase font-bold">Time</label>{rules.fixed ? <input type="text" value={rules.defaultUnit} disabled className="w-full bg-black/50 border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-gray-500" /> : <select value={timeframeUnit} onChange={e => { setTimeframeUnit(e.target.value); setDurationValue(rules.min) }} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white">{rules.units.map(u => <option key={u} className="text-white">{u}</option>)}</select>}</div>
-          <div><label className="text-[10px] text-gray-400 uppercase font-bold">Duration</label><input type="number" value={durationValue} onChange={e => setDurationValue(parseInt(e.target.value) || 0)} disabled={isRunning || rules.fixed} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div>
-        </div>
-        <div className="grid grid-cols-2 gap-2 mb-2">
-          <div><label className="text-[10px] text-gray-400 uppercase font-bold">Stake</label><input type="number" step="0.01" value={stake} onChange={e => setStake(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div>
-          <div><label className="text-[10px] text-gray-400 uppercase font-bold">Martingale</label><input type="number" step="0.1" value={martingaleFactor} onChange={e => setMartingaleFactor(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <div><label className="text-[10px] text-gray-400 uppercase font-bold">Target</label><input type="number" step="0.01" value={targetProfit} onChange={e => setTargetProfit(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div>
-          <div><label className="text-[10px] text-gray-400 uppercase font-bold">Stop Loss</label><input type="number" step="0.01" value={stopLoss} onChange={e => setStopLoss(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div>
-        </div>
-      </div>
-      <div className="bg-gray-900 rounded-lg p-2 border border-green-500/30 mb-2 flex-shrink-0">
-        <h3 className="text-white font-bold text-xs mb-1 flex items-center gap-1"><TrendingUp size={12} className="text-green-500" /> Performance</h3>
-        <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Best Market:</span><span className="text-[10px] text-orange-400 font-bold">{bestMarket}</span></div>
-        <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Confluence Score:</span><span className={`text-[10px] font-bold ${confluenceScore >= 75 ? 'text-green-400' : 'text-orange-400'}`}>{confluenceScore.toFixed(0)}%</span></div>
-        <div className="grid grid-cols-4 gap-1 text-center mb-1">
-          <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">P/L</p><p className={`font-bold text-xs ${currentPL >= 0 ? 'text-green-500' : 'text-red-500'}`}>{currentPL >= 0 ? '+' : ''}{currentPL.toFixed(2)}</p></div>
-          <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Win Rate</p><p className="text-sky-400 font-bold text-xs">{winRate}%</p></div>
-          <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Trades</p><p className="text-white font-bold text-xs">{totalTrades}</p></div>
-          <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Next</p><p className="text-orange-400 font-bold text-xs">{currentStake.toFixed(2)}</p></div>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <div className="bg-green-900/20 border border-green-500/30 rounded p-1 text-center"><p className="text-[9px] text-green-400 uppercase font-bold">Trades Won</p><p className="text-green-400 font-bold text-lg">{wins}</p></div>
-          <div className="bg-red-900/20 border border-red-500/30 rounded p-1 text-center"><p className="text-[9px] text-red-400 uppercase font-bold">Trades Lost</p><p className="text-red-400 font-bold text-lg">{losses}</p></div>
-        </div>
-      </div>
-      <div className="grid grid-cols-3 gap-2 flex-shrink-0 mb-2">
-        <button onClick={startBot} disabled={isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${isRunning ? 'bg-gray-800 text-gray-500' : 'bg-green-500 text-black'}`}><Play size={14} /> Run</button>
-        <button onClick={stopBot} disabled={!isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${!isRunning ? 'bg-gray-800 text-gray-500' : 'bg-red-500 text-white'}`}><Square size={14} /> Stop</button>
-        <button onClick={resetBot} className="py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs bg-gray-800 border border-gray-700 text-orange-400"><RefreshCw size={14} /> Reset</button>
-      </div>
-      <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col">
-        <div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">EXECUTION LOG</span></div>
-        <div ref={logRef} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5" style={{scrollBehavior: 'auto'}}>
-          {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('TARGET') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') || log.includes('Error') || log.includes('STOP') ? 'text-red-500' : log.includes('🚀') || log.includes('🎯') || log.includes('🔬') ? 'text-sky-400' : log.includes('⚠️') ? 'text-orange-400' : log.includes('━━') ? 'text-gray-600' : 'text-gray-400'}>{log}</p>)}
-        </div>
-      </div>
-    </div>
-  )
-}

@@ -176,7 +176,9 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
 
   const calculateConfluence = (symbol) => {
     const ticks = tickDataRef.current[symbol]
-    if (!ticks || ticks.length < 50) return { score: 0, selectedDigit: null, selectedOption: null }
+    // Lowered requirement to 30 ticks to ensure Digits trades
+    if (!ticks || ticks.length < 30) return { score: 0, selectedDigit: null, selectedOption: null }
+    
     let score = 0
     const digits = ticks.map(t => parseInt(t.toString().slice(-1)))
     let selectedDigit = null
@@ -187,108 +189,111 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const td = parseInt(predictedDigit)
         const last10 = digits.slice(-10)
         const last20 = digits.slice(-20)
-        const last30 = digits.slice(-30)
-        if (!last10.includes(td)) score += 25
-        if (!last20.includes(td)) score += 25
-        if (!last30.includes(td)) score += 20
+        
+        // Layer 1: Recent Absence
+        if (!last10.includes(td)) score += 30
+        // Layer 2: Medium Absence
+        if (!last20.includes(td)) score += 30
+        
+        // Layer 3: Frequency
         const freq = digits.filter(d => d === td).length / digits.length
-        if (freq < 0.05) score += 20
-        else if (freq < 0.08) score += 10
+        if (freq < 0.06) score += 25
+        else if (freq < 0.09) score += 15
+        
+        // Layer 4: Pattern Consistency
         const entropy = calcEntropy(digits)
-        if (entropy < 2.5) score += 10
+        if (entropy < 2.5) score += 15
+        
         selectedDigit = td
+        
       } else if (subTradeType === 'Matches/Differs') {
         let coldestDigit = 0, bestScore = 0
         for (let d = 0; d <= 9; d++) {
           let absence = 0
           for (let i = digits.length - 1; i >= 0; i--) { if (digits[i] === d) break; absence++ }
+          
           let digitScore = 0
-          if (absence >= 15) digitScore += 40
-          else if (absence >= 10) digitScore += 25
-          else if (absence >= 7) digitScore += 15
+          if (absence >= 12) digitScore += 40
+          else if (absence >= 8) digitScore += 25
+          
           const freq = digits.filter(x => x === d).length / digits.length
-          if (freq < 0.05) digitScore += 30
-          else if (freq < 0.08) digitScore += 15
+          if (freq < 0.06) digitScore += 35
+          else if (freq < 0.09) digitScore += 20
+          
           if (digitScore > bestScore) { bestScore = digitScore; coldestDigit = d }
         }
         selectedDigit = coldestDigit
         score = bestScore
+        
       } else if (subTradeType === 'Even/Odd') {
         const evenFreq = digits.filter(d => [0,2,4,6,8].includes(d)).length / digits.length
         const oddFreq = digits.filter(d => [1,3,5,7,9].includes(d)).length / digits.length
+        
         if (evenFreq < oddFreq) {
           selectedOption = 'Even'
-          if (evenFreq < 0.42) score += 50; if (evenFreq < 0.46) score += 30
+          if (evenFreq < 0.44) score += 50
+          else if (evenFreq < 0.48) score += 30
         } else {
           selectedOption = 'Odd'
-          if (oddFreq < 0.42) score += 50; if (oddFreq < 0.46) score += 30
+          if (oddFreq < 0.44) score += 50
+          else if (oddFreq < 0.48) score += 30
         }
       }
     } else if (tradeType === 'Ups & Downs') {
       const rsi14 = calcRSI(ticks, 14); const rsi7 = calcRSI(ticks, 7)
       const kalman = calcKalman(ticks); const currentPrice = ticks[ticks.length - 1]
-      const prevPrice = ticks[ticks.length - 2]
       if (option === 'Rise' || option === 'Higher') {
         if (rsi14 < 30) score += 30; else if (rsi14 < 40) score += 15
         if (rsi7 < 30) score += 20; else if (rsi7 < 40) score += 10
         if (currentPrice > kalman) score += 25
-        if (currentPrice > prevPrice) score += 15
-        if (calcHurst(ticks) > 0.6) score += 10
+        if (ticks[ticks.length-1] > ticks[ticks.length-2]) score += 15
       } else {
         if (rsi14 > 70) score += 30; else if (rsi14 > 60) score += 15
         if (rsi7 > 70) score += 20; else if (rsi7 > 60) score += 10
         if (currentPrice < kalman) score += 25
-        if (currentPrice < prevPrice) score += 15
-        if (calcHurst(ticks) > 0.6) score += 10
+        if (ticks[ticks.length-1] < ticks[ticks.length-2]) score += 15
       }
     } else if (tradeType === 'Touch & No Touch') {
-      const atr = calcATR(ticks, 14); const atr7 = calcATR(ticks, 7)
-      const hurst = calcHurst(ticks); const currentPrice = ticks[ticks.length - 1]
+      const atr = calcATR(ticks, 14); const hurst = calcHurst(ticks)
+      const currentPrice = ticks[ticks.length - 1]
       const barrier = parseFloat(predictedDigit || 0); const distance = Math.abs(currentPrice - barrier)
       if (option === 'Touch') {
         if (atr > 0.008) score += 35; else if (atr > 0.005) score += 20
-        if (atr7 > atr) score += 20
         if (hurst > 0.6) score += 25
         if (distance < 0.005) score += 20
       } else {
         if (atr < 0.001) score += 35; else if (atr < 0.002) score += 20
-        if (atr7 < 0.001) score += 20
         if (hurst < 0.4) score += 25
         if (distance > 0.01) score += 20
       }
     } else if (tradeType === 'Multipliers') {
       const hurst = calcHurst(ticks); const kalman = calcKalman(ticks)
-      const rsi = calcRSI(ticks, 14); const currentPrice = ticks[ticks.length - 1]
+      const currentPrice = ticks[ticks.length - 1]
       if (option === 'Up') {
         if (hurst > 0.65) score += 35; else if (hurst > 0.6) score += 20
         if (currentPrice > kalman) score += 30
         if (ticks[ticks.length-1] > ticks[ticks.length-3]) score += 20
-        if (rsi > 50 && rsi < 70) score += 15
       } else {
         if (hurst > 0.65) score += 35; else if (hurst > 0.6) score += 20
         if (currentPrice < kalman) score += 30
         if (ticks[ticks.length-1] < ticks[ticks.length-3]) score += 20
-        if (rsi < 50 && rsi > 30) score += 15
       }
     } else if (tradeType === 'Accumulators') {
-      const entropy = calcEntropy(digits); const atr = calcATR(ticks, 14); const hurst = calcHurst(ticks)
+      const entropy = calcEntropy(digits); const atr = calcATR(ticks, 14)
       if (entropy < 2.0) score += 35; else if (entropy < 2.5) score += 20
       if (atr < 0.001) score += 35; else if (atr < 0.002) score += 20
-      if (hurst > 0.5 && hurst < 0.7) score += 30
+      if (calcHurst(ticks) > 0.5 && calcHurst(ticks) < 0.7) score += 30
     } else if (tradeType === 'Vanillas') {
-      const rsi20 = calcRSI(ticks, 20); const rsi14 = calcRSI(ticks, 14)
-      const kalman = calcKalman(ticks); const currentPrice = ticks[ticks.length - 1]
-      const price20Ago = ticks[ticks.length - 20] || ticks[0]
+      const rsi20 = calcRSI(ticks, 20); const kalman = calcKalman(ticks)
+      const currentPrice = ticks[ticks.length - 1]
       if (option === 'Call') {
         if (rsi20 > 55) score += 30; else if (rsi20 > 50) score += 15
-        if (rsi14 > rsi20) score += 20
         if (currentPrice > kalman) score += 25
-        if (currentPrice > price20Ago) score += 25
+        if (currentPrice > ticks[ticks.length-20]) score += 25
       } else {
         if (rsi20 < 45) score += 30; else if (rsi20 < 50) score += 15
-        if (rsi14 < rsi20) score += 20
         if (currentPrice < kalman) score += 25
-        if (currentPrice < price20Ago) score += 25
+        if (currentPrice < ticks[ticks.length-20]) score += 25
       }
     } else if (tradeType === 'Turbos') {
       const last3 = ticks.slice(-3); const last5 = ticks.slice(-5)
@@ -297,25 +302,24 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         if (last3.every((v, i) => i === 0 || v >= last3[i-1])) score += 40
         if (last5.every((v, i) => i === 0 || v >= last5[i-1])) score += 30
         if (currentPrice > ticks[ticks.length-3]) score += 20
-        const velocity = (currentPrice - ticks[ticks.length-5]) / ticks[ticks.length-5]
-        if (velocity > 0.001) score += 10
       } else {
         if (last3.every((v, i) => i === 0 || v <= last3[i-1])) score += 40
         if (last5.every((v, i) => i === 0 || v <= last5[i-1])) score += 30
         if (currentPrice < ticks[ticks.length-3]) score += 20
-        const velocity = (currentPrice - ticks[ticks.length-5]) / ticks[ticks.length-5]
-        if (velocity < -0.001) score += 10
       }
     }
     return { score: Math.min(score, 99), selectedDigit, selectedOption }
   }
 
-  const scanMarkets = () => {
+  const scanMarkets = (isRecovery) => {
     const scoredMarkets = []
+    // Dynamic Threshold: 70% for Recovery, 65% for Normal
+    const threshold = isRecovery ? 70 : 65;
+    
     Object.keys(SYMBOL_MAP).forEach(name => {
       const sym = SYMBOL_MAP[name]
       const res = calculateConfluence(sym)
-      if (res.score >= 60) {
+      if (res.score >= threshold) {
         scoredMarkets.push({ symbol: sym, score: res.score, name, selectedDigit: res.selectedDigit, selectedOption: res.selectedOption })
       }
     })
@@ -334,26 +338,30 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           await new Promise(r => setTimeout(r, 3000)); continue 
         }
         
+        // Check if we are in recovery mode (Stake is higher than base)
+        const isRecovery = currentStakeRef.current > parseFloat(stake);
+        const modeLabel = isRecovery ? 'Recovery (70%)' : 'Normal (65%)';
+        
         if (recoveryIndex >= recoveryQueue.length) {
-          recoveryQueue = scanMarkets()
+          recoveryQueue = scanMarkets(isRecovery)
           recoveryIndex = 0
           
           if (recoveryQueue.length === 0) { 
             if (!hasLoggedScanningRef.current) {
-              addLog('⏳ Seeking perfect entry...')
+              addLog(`⏳ Seeking ${modeLabel} entry...`)
               hasLoggedScanningRef.current = true
             }
             await new Promise(r => setTimeout(r, 3000)); continue 
           }
           hasLoggedScanningRef.current = false
-          addLog('🔬 Analyzing market conditions...')
+          addLog(`🔬 Scanning for ${modeLabel} setup...`)
         }
 
         const currentTarget = recoveryQueue[recoveryIndex]
         setBestMarket(currentTarget.name)
         setConfluenceScore(currentTarget.score)
-        addLog(` LOCKED: ${currentTarget.name} | Score: ${currentTarget.score}%`)
-        addLog(' EXECUTING...')
+        addLog(`🎯 LOCKED: ${currentTarget.name} | Score: ${currentTarget.score}%`)
+        addLog('🚀 EXECUTING...')
         
         let barrier = null
         let contractType = getContractType()
@@ -449,7 +457,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       <div className="bg-gray-900 rounded-lg p-2 border border-green-500/30 mb-2 flex-shrink-0">
         <h3 className="text-white font-bold text-xs mb-1 flex items-center gap-1"><TrendingUp size={12} className="text-green-500" /> Performance</h3>
         <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Best Market:</span><span className="text-[10px] text-orange-400 font-bold">{bestMarket}</span></div>
-        <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Confluence Score:</span><span className={`text-[10px] font-bold ${confluenceScore >= 60 ? 'text-green-400' : 'text-orange-400'}`}>{confluenceScore.toFixed(0)}%</span></div>
+        <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Confluence Score:</span><span className={`text-[10px] font-bold ${confluenceScore >= 65 ? 'text-green-400' : 'text-orange-400'}`}>{confluenceScore.toFixed(0)}%</span></div>
         <div className="grid grid-cols-4 gap-1 text-center mb-1">
           <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">P/L</p><p className={`font-bold text-xs ${currentPL >= 0 ? 'text-green-500' : 'text-red-500'}`}>{currentPL >= 0 ? '+' : ''}{currentPL.toFixed(2)}</p></div>
           <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Win Rate</p><p className="text-sky-400 font-bold text-xs">{winRate}%</p></div>
