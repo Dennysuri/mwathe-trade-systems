@@ -64,7 +64,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     
     const handleVisibility = () => {
       if (document.visibilityState === 'visible' && isRunningRef.current) {
-        addLog('🔄 Tab visible - checking connection...')
+        addLog(' Tab visible - checking connection...')
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
           reconnectAttemptsRef.current = 0
           connectWS()
@@ -215,15 +215,10 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     let selectedDigit = null
     let selectedOption = option
     
-    // SUB-TYPE INTELLIGENCE: Force Differs in recovery if Matches was selected
     if (tradeType === 'Digits' && subTradeType === 'Matches/Differs') {
-      if (isRecovery && (option === 'Matches' || option === 'Both')) {
-        selectedOption = 'Differs'
-      } else if (option === 'Both') {
-        selectedOption = 'Differs'
-      } else {
-        selectedOption = option
-      }
+      if (isRecovery && (option === 'Matches' || option === 'Both')) selectedOption = 'Differs'
+      else if (option === 'Both') selectedOption = 'Differs'
+      else selectedOption = option
     }
     
     if (tradeType === 'Digits') {
@@ -231,184 +226,116 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const td = parseInt(predictedDigit)
         const last10 = digits.slice(-10)
         const last20 = digits.slice(-20)
-        
-        // PREVENTATIVE: Multi-timeframe absence (normal + recovery)
         if (isRecovery && lastFailedDirectionRef.current) {
           if (lastFailedDirectionRef.current === 'Over') {
-            if (!last10.includes(td)) score += 35
-            if (!last20.includes(td)) score += 30
+            if (!last10.includes(td)) score += 35; if (!last20.includes(td)) score += 30
           } else {
             const freq = digits.filter(d => d === td).length / digits.length
-            if (freq > 0.12) score += 40
-            if (freq > 0.10) score += 25
+            if (freq > 0.12) score += 40; if (freq > 0.10) score += 25
           }
         } else {
-          // Normal mode: demand multi-layer confirmation
-          if (!last10.includes(td)) score += 30
-          if (!last20.includes(td)) score += 25
+          if (!last10.includes(td)) score += 30; if (!last20.includes(td)) score += 25
           const freq = digits.filter(d => d === td).length / digits.length
-          if (freq < 0.06) score += 25
-          else if (freq < 0.09) score += 15
+          if (freq < 0.06) score += 25; else if (freq < 0.09) score += 15
         }
         if (calcEntropy(digits) < 2.5) score += 15
         if (option === 'Both') selectedOption = score > 50 ? 'Over' : 'Under'
         selectedDigit = td
-        
       } else if (subTradeType === 'Matches/Differs') {
         let coldestDigit = 0, bestScore = 0
         for (let d = 0; d <= 9; d++) {
           let absence = 0
           for (let i = digits.length - 1; i >= 0; i--) { if (digits[i] === d) break; absence++ }
           let digitScore = 0
-          if (absence >= 15) digitScore += 45
-          else if (absence >= 10) digitScore += 30
-          else if (absence >= 7) digitScore += 20
+          if (absence >= 15) digitScore += 45; else if (absence >= 10) digitScore += 30; else if (absence >= 7) digitScore += 20
           const freq = digits.filter(x => x === d).length / digits.length
-          if (freq < 0.05) digitScore += 35
-          else if (freq < 0.08) digitScore += 20
+          if (freq < 0.05) digitScore += 35; else if (freq < 0.08) digitScore += 20
           if (digitScore > bestScore) { bestScore = digitScore; coldestDigit = d }
         }
-        selectedDigit = coldestDigit
-        score = bestScore
+        selectedDigit = coldestDigit; score = bestScore
         if (selectedOption === 'Matches' && score < 90) score = 0
-        
       } else if (subTradeType === 'Even/Odd') {
-        const evenDigits = [0,2,4,6,8]
-        const oddDigits = [1,3,5,7,9]
+        const evenDigits = [0,2,4,6,8]; const oddDigits = [1,3,5,7,9]
         const evenFreq = digits.filter(d => evenDigits.includes(d)).length / digits.length
         const oddFreq = digits.filter(d => oddDigits.includes(d)).length / digits.length
-        
         let evenStreak = 0, oddStreak = 0
         for (let i = digits.length - 1; i >= 0; i--) { if (evenDigits.includes(digits[i])) evenStreak++; else break }
         for (let i = digits.length - 1; i >= 0; i--) { if (oddDigits.includes(digits[i])) oddStreak++; else break }
         
-        // RECOVERY: Streak Accumulation - wait for 2-tick streak before striking
         if (isRecovery && lastFailedDirectionRef.current) {
           const losingSide = lastFailedDirectionRef.current
           const currentStreakOfLosingSide = losingSide === 'Even' ? evenStreak : oddStreak
           if (currentStreakOfLosingSide >= 2) {
             selectedOption = losingSide === 'Even' ? 'Odd' : 'Even'
-            score += 50
-            if (currentStreakOfLosingSide >= 3) score += 30
-          } else {
-            score = 0
-          }
-        }
-        // NORMAL: Preventative Streak Reversal - wait for 2-tick streak
-        else {
-          if (option === 'Both') {
-            selectedOption = evenStreak > oddStreak ? 'Odd' : 'Even'
-          } else {
-            selectedOption = option
-          }
+            score += 50; if (currentStreakOfLosingSide >= 3) score += 30
+          } else { score = 0 }
+        } else {
+          if (option === 'Both') selectedOption = evenStreak > oddStreak ? 'Odd' : 'Even'
+          else selectedOption = option
           const oppositeStreak = selectedOption === 'Even' ? oddStreak : evenStreak
-          if (oppositeStreak >= 3) score += 60
-          else if (oppositeStreak >= 2) score += 45
-          else if (oppositeStreak >= 1) score += 25
+          if (oppositeStreak >= 3) score += 80
+          else if (oppositeStreak >= 2) score += 60
+          else if (oppositeStreak >= 1) score += 50
           const targetFreq = selectedOption === 'Even' ? evenFreq : oddFreq
-          if (targetFreq < 0.48) score += 20
+          if (targetFreq < 0.50) score += 25
+          else if (targetFreq < 0.52) score += 15
         }
       }
     } else if (tradeType === 'Ups & Downs') {
-      const rsi14 = calcRSI(ticks, 14)
-      const kalman = calcKalman(ticks)
-      const currentPrice = ticks[ticks.length - 1]
-      
+      const rsi14 = calcRSI(ticks, 14); const kalman = calcKalman(ticks); const currentPrice = ticks[ticks.length - 1]
       if (option === 'Both') selectedOption = currentPrice > kalman ? 'Rise' : 'Fall'
-      
-      // PREVENTATIVE: Stronger confirmation required
-      if (isRecovery && lastFailedDirectionRef.current) {
-        selectedOption = lastFailedDirectionRef.current === 'Rise' ? 'Fall' : 'Rise'
-      }
-      
+      if (isRecovery && lastFailedDirectionRef.current) selectedOption = lastFailedDirectionRef.current === 'Rise' ? 'Fall' : 'Rise'
       const isRise = selectedOption === 'Rise' || selectedOption === 'Higher'
       if (isRise) {
-        if (rsi14 < 35) score += 40
-        else if (rsi14 < 45) score += 25
-        if (currentPrice > kalman) score += 30
-        if (ticks[ticks.length-1] > ticks[ticks.length-2]) score += 20
+        if (rsi14 < 35) score += 40; else if (rsi14 < 45) score += 25
+        if (currentPrice > kalman) score += 30; if (ticks[ticks.length-1] > ticks[ticks.length-2]) score += 20
         if (calcHurst(ticks) > 0.6) score += 10
       } else {
-        if (rsi14 > 65) score += 40
-        else if (rsi14 > 55) score += 25
-        if (currentPrice < kalman) score += 30
-        if (ticks[ticks.length-1] < ticks[ticks.length-2]) score += 20
+        if (rsi14 > 65) score += 40; else if (rsi14 > 55) score += 25
+        if (currentPrice < kalman) score += 30; if (ticks[ticks.length-1] < ticks[ticks.length-2]) score += 20
         if (calcHurst(ticks) > 0.6) score += 10
       }
     } else if (tradeType === 'Touch & No Touch') {
-      const atr = calcATR(ticks, 14)
-      const currentPrice = ticks[ticks.length - 1]
-      const barrier = parseFloat(predictedDigit || 0)
-      const distance = Math.abs(currentPrice - barrier)
-      
+      const atr = calcATR(ticks, 14); const currentPrice = ticks[ticks.length - 1]
+      const barrier = parseFloat(predictedDigit || 0); const distance = Math.abs(currentPrice - barrier)
       if (option === 'Both') selectedOption = atr > 0.005 ? 'Touch' : 'No Touch'
-      if (isRecovery && lastFailedDirectionRef.current) {
-        selectedOption = lastFailedDirectionRef.current === 'Touch' ? 'No Touch' : 'Touch'
-      }
+      if (isRecovery && lastFailedDirectionRef.current) selectedOption = lastFailedDirectionRef.current === 'Touch' ? 'No Touch' : 'Touch'
       if (selectedOption === 'Touch') {
-        if (atr > 0.008) score += 40
-        else if (atr > 0.005) score += 25
+        if (atr > 0.008) score += 40; else if (atr > 0.005) score += 25
         if (distance < 0.005) score += 40
       } else {
-        if (atr < 0.001) score += 40
-        else if (atr < 0.002) score += 25
+        if (atr < 0.001) score += 40; else if (atr < 0.002) score += 25
         if (distance > 0.01) score += 40
       }
     } else if (tradeType === 'Multipliers' || tradeType === 'Turbos') {
-      const hurst = calcHurst(ticks)
-      const kalman = calcKalman(ticks)
-      const currentPrice = ticks[ticks.length - 1]
-      
-      // PREVENTATIVE: Hurst filter - reject choppy markets
-      if (hurst < 0.65) {
-        score = 0
-      } else {
+      const hurst = calcHurst(ticks); const kalman = calcKalman(ticks); const currentPrice = ticks[ticks.length - 1]
+      if (hurst < 0.65) { score = 0 }
+      else {
         if (option === 'Both') selectedOption = currentPrice > kalman ? 'Up' : 'Down'
-        
-        // Force flip after 1 loss
-        if (consecutiveLossesRef.current >= 1 && lastFailedDirectionRef.current) {
-          selectedOption = lastFailedDirectionRef.current === 'Up' ? 'Down' : 'Up'
-        } else if (isRecovery && lastFailedDirectionRef.current) {
-          selectedOption = lastFailedDirectionRef.current === 'Up' ? 'Down' : 'Up'
-        }
-        
+        if (consecutiveLossesRef.current >= 1 && lastFailedDirectionRef.current) selectedOption = lastFailedDirectionRef.current === 'Up' ? 'Down' : 'Up'
+        else if (isRecovery && lastFailedDirectionRef.current) selectedOption = lastFailedDirectionRef.current === 'Up' ? 'Down' : 'Up'
         if (selectedOption === 'Up') {
-          if (hurst > 0.7) score += 50
-          else if (hurst > 0.65) score += 40
-          if (currentPrice > kalman) score += 40
-          if (ticks[ticks.length-1] > ticks[ticks.length-3]) score += 10
+          if (hurst > 0.7) score += 50; else if (hurst > 0.65) score += 40
+          if (currentPrice > kalman) score += 40; if (ticks[ticks.length-1] > ticks[ticks.length-3]) score += 10
         } else {
-          if (hurst > 0.7) score += 50
-          else if (hurst > 0.65) score += 40
-          if (currentPrice < kalman) score += 40
-          if (ticks[ticks.length-1] < ticks[ticks.length-3]) score += 10
+          if (hurst > 0.7) score += 50; else if (hurst > 0.65) score += 40
+          if (currentPrice < kalman) score += 40; if (ticks[ticks.length-1] < ticks[ticks.length-3]) score += 10
         }
       }
     } else if (tradeType === 'Accumulators') {
-      const entropy = calcEntropy(digits)
-      const atr = calcATR(ticks, 14)
-      const hurst = calcHurst(ticks)
-      if (entropy < 2.0) score += 40
-      else if (entropy < 2.5) score += 25
-      if (atr < 0.001) score += 40
-      else if (atr < 0.002) score += 25
+      const entropy = calcEntropy(digits); const atr = calcATR(ticks, 14); const hurst = calcHurst(ticks)
+      if (entropy < 2.0) score += 40; else if (entropy < 2.5) score += 25
+      if (atr < 0.001) score += 40; else if (atr < 0.002) score += 25
       if (hurst > 0.5 && hurst < 0.7) score += 20
     } else if (tradeType === 'Vanillas') {
-      const rsi20 = calcRSI(ticks, 20)
-      const kalman = calcKalman(ticks)
-      const currentPrice = ticks[ticks.length - 1]
-      
+      const rsi20 = calcRSI(ticks, 20); const kalman = calcKalman(ticks); const currentPrice = ticks[ticks.length - 1]
       if (option === 'Both') selectedOption = currentPrice > kalman ? 'Call' : 'Put'
-      if (isRecovery && lastFailedDirectionRef.current) {
-        selectedOption = lastFailedDirectionRef.current === 'Call' ? 'Put' : 'Call'
-      }
+      if (isRecovery && lastFailedDirectionRef.current) selectedOption = lastFailedDirectionRef.current === 'Call' ? 'Put' : 'Call'
       if (selectedOption === 'Call') {
-        if (rsi20 > 55) score += 40
-        else if (rsi20 > 50) score += 25
+        if (rsi20 > 55) score += 40; else if (rsi20 > 50) score += 25
         if (currentPrice > kalman) score += 40
       } else {
-        if (rsi20 < 45) score += 40
-        else if (rsi20 < 50) score += 25
+        if (rsi20 < 45) score += 40; else if (rsi20 < 50) score += 25
         if (currentPrice < kalman) score += 40
       }
     }
@@ -417,13 +344,10 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
 
   const scanMarkets = (isRecovery, waitTime) => {
     const scoredMarkets = []
-    // Time-Decay Threshold with Preventative Standards
-    let threshold = isRecovery ? 75 : 70  // Normal raised to 70% for preventative sniping
-    
-    if (waitTime > 60000) threshold = 60   // 60s+: forced execution
-    else if (waitTime > 30000) threshold = 65  // 30-60s: relaxed
-    else if (isRecovery) threshold = 70   // First 30s recovery
-    else threshold = 70  // First 30s normal (preventative)
+    let threshold = isRecovery ? 75 : 70
+    if (waitTime > 60000) threshold = 60
+    else if (waitTime > 30000) threshold = 65
+    else if (waitTime > 15000) threshold = 68
     
     Object.keys(SYMBOL_MAP).forEach(name => {
       const sym = SYMBOL_MAP[name]
@@ -444,10 +368,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     
     while (isRunningRef.current) {
       try {
-        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { 
-          await new Promise(r => setTimeout(r, 3000)); continue 
-        }
-        
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { await new Promise(r => setTimeout(r, 3000)); continue }
         const isRecovery = currentStakeRef.current > parseFloat(stake)
         const waitTime = Date.now() - lastScanTimeRef.current
         
@@ -457,7 +378,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           if (recoveryQueue.length === 0) { 
             if (!hasLoggedScanningRef.current) {
               const waitSec = Math.floor(waitTime / 1000)
-              addLog(`⏳ Seeking perfect entry... (${waitSec}s)`)
+              addLog(`⏳ Analyzing market conditions... (${waitSec}s)`)
               hasLoggedScanningRef.current = true
             }
             await new Promise(r => setTimeout(r, 2000)); continue 
@@ -468,25 +389,19 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
 
         const currentTarget = recoveryQueue[recoveryIndex]
         const tradeDirection = currentTarget.selectedOption || option
-        
-        setBestMarket(currentTarget.name)
-        setConfluenceScore(currentTarget.score)
+        setBestMarket(currentTarget.name); setConfluenceScore(currentTarget.score)
         addLog(`🎯 LOCKED: ${currentTarget.name} | Score: ${currentTarget.score}% | Direction: ${tradeDirection}`)
         addLog('🚀 EXECUTING...')
         
         let barrier = null
         const contractType = getContractType(tradeDirection)
-        
         if (tradeType === 'Digits') {
           if (subTradeType === 'Over/Under') barrier = predictedDigit
           else if (subTradeType === 'Matches/Differs' && currentTarget.selectedDigit !== null) barrier = currentTarget.selectedDigit.toString()
-        } else if (tradeType === 'Touch & No Touch' && predictedDigit) {
-          barrier = predictedDigit
-        }
+        } else if (tradeType === 'Touch & No Touch' && predictedDigit) { barrier = predictedDigit }
         
         const proposalReq = { proposal: 1, amount: roundStake(currentStakeRef.current), basis: 'stake', contract_type: contractType, currency: 'USD', duration: durationValue, duration_unit: timeframeUnit === 'Minutes' ? 'm' : 't', underlying_symbol: currentTarget.symbol }
         if (barrier) proposalReq.barrier = barrier
-        
         const proposalRes = await wsRequest(proposalReq); if (!isRunningRef.current) break
         const buyRes = await wsRequest({ buy: proposalRes.proposal.id, price: proposalRes.proposal.ask_price }); if (!isRunningRef.current) break
         addLog(`✅ Contract: ${buyRes.buy.contract_id}`)
@@ -496,33 +411,23 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         totalTradesRef.current += 1; sessionPLRef.current += profit
         
         if (isWin) {
-          winsRef.current += 1
-          currentStakeRef.current = parseFloat(stake)
-          recoveryIndex = 0
-          lastFailedDirectionRef.current = null
-          consecutiveLossesRef.current = 0
+          winsRef.current += 1; currentStakeRef.current = parseFloat(stake); recoveryIndex = 0
+          lastFailedDirectionRef.current = null; consecutiveLossesRef.current = 0
           setCurrentStake(currentStakeRef.current)
           addLog(`✅ WON +$${profit.toFixed(2)} | Stake reset to base`)
         } else {
-          lossesRef.current += 1
-          consecutiveLossesRef.current++
-          lastFailedDirectionRef.current = tradeDirection
-          recoveryIndex++
+          lossesRef.current += 1; consecutiveLossesRef.current++
+          lastFailedDirectionRef.current = tradeDirection; recoveryIndex++
           currentStakeRef.current = roundStake(currentStakeRef.current * (parseFloat(martingaleFactor) || 1.5))
           setCurrentStake(currentStakeRef.current)
-          if (consecutiveLossesRef.current >= 1) {
-            addLog(`⚠️ ${consecutiveLossesRef.current} consecutive loss - Forcing direction flip`)
-          }
+          if (consecutiveLossesRef.current >= 1) addLog(`⚠️ ${consecutiveLossesRef.current} consecutive loss - Forcing direction flip`)
           addLog(`❌ LOST -$${profit.toFixed(2)} | Rotating to next market → Next: $${currentStakeRef.current.toFixed(2)}`)
         }
         
-        setTotalTrades(totalTradesRef.current); setWins(winsRef.current); setLosses(lossesRef.current)
-        setCurrentPL(sessionPLRef.current)
-        
+        setTotalTrades(totalTradesRef.current); setWins(winsRef.current); setLosses(lossesRef.current); setCurrentPL(sessionPLRef.current)
         if (sessionPLRef.current >= parseFloat(targetProfit)) { addLog(`🎯 TARGET HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
-        if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog(' STOP LOSS HIT!'); setIsRunning(false); isRunningRef.current = false; break }
-        
-        addLog(`📊 P/L: $${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
+        if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog('🛑 STOP LOSS HIT!'); setIsRunning(false); isRunningRef.current = false; break }
+        addLog(` P/L: $${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
         await new Promise(r => setTimeout(r, 1000))
       } catch (error) { if (!isRunningRef.current) break; addLog(`❌ Error: ${error.message}`); await new Promise(r => setTimeout(r, 2000)) }
     }
@@ -534,14 +439,12 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     currentStakeRef.current = parseFloat(stake); historyLoadedRef.current = false; hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0
     lastFailedDirectionRef.current = null; consecutiveLossesRef.current = 0; lastScanTimeRef.current = Date.now()
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); setLogs([])
-    addLog(' AUTOMATED BOT ACTIVATED (13 Markets | Preventative Mode)'); addLog(`Type: ${tradeType} | Stake: $${stake} | Martingale: ${martingaleFactor}x`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); runTradeCycle()
+    addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets | Preventative Mode)'); addLog(`Type: ${tradeType} | Stake: $${stake} | Martingale: ${martingaleFactor}x`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); runTradeCycle()
   }
 
   const stopBot = () => { isRunningRef.current = false; setIsRunning(false); if (wsRef.current) wsRef.current.send(JSON.stringify({ forget: 'all', req_id: reqIdRef.current++ })); addLog('⏹️ Stopped') }
   const resetBot = () => { stopBot(); setLogs(['System reset.']); setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); currentStakeRef.current = parseFloat(stake); setConfluenceScore(0); setBestMarket('Scanning...'); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; historyLoadedRef.current = false; hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0; lastFailedDirectionRef.current = null; consecutiveLossesRef.current = 0 }
-  
-  const rules = TIMEFRAME_RULES[tradeType]
-  const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
+  const rules = TIMEFRAME_RULES[tradeType]; const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
 
   return (
     <div className="h-full flex flex-col bg-gray-950 text-white p-2 overflow-hidden">
@@ -595,7 +498,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col">
         <div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">EXECUTION LOG</span></div>
         <div ref={logRef} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5" style={{scrollBehavior: 'auto'}}>
-          {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('TARGET') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') || log.includes('Error') || log.includes('STOP') ? 'text-red-500' : log.includes('🚀') || log.includes('🎯') || log.includes('🔬') || log.includes('⏳') || log.includes('') || log.includes('⚠️') ? 'text-sky-400' : log.includes('━━') ? 'text-gray-600' : 'text-gray-400'}>{log}</p>)}
+          {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('TARGET') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') || log.includes('Error') || log.includes('STOP') ? 'text-red-500' : log.includes('🚀') || log.includes('') || log.includes('🔬') || log.includes('⏳') || log.includes('️') ? 'text-sky-400' : log.includes('━━') ? 'text-gray-600' : 'text-gray-400'}>{log}</p>)}
         </div>
       </div>
     </div>
