@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Activity, Lock } from 'lucide-react'
 import { boundedNextStake, buildProposal, MARKET_SYMBOLS } from '../services/tradingCore'
+import { validateEntryWindow } from '../services/strategyIntelligence'
 
 const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
 const SYMBOL_MAP = { 'Volatility 10 (1s) Index': 'R_10', 'Volatility 10 Index': 'R_10', 'Volatility 15 (1s) Index': 'R_15', 'Volatility 25 (1s) Index': 'R_25', 'Volatility 25 Index': 'R_25', 'Volatility 30 (1s) Index': 'R_30', 'Volatility 50 (1s) Index': 'R_50', 'Volatility 50 Index': 'R_50', 'Volatility 75 (1s) Index': 'R_75', 'Volatility 75 Index': 'R_75', 'Volatility 90 (1s) Index': 'R_90', 'Volatility 100 (1s) Index': 'R_100', 'Volatility 100 Index': 'R_100' }
@@ -44,6 +45,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   const wsRef = useRef(null)
   const tickHistoryRef = useRef({})
   const pendingProposalRef = useRef(null)
+  const pendingEntryRef = useRef(null)
   const sessionRef = useRef({totalTrades:0,wins:0,losses:0,lossStreak:0,stake:0.35,pl:0})
   const configRef = useRef({stake,targetProfit,stopLoss})
   configRef.current = {stake,targetProfit,stopLoss,selectedMarket,tradeType,subTradeType,option,timeframeUnit,durationValue}
@@ -80,7 +82,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
               if (msg.error || !JSON.stringify(msg.contracts_for || {}).includes(pending.proposal.contract_type)) addLog('⛔ Deriv does not offer this contract for the selected market. No trade sent.')
               else websocket.send(JSON.stringify({...pending.proposal,req_id:Date.now()}))
             }
-            if (msg.msg_type === 'proposal') { if (msg.error) { addLog(`❌ Proposal failed: ${msg.error.message || 'Deriv rejected the proposal'}`); if (isRunningRef.current) nextTradeTimer.current=setTimeout(()=>executeTrade(),3000) } else setTimeout(() => websocket.send(JSON.stringify({ buy: msg.proposal.id, price: msg.proposal.ask_price, req_id: Date.now() })), 200) }
+            if (msg.msg_type === 'proposal') { if (msg.error) { addLog(`❌ Proposal failed: ${msg.error.message || 'Deriv rejected the proposal'}`); if (isRunningRef.current) nextTradeTimer.current=setTimeout(()=>executeTrade(),3000) } else setTimeout(() => { const gate=validateEntryWindow(pendingEntryRef.current,{maxSignalAgeMs:15000,proposalBudgetMs:300,minimumRemainingMs:250}); if(!gate.valid){addLog(`⛔ Entry expired before purchase: ${gate.reason}`);pendingEntryRef.current=null;if(isRunningRef.current)nextTradeTimer.current=setTimeout(()=>executeTrade(),1500);return} websocket.send(JSON.stringify({ buy: msg.proposal.id, price: msg.proposal.ask_price, req_id: Date.now() })) }, 200) }
             if (msg.msg_type === 'buy') { if (msg.error) { addLog(`❌ Buy failed: ${msg.error.message || 'Deriv rejected the purchase'}`); setCurrentContract(null); if (isRunningRef.current) nextTradeTimer.current=setTimeout(()=>executeTrade(),3000) } else { setCurrentContract({ id: msg.buy.contract_id }); addLog(`✅ Contract: ${msg.buy.contract_id}`); websocket.send(JSON.stringify({ proposal_open_contract: 1, contract_id: msg.buy.contract_id, subscribe: 1, req_id: Date.now() })) } }
             if (msg.msg_type === 'proposal_open_contract') { if (!msg.error && msg.proposal_open_contract) { const contract = msg.proposal_open_contract; if (contract.is_sold) { handleContractResult(parseFloat(contract.profit)); setCurrentContract(null) } else setCurrentPL(parseFloat(contract.profit || 0)) } }
           } catch (e) { console.error(e) }
@@ -143,10 +145,10 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     const barrier = config.tradeType === 'Digits' ? (config.subTradeType==='Over/Under'?(selectedOption==='Over'?'2':'8'):config.subTradeType==='Matches/Differs'?'3':'')
       : (config.tradeType==='Touch & No Touch'||config.subTradeType==='Higher/Lower') ? ((config.tradeType==='Touch & No Touch'?direction==='down':isDown)?'-':'+')+Math.max(atr*(config.tradeType==='Touch & No Touch'?3:2),Math.abs(ticks.at(-1))*0.0001).toFixed(4) : ''
     try {
-      const signal = {symbol,tradeType:config.tradeType,subTradeType:config.subTradeType,option:selectedOption,predictedDigit:selectedOption==='Over'?2:selectedOption==='Under'?8:3,barrier,duration:config.durationValue,timeframeUnit:config.timeframeUnit,expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,config.durationValue*(config.timeframeUnit==='Hours'?3600:config.timeframeUnit==='Days'?86400:config.timeframeUnit==='Minutes'?60:1)),growthRate:0.01,multiplier:100,takeProfit:1,contractStopLoss:1}
+      const signal = {symbol,tradeType:config.tradeType,subTradeType:config.subTradeType,option:selectedOption,predictedDigit:selectedOption==='Over'?2:selectedOption==='Under'?8:3,barrier,duration:config.durationValue,timeframeUnit:config.timeframeUnit,createdAt:Date.now(),expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,config.durationValue*(config.timeframeUnit==='Hours'?3600:config.timeframeUnit==='Days'?86400:config.timeframeUnit==='Minutes'?60:1)),growthRate:0.01,multiplier:100,takeProfit:1,contractStopLoss:1}
       const proposal = buildProposal(signal,sessionRef.current.stake)
       const reqId = Date.now()
-      pendingProposalRef.current = {proposal,reqId}
+      pendingProposalRef.current = {proposal,reqId}; pendingEntryRef.current = signal
       addLog(`🔎 Live setup ${selectedOption}; validating ${proposal.contract_type} with Deriv.`)
       socket.send(JSON.stringify({contracts_for:symbol,currency:'USD',req_id:reqId}))
     } catch (error) { addLog(`⛔ ${error.message}`); nextTradeTimer.current = setTimeout(() => executeTrade(), 3000) }
