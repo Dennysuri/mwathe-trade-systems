@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Activity, Lock } from 'lucide-react'
-import { boundedNextStake } from '../services/tradingCore'
+import { boundedNextStake, buildProposal } from '../services/tradingCore'
 
 const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
 const SYMBOL_MAP = { 'Volatility 10 (1s) Index': 'R_10', 'Volatility 10 Index': 'R_10', 'Volatility 15 (1s) Index': 'R_15', 'Volatility 25 (1s) Index': 'R_25', 'Volatility 25 Index': 'R_25', 'Volatility 30 (1s) Index': 'R_30', 'Volatility 50 (1s) Index': 'R_50', 'Volatility 50 Index': 'R_50', 'Volatility 75 (1s) Index': 'R_75', 'Volatility 75 Index': 'R_75', 'Volatility 90 (1s) Index': 'R_90', 'Volatility 100 (1s) Index': 'R_100', 'Volatility 100 Index': 'R_100' }
@@ -39,6 +39,10 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   const logRef = useRef(null)
   const nextTradeTimer = useRef(null)
   const isRunningRef = useRef(false)
+  const tickHistoryRef = useRef([])
+  const pendingProposalRef = useRef(null)
+  const statsRef = useRef({totalTrades:0,wins:0,losses:0,consecutiveLosses:0,currentStake:0.35,currentPL:0})
+  const liveHandlersRef = useRef({})
 
   const addLog = (msg) => setLogs(prev => [...prev.slice(-20), `[${new Date().toLocaleTimeString()}] ${msg}`])
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight }, [logs])
@@ -63,8 +67,15 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
           try {
             const msg = JSON.parse(message.data)
             if (msg.msg_type === 'balance' && onBalanceUpdate) onBalanceUpdate(parseFloat(msg.balance.balance))
+            if (msg.msg_type === 'history' && msg.history?.prices) tickHistoryRef.current = msg.history.prices.map(Number).filter(Number.isFinite).slice(-500)
+            if (msg.msg_type === 'tick' && msg.tick?.quote !== undefined) tickHistoryRef.current = [...tickHistoryRef.current, Number(msg.tick.quote)].slice(-500)
+            if (msg.msg_type === 'contracts_for' && pendingProposalRef.current?.reqId === msg.req_id) {
+              const pending = pendingProposalRef.current; pendingProposalRef.current = null
+              if (msg.error || !JSON.stringify(msg.contracts_for || {}).includes(pending.proposal.contract_type)) addLog('⛔ Deriv does not offer this contract for the selected market. No trade sent.')
+              else websocket.send(JSON.stringify({...pending.proposal,req_id:Date.now()}))
+            }
             if (msg.msg_type === 'proposal') { if (msg.error) addLog(`❌ Proposal failed`); else setTimeout(() => websocket.send(JSON.stringify({ buy: msg.proposal.id, price: msg.proposal.ask_price, req_id: Date.now() })), 200) }
-            if (msg.msg_type === 'buy') { if (msg.error) { addLog(`❌ Buy failed`); setCurrentContract(null) } else { setCurrentContract({ id: msg.buy.contract_id }); addLog(`✅ Contract: ${msg.buy.contract_id}`); websocket.send(JSON.stringify({ proposal_open_contract: msg.buy.contract_id, subscribe: 1, req_id: Date.now() })) } }
+            if (msg.msg_type === 'buy') { if (msg.error) { addLog(`❌ Buy failed`); setCurrentContract(null) } else { setCurrentContract({ id: msg.buy.contract_id }); addLog(`✅ Contract: ${msg.buy.contract_id}`); websocket.send(JSON.stringify({ proposal_open_contract: 1, contract_id: msg.buy.contract_id, subscribe: 1, req_id: Date.now() })) } }
             if (msg.msg_type === 'proposal_open_contract') { if (!msg.error && msg.proposal_open_contract) { const contract = msg.proposal_open_contract; if (contract.is_sold) { handleContractResult(parseFloat(contract.profit)); setCurrentContract(null) } else setCurrentPL(parseFloat(contract.profit || 0)) } }
           } catch (e) { console.error(e) }
         }
@@ -77,16 +88,40 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     return () => { if (ws) ws.close() }
   }, [isAuthenticated, token, accountId])
 
-  const getContractType = () => { if (tradeType === 'Digits') { if (subTradeType === 'Over/Under') return option === 'Over' ? 'DIGITOVER' : 'DIGITUNDER'; if (subTradeType === 'Even/Odd') return option === 'Even' ? 'DIGITEVEN' : 'DIGITODD'; return 'DIGITDIFF' } if (tradeType === 'Ups & Downs') return option === 'Rise' || option === 'Higher' ? 'CALL' : 'PUT'; return 'CALL' }
-
   const executeTrade = () => {
     if (!ws || ws.readyState !== WebSocket.OPEN || !isRunningRef.current) return
+    const ticks = tickHistoryRef.current
+    if (ticks.length < 40) { addLog('⏳ Waiting for sufficient live tick history.'); nextTradeTimer.current = setTimeout(() => liveHandlersRef.current.executeTrade?.(), 2000); return }
+    const recent = ticks.slice(-20), deltas = recent.slice(1).map((v,i)=>v-recent[i]), drift = ticks.at(-1)-ticks.at(-16)
+    const atr = deltas.reduce((sum,v)=>sum+Math.abs(v),0)/(deltas.length||1)
+    if (!atr || Math.abs(drift) < atr*3) { addLog('No sufficiently strong live setup; waiting.'); nextTradeTimer.current = setTimeout(() => liveHandlersRef.current.executeTrade?.(), 2000); return }
+    const direction = drift > 0 ? 'up' : 'down'
+    let selectedOption = option
+    if (selectedOption === 'Both') {
+      selectedOption = tradeType === 'Vanillas' ? (direction==='up'?'Call':'Put')
+        : tradeType === 'Touch & No Touch' ? 'Touch'
+        : tradeType === 'Multipliers' || tradeType === 'Turbos' ? (direction==='up'?'Up':'Down')
+        : subTradeType === 'Higher/Lower' ? (direction==='up'?'Higher':'Lower')
+        : subTradeType === 'Even/Odd' ? 'Even' : subTradeType === 'Matches/Differs' ? 'Differs'
+        : direction==='up'?'Rise':'Fall'
+    }
+    const isDown = ['Fall','Lower','Down','Put','No Touch','Under','Odd','Differs'].includes(selectedOption)
+    if ((direction==='up' && isDown) || (direction==='down' && !isDown && !['Touch'].includes(selectedOption))) {
+      addLog('Selected direction conflicts with current tick trend; no trade sent.')
+      nextTradeTimer.current = setTimeout(() => liveHandlersRef.current.executeTrade?.(), 2000)
+      return
+    }
     const symbol = SYMBOL_MAP[selectedMarket]
-    const contractType = getContractType()
-    addLog(`🚀 AI Trade: ${contractType} ${durationValue}${timeframeUnit[0]} $${currentStake}`)
-    const proposal = { proposal: 1, amount: currentStake, basis: 'stake', contract_type: contractType, currency: 'USD', duration: durationValue, duration_unit: timeframeUnit === 'Minutes' ? 'm' : 't', underlying_symbol: symbol, req_id: Date.now() }
-    if (tradeType === 'Digits' && subTradeType === 'Over/Under') proposal.barrier = option === 'Over' ? '2' : '8'
-    ws.send(JSON.stringify(proposal))
+    const barrier = tradeType === 'Digits' ? (subTradeType==='Over/Under'?(selectedOption==='Over'?'2':'8'):subTradeType==='Matches/Differs'?'3':'')
+      : (tradeType==='Touch & No Touch'||subTradeType==='Higher/Lower') ? (isDown?'-':'+')+Math.max(atr*(tradeType==='Touch & No Touch'?3:2),Math.abs(ticks.at(-1))*0.0001).toFixed(4) : ''
+    try {
+      const signal = {symbol,tradeType,subTradeType,option:selectedOption,predictedDigit:3,barrier,duration:durationValue,timeframeUnit,expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,durationValue*(timeframeUnit==='Hours'?3600:timeframeUnit==='Days'?86400:timeframeUnit==='Minutes'?60:1)),growthRate:0.01,multiplier:100,takeProfit:1,contractStopLoss:1}
+      const proposal = buildProposal(signal,currentStake)
+      const reqId = Date.now()
+      pendingProposalRef.current = {proposal,reqId}
+      addLog(`🔎 Live setup ${selectedOption}; validating ${proposal.contract_type} with Deriv.`)
+      ws.send(JSON.stringify({contracts_for:symbol,currency:'USD',req_id:reqId}))
+    } catch (error) { addLog(`⛔ ${error.message}`); nextTradeTimer.current = setTimeout(() => liveHandlersRef.current.executeTrade?.(), 3000) }
   }
 
   const handleContractResult = (profit) => {
