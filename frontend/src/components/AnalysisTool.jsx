@@ -49,7 +49,7 @@ const analyseSeries=(prices,config)=>{
     barrier=String(target);detail='Observed digit-frequency imbalance; not a calibrated win probability.'
   }else{
     const direction=drift>=0?'up':'down'
-    if(option==='Both')option=config.tradeType==='Vanillas'?(direction==='up'?'Call':'Put'):direction==='up'?'Rise':'Fall'
+    if(option==='Both')option=config.tradeType==='Vanillas'?(direction==='up'?'Call':'Put'):config.tradeType==='Touch & No Touch'?(trend>0.35?'Touch':'No Touch'):config.subTradeType==='Higher/Lower'?(direction==='up'?'Higher':'Lower'):direction==='up'?'Rise':'Fall'
     const aligned=(direction==='up'?up:down)/deltas.length
     score=Math.round(Math.min(90,50+Math.max(0,aligned-0.5)*100+Math.min(15,trend*30)))
     if(['Higher/Lower'].includes(config.subTradeType))option=option==='Rise'?'Higher':option==='Fall'?'Lower':option
