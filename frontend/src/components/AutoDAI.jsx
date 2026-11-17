@@ -111,16 +111,16 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
         : direction==='up'?'Rise':'Fall'
     }
     const isDown = ['Fall','Lower','Down','Put','No Touch','Under','Odd','Differs'].includes(selectedOption)
-    if ((direction==='up' && isDown) || (direction==='down' && !isDown && !['Touch'].includes(selectedOption))) {
+    if (config.tradeType !== 'Digits' && config.tradeType !== 'Touch & No Touch' && ((direction==='up' && isDown) || (direction==='down' && !isDown))) {
       addLog('Selected direction conflicts with current tick trend; no trade sent.')
       nextTradeTimer.current = setTimeout(() => executeTrade(), 2000)
       return
     }
     const symbol = SYMBOL_MAP[config.selectedMarket]
     const barrier = config.tradeType === 'Digits' ? (config.subTradeType==='Over/Under'?(selectedOption==='Over'?'2':'8'):config.subTradeType==='Matches/Differs'?'3':'')
-      : (config.tradeType==='Touch & No Touch'||config.subTradeType==='Higher/Lower') ? (isDown?'-':'+')+Math.max(atr*(config.tradeType==='Touch & No Touch'?3:2),Math.abs(ticks.at(-1))*0.0001).toFixed(4) : ''
+      : (config.tradeType==='Touch & No Touch'||config.subTradeType==='Higher/Lower') ? ((config.tradeType==='Touch & No Touch'?direction==='down':isDown)?'-':'+')+Math.max(atr*(config.tradeType==='Touch & No Touch'?3:2),Math.abs(ticks.at(-1))*0.0001).toFixed(4) : ''
     try {
-      const signal = {symbol,tradeType:config.tradeType,subTradeType:config.subTradeType,option:selectedOption,predictedDigit:3,barrier,duration:config.durationValue,timeframeUnit:config.timeframeUnit,expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,config.durationValue*(config.timeframeUnit==='Hours'?3600:config.timeframeUnit==='Days'?86400:config.timeframeUnit==='Minutes'?60:1)),growthRate:0.01,multiplier:100,takeProfit:1,contractStopLoss:1}
+      const signal = {symbol,tradeType:config.tradeType,subTradeType:config.subTradeType,option:selectedOption,predictedDigit:selectedOption==='Over'?2:selectedOption==='Under'?8:3,barrier,duration:config.durationValue,timeframeUnit:config.timeframeUnit,expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,config.durationValue*(config.timeframeUnit==='Hours'?3600:config.timeframeUnit==='Days'?86400:config.timeframeUnit==='Minutes'?60:1)),growthRate:0.01,multiplier:100,takeProfit:1,contractStopLoss:1}
       const proposal = buildProposal(signal,sessionRef.current.stake)
       const reqId = Date.now()
       pendingProposalRef.current = {proposal,reqId}
