@@ -351,7 +351,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           growthRate: 0.01, multiplier: 100, takeProfit: 1, contractStopLoss: 1
         }
         const researchReport = await evaluateStrategyEnsemble(tickDataRef.current[currentTarget.symbol] || [], signal)
-        if (!researchReport.ready || !researchReport.tradable) { addLog('Thamira: WAIT — strategy evidence is not yet independently calibrated. No order sent.'); await new Promise(r => setTimeout(r, 1500)); continue }
+        if (!researchReport.ready || !researchReport.tradable) { const candidate=researchReport.candidate; if(candidate) addLog(`Thamira candidate: ${candidate.option} | relative score ${candidate.score}/94. Execution remains gated pending independent calibration and payout validation.`); await new Promise(r => setTimeout(r, 500)); continue }
         const proposalReq = buildProposal(signal, roundStake(currentStakeRef.current))
         const available = await wsRequest({ contracts_for: currentTarget.symbol, currency: 'USD' })
         if (!JSON.stringify(available.contracts_for || {}).includes(proposalReq.contract_type)) throw new Error(`Deriv does not offer ${proposalReq.contract_type} for ${currentTarget.name}. No trade was sent.`)
