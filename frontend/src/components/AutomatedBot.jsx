@@ -193,25 +193,6 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     })
   }
 
-  const getContractType = (direction) => {
-    const dir = direction || option
-    if (tradeType === 'Digits') {
-      if (subTradeType === 'Over/Under') return dir === 'Over' ? 'DIGITOVER' : 'DIGITUNDER'
-      if (subTradeType === 'Even/Odd') return dir === 'Even' ? 'DIGITEVEN' : 'DIGITODD'
-      if (subTradeType === 'Matches/Differs') return dir === 'Matches' ? 'DIGITMATCH' : 'DIGITDIFF'
-    }
-    if (tradeType === 'Ups & Downs') {
-      if (subTradeType === 'Higher/Lower') return dir === 'Higher' ? 'HIGHER' : 'LOWER'
-      return dir === 'Rise' ? 'CALL' : 'PUT'
-    }
-    if (tradeType === 'Touch & No Touch') return dir === 'Touch' ? 'ONETOUCH' : 'NOTOUCH'
-    if (tradeType === 'Multipliers') return dir === 'Up' ? 'MULTUP' : 'MULTDOWN'
-    if (tradeType === 'Turbos') return dir === 'Up' ? 'TURBOSLONG' : 'TURBOSSHORT'
-    if (tradeType === 'Accumulators') return 'ACCU'
-    if (tradeType === 'Vanillas') return dir === 'Call' ? 'VANILLALONGCALL' : 'VANILLALONGPUT'
-    return null
-  }
-
   // HARD GATES & SCORING ENGINE
   const calculateConfluence = (symbol, isRecovery) => {
     const ticks = tickDataRef.current[symbol]
