@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Zap } from 'lucide-react'
 import { boundedNextStake, buildProposal } from '../services/tradingCore'
-import { validateEntryWindow } from '../services/strategyIntelligence'
+import { evaluateStrategyEnsemble, validateEntryWindow } from '../services/strategyIntelligence'
 
 const SYMBOL_MAP = { 
   'Volatility 10 (1s) Index': 'R_10', 'Volatility 10 Index': 'R_10', 'Volatility 15 (1s) Index': 'R_15',
@@ -350,6 +350,8 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           expiryEpoch: Math.floor(Date.now()/1000) + Math.max(60, durationValue * (timeframeUnit === 'Hours' ? 3600 : timeframeUnit === 'Days' ? 86400 : timeframeUnit === 'Minutes' ? 60 : 1)),
           growthRate: 0.01, multiplier: 100, takeProfit: 1, contractStopLoss: 1
         }
+        const researchReport = await evaluateStrategyEnsemble(tickDataRef.current[currentTarget.symbol] || [], signal)
+        if (!researchReport.ready || !researchReport.tradable) { addLog('Thamira: WAIT — strategy evidence is not yet independently calibrated. No order sent.'); await new Promise(r => setTimeout(r, 1500)); continue }
         const proposalReq = buildProposal(signal, roundStake(currentStakeRef.current))
         const available = await wsRequest({ contracts_for: currentTarget.symbol, currency: 'USD' })
         if (!JSON.stringify(available.contracts_for || {}).includes(proposalReq.contract_type)) throw new Error(`Deriv does not offer ${proposalReq.contract_type} for ${currentTarget.name}. No trade was sent.`)
