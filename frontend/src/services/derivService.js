@@ -14,7 +14,7 @@ class DerivService {
     return new Promise((resolve, reject) => {
       try {
         const token = localStorage.getItem('deriv_access_token')
-        console.log('🔑 Attempting to connect with token:', token ? token.substring(0, 20) + '...' : 'NO TOKEN')
+        console.log('🔑 Attempting authenticated Deriv connection')
         
         if (!token) {
           console.error('❌ No access token found in localStorage')
@@ -41,7 +41,7 @@ class DerivService {
         this.ws.onmessage = (message) => {
           try {
             const data = JSON.parse(message.data)
-            console.log('📥 Received:', data.msg_type, data)
+            console.log('📥 Received Deriv message:', data.msg_type)
             this.handleMessage(data)
           } catch (e) {
             console.error('❌ Error parsing message:', e)
