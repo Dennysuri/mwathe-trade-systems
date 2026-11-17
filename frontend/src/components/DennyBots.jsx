@@ -205,43 +205,47 @@ export default function DennyBots({ token, accountId, onBalanceUpdate, signals =
 
         let independentOption = option
         if (!connectedMode) {
-        addLog('🔬 Analyzing market setup...')
-        let analysis
-        if (tradeType === 'Digits') {
-          analysis = analyzeDigitTrade(tickHistoryRef.current, predictedDigit, option, subTradeType)
-        } else {
-          analysis = analyzePriceTrade(tickHistoryRef.current)
-        }
-        
-        if (option === 'Both') {
-          if (tradeType === 'Digits') independentOption = analysis.signal
-          else if (tradeType === 'Ups & Downs') independentOption = subTradeType === 'Higher/Lower' ? (analysis.signal === 'CALL' ? 'Higher' : 'Lower') : (analysis.signal === 'CALL' ? 'Rise' : 'Fall')
-          else if (tradeType === 'Vanillas') independentOption = analysis.signal === 'CALL' ? 'Call' : 'Put'
-          else if (tradeType === 'Multipliers' || tradeType === 'Turbos') independentOption = analysis.signal === 'CALL' ? 'Up' : 'Down'
-          else if (tradeType === 'Touch & No Touch') independentOption = analysis.confidence >= 70 ? 'Touch' : 'No Touch'
-        }
-        setConfidenceScore(analysis.confidence)
-        addLog(`📊 Setup score: ${analysis.confidence}/100 | Signals: ${analysis.reasons.join(', ')}`)
+          addLog('🔬 Analyzing market setup...')
+          let analysis
 
-        const minConf = parseFloat(minConfidence) || 70
-        let waitTime = 0
-        
-        // Wait silently for up to 20 seconds for a better setup
-        while (analysis.confidence < minConf && waitTime < 20000 && isRunningRef.current) {
-          addLog(`⏳ Waiting for stronger setup... (${analysis.confidence}%)`, true)
-          await new Promise(r => setTimeout(r, 5000))
-          waitTime += 5000
-          
-          if (tradeType === 'Digits') analysis = analyzeDigitTrade(tickHistoryRef.current, predictedDigit, option, subTradeType)
-          else analysis = analyzePriceTrade(tickHistoryRef.current)
+          if (tradeType === 'Digits') {
+            analysis = analyzeDigitTrade(tickHistoryRef.current, predictedDigit, option, subTradeType)
+          } else {
+            analysis = analyzePriceTrade(tickHistoryRef.current)
+          }
+
+          if (option === 'Both') {
+            if (tradeType === 'Digits') independentOption = analysis.signal
+            else if (tradeType === 'Ups & Downs') independentOption = subTradeType === 'Higher/Lower' ? (analysis.signal === 'CALL' ? 'Higher' : 'Lower') : (analysis.signal === 'CALL' ? 'Rise' : 'Fall')
+            else if (tradeType === 'Vanillas') independentOption = analysis.signal === 'CALL' ? 'Call' : 'Put'
+            else if (tradeType === 'Multipliers' || tradeType === 'Turbos') independentOption = analysis.signal === 'CALL' ? 'Up' : 'Down'
+            else if (tradeType === 'Touch & No Touch') independentOption = analysis.confidence >= 70 ? 'Touch' : 'No Touch'
+          }
+
           setConfidenceScore(analysis.confidence)
-        }
+          addLog(`📊 Setup score: ${analysis.confidence}/100 | Signals: ${analysis.reasons.join(', ')}`)
 
-        if (analysis.confidence < minConf) {
-          addLog(`⏸️ Setup score ${analysis.confidence} below threshold ${minConf}. No trade.`)
-          await new Promise(r => setTimeout(r, 1500)); continue
-        } else addLog('Setup threshold met. Checking contract availability...')
+          const minConf = parseFloat(minConfidence) || 70
+          let waitTime = 0
 
+          // Wait silently for up to 20 seconds for a better setup
+          while (analysis.confidence < minConf && waitTime < 20000 && isRunningRef.current) {
+            addLog(`⏳ Waiting for stronger setup... (${analysis.confidence}%)`, true)
+            await new Promise(r => setTimeout(r, 5000))
+            waitTime += 5000
+
+            if (tradeType === 'Digits') analysis = analyzeDigitTrade(tickHistoryRef.current, predictedDigit, option, subTradeType)
+            else analysis = analyzePriceTrade(tickHistoryRef.current)
+            setConfidenceScore(analysis.confidence)
+          }
+
+          if (analysis.confidence < minConf) {
+            addLog(`⏸️ Setup score ${analysis.confidence} below threshold ${minConf}. No trade.`)
+            await new Promise(r => setTimeout(r, 1500))
+            continue
+          }
+
+          addLog('Setup threshold met. Checking contract availability...')
         } else {
           addLog('Waiting for a fresh Analysis Tool signal...', true)
         }
