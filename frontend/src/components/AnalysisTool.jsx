@@ -42,11 +42,11 @@ const analyseSeries=(prices,config)=>{
     const counts={Over:0,Under:0,Matches:0,Differs:0,Even:0,Odd:0}
     digits.forEach(d=>{if(d>target)counts.Over++;if(d<target)counts.Under++;if(d===target)counts.Matches++;if(d!==target)counts.Differs++;if(d%2===0)counts.Even++;else counts.Odd++})
     const pair= config.subTradeType==='Over/Under'?['Over','Under']:config.subTradeType==='Matches/Differs'?['Matches','Differs']:['Even','Odd']
-    const a=counts[pair[0]]/digits.length,b=counts[pair[1]]/digits.length
-    if(option==='Both')option=a>=b?pair[0]:pair[1]
-    const p=option===pair[0]?a:b
-    score=Math.round(Math.min(90,50+Math.abs(p-0.5)*100))
-    barrier=String(target);detail='Observed digit-frequency imbalance; not a calibrated win probability.'
+    const baseline=name=>config.subTradeType==='Over/Under'?(name==='Over'?(9-target)/10:target/10):config.subTradeType==='Matches/Differs'?(name==='Matches'?0.1:0.9):0.5
+    const candidates=pair.map(name=>({name,p:counts[name]/digits.length,base:baseline(name)}))
+    const chosen=option==='Both'?candidates.sort((x,y)=>(y.p-y.base)-(x.p-x.base))[0]:candidates.find(item=>item.name===option)
+    if(chosen){option=chosen.name;score=Math.round(Math.max(0,Math.min(90,50+(chosen.p-chosen.base)*400)))}
+    barrier=String(target);detail='Observed digit-frequency edge versus the contract baseline; heuristic setup score, not a calibrated win probability.'
   }else{
     const direction=drift>=0?'up':'down'
     if(option==='Both')option=config.tradeType==='Vanillas'?(direction==='up'?'Call':'Put'):config.tradeType==='Touch & No Touch'?(trend>0.35?'Touch':'No Touch'):config.subTradeType==='Higher/Lower'?(direction==='up'?'Higher':'Lower'):direction==='up'?'Rise':'Fall'
