@@ -8,6 +8,7 @@ const SYMBOL_MAP = {
   'Volatility 50 (1s) Index': 'R_50', 'Volatility 50 Index': 'R_50', 'Volatility 75 (1s) Index': 'R_75',
   'Volatility 75 Index': 'R_75', 'Volatility 90 (1s) Index': 'R_90', 'Volatility 100 (1s) Index': 'R_100', 'Volatility 100 Index': 'R_100' 
 }
+const UNIQUE_MARKETS = Object.entries(SYMBOL_MAP).filter((entry,index,all)=>all.findIndex(item=>item[1]===entry[1])===index)
 const TRADE_TYPES = ['Digits', 'Ups & Downs', 'Touch & No Touch', 'Multipliers', 'Accumulators', 'Vanillas', 'Turbos']
 const SUB_TRADE_TYPES = { 'Digits': ['Over/Under', 'Matches/Differs', 'Even/Odd'], 'Ups & Downs': ['Rise/Fall', 'Higher/Lower'], 'Touch & No Touch': ['Touch/No Touch'], 'Multipliers': ['Multipliers'], 'Accumulators': [], 'Vanillas': ['Call/Put'], 'Turbos': ['Turbos'] }
 const OPTIONS = { 'Over/Under': ['Over', 'Under', 'Both'], 'Matches/Differs': ['Matches', 'Differs', 'Both'], 'Even/Odd': ['Even', 'Odd', 'Both'], 'Rise/Fall': ['Rise', 'Fall', 'Both'], 'Higher/Lower': ['Higher', 'Lower', 'Both'], 'Touch/No Touch': ['Touch', 'No Touch', 'Both'], 'Multipliers': ['Up', 'Down', 'Both'], 'Call/Put': ['Call', 'Put', 'Both'], 'Turbos': ['Up', 'Down', 'Both'] }
@@ -126,9 +127,9 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     return new Promise((resolve) => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return resolve()
       let loadedCount = 0
-      const totalMarkets = Object.values(SYMBOL_MAP).length
+      const totalMarkets = UNIQUE_MARKETS.length
       const checkDone = () => { loadedCount++; if (loadedCount >= totalMarkets) { historyLoadedRef.current = true; resolve() } }
-      Object.values(SYMBOL_MAP).forEach(sym => {
+      UNIQUE_MARKETS.forEach(([,sym]) => {
         const reqId = reqIdRef.current++
         const onMessage = (event) => {
           try {
@@ -302,7 +303,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   }
 
   const runTradeCycle = async () => {
-    if (!historyLoadedRef.current) { addLog(' Analyzing 13 markets...'); await loadAllHistory() }
+    if (!historyLoadedRef.current) { addLog(' Analyzing unique volatility markets...'); await loadAllHistory() }
     let recoveryQueue = []
     let recoveryIndex = 0
     
