@@ -73,7 +73,7 @@ export async function enforceRateLimit(req, res, { key, limit, windowSeconds }) 
     if (!response.ok) throw new Error('Rate-limit store unavailable')
     const results = await response.json()
     const count = Number(results?.[0]?.result)
-    if (!Number.isFinite(count)) throw new Error('Invalid rate-limit response')
+    if (!Number.isFinite(count) || results?.[1]?.error) throw new Error('Invalid rate-limit response')
 
     res.setHeader('RateLimit-Limit', String(limit))
     res.setHeader('RateLimit-Remaining', String(Math.max(0, limit - count)))
