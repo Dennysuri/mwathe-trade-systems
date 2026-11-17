@@ -169,7 +169,7 @@ export function validateEntryWindow(signal, {
   if (!created || age < 0 || age > maxSignalAgeMs) return { valid: false, reason: 'Signal is stale or has an invalid timestamp.' };
   if (signal?.option === 'Both') return { valid: false, reason: 'A specific contract option must be selected before entry.' };
   const expiry = Number(signal?.expiryEpoch);
-  if (Number.isFinite(expiry) && expiry > 0) {
+  if (signal?.timeframeUnit !== 'Ticks' && Number.isFinite(expiry) && expiry > 0) {
     const remaining = expiry * 1000 - now;
     if (remaining < proposalBudgetMs + minimumRemainingMs) return { valid: false, reason: 'Insufficient time remains to obtain a quote and enter safely.' };
   }
