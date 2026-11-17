@@ -11,8 +11,6 @@ export default async function handler(req, res) {
 
   try {
     console.log('🔄 Exchanging code for token...')
-    console.log('Redirect URI:', redirect_uri)
-    console.log('Code:', code.substring(0, 20) + '...')
 
     const tokenResponse = await fetch('https://auth.deriv.com/oauth2/token', {
       method: 'POST',
@@ -31,7 +29,7 @@ export default async function handler(req, res) {
     const tokenData = await tokenResponse.json()
 
     if (!tokenResponse.ok) {
-      console.error('❌ Token exchange failed:', tokenData)
+      console.error('❌ Token exchange failed')
       return res.status(400).json({ 
         error: 'Token exchange failed', 
         details: tokenData 
