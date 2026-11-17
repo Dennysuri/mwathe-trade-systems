@@ -116,7 +116,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
         : config.tradeType === 'Touch & No Touch' ? 'Touch'
         : config.tradeType === 'Multipliers' || config.tradeType === 'Turbos' ? (direction==='up'?'Up':'Down')
         : config.subTradeType === 'Higher/Lower' ? (direction==='up'?'Higher':'Lower')
-        : config.subTradeType === 'Even/Odd' ? 'Even' : config.subTradeType === 'Matches/Differs' ? 'Differs'
+        : config.tradeType === 'Digits' ? (config.subTradeType === 'Over/Under' ? (direction==='up'?'Over':'Under') : config.subTradeType === 'Matches/Differs' ? 'Differs' : (getQuoteDigit(ticks.at(-1))%2===0?'Even':'Odd'))\n        : config.subTradeType === 'Even/Odd' ? 'Even' : config.subTradeType === 'Matches/Differs' ? 'Differs'
         : direction==='up'?'Rise':'Fall'
     }
     const isDown = ['Fall','Lower','Down','Put','No Touch','Under','Odd','Differs'].includes(selectedOption)
