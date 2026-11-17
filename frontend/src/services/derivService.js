@@ -85,12 +85,7 @@ class DerivService {
       this.accountInfo = data.authorize
       this.accountType = data.authorize.is_virtual ? 'demo' : 'real'
       
-      console.log('📊 Account Info:', {
-        loginid: data.authorize.loginid,
-        email: data.authorize.email,
-        currency: data.authorize.currency,
-        isVirtual: data.authorize.is_virtual
-      })
+      console.log('📊 Deriv account authorized:', { currency: data.authorize.currency, isVirtual: data.authorize.is_virtual })
       
       // Request balance
       console.log('📤 Requesting balance...')
