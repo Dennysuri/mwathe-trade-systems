@@ -103,8 +103,8 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
       if (series.length < 40) return null
       const sample = series.slice(-20), moves = sample.slice(1).map((v,i)=>v-sample[i]), driftValue = series.at(-1)-series.at(-16)
       const volatility = moves.reduce((sum,v)=>sum+Math.abs(v),0)/(moves.length||1)
-      return volatility>0 ? {symbol,ticks:series,drift:driftValue,atr:volatility,score:Math.abs(driftValue)/volatility} : null
-    }).filter(item=>item && item.score>=3).sort((a,b)=>b.score-a.score)
+      return volatility>0 ? {symbol,ticks:series,drift:driftValue,atr:volatility,score:config.tradeType==='Accumulators'?Math.abs(series.at(-1))/(volatility||1):Math.abs(driftValue)/volatility} : null
+    }).filter(item=>item && item.score>=(config.tradeType==='Accumulators'?50:3)).sort((a,b)=>b.score-a.score)
     if (!candidates.length) { addLog('⏳ Scanning live markets; no eligible setup yet.'); nextTradeTimer.current=setTimeout(()=>executeTrade(),2000); return }
     const best = candidates[0]
     const ticks = best.ticks, atr = best.atr, drift = best.drift, symbol = best.symbol
@@ -120,8 +120,21 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
         : config.subTradeType === 'Even/Odd' ? 'Even' : config.subTradeType === 'Matches/Differs' ? 'Differs'
         : direction==='up'?'Rise':'Fall'
     }
+    if (config.tradeType === 'Digits') {
+      const digits = ticks.slice(-120).map(getQuoteDigit), previous = digits.at(-1)
+      const transitions = digits.slice(0,-1).reduce((out,d,i)=>{if(d===previous)out.push(digits[i+1]);return out},[])
+      if (transitions.length < 10) { addLog('Insufficient conditional digit history; no trade.'); nextTradeTimer.current=setTimeout(()=>executeTrade(),2000); return }
+      const rate = predicate => (transitions.filter(predicate).length+1)/(transitions.length+2)
+      const target = config.subTradeType==='Over/Under'?(selectedOption==='Over'?2:8):3
+      const candidates = config.subTradeType==='Over/Under'?[{name:'Over',p:rate(d=>d>target),base:0.7},{name:'Under',p:rate(d=>d<target),base:0.2}]
+        :config.subTradeType==='Matches/Differs'?[{name:'Matches',p:rate(d=>d===target),base:0.1},{name:'Differs',p:rate(d=>d!==target),base:0.9}]
+        :[{name:'Even',p:rate(d=>d%2===0),base:0.5},{name:'Odd',p:rate(d=>d%2===1),base:0.5}]
+      const chosen=config.option==='Both'?candidates.sort((a,b)=>(b.p-b.base)-(a.p-a.base))[0]:candidates.find(item=>item.name===selectedOption)
+      if(!chosen || chosen.p-chosen.base<0.04){addLog('Digit edge did not exceed the minimum threshold; no trade.');nextTradeTimer.current=setTimeout(()=>executeTrade(),2000);return}
+      selectedOption=chosen.name
+    }
     const isDown = ['Fall','Lower','Down','Put','No Touch','Under','Odd','Differs'].includes(selectedOption)
-    if (config.tradeType !== 'Digits' && config.tradeType !== 'Touch & No Touch' && ((direction==='up' && isDown) || (direction==='down' && !isDown))) {
+    if (config.tradeType !== 'Digits' && config.tradeType !== 'Accumulators' && config.tradeType !== 'Touch & No Touch' && ((direction==='up' && isDown) || (direction==='down' && !isDown))) {
       addLog('Selected direction conflicts with current tick trend; no trade sent.')
       nextTradeTimer.current = setTimeout(() => executeTrade(), 2000)
       return
