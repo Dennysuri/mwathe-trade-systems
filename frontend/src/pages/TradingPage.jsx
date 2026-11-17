@@ -20,6 +20,7 @@ const menuItems = [
 export default function TradingPage() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [activeSection, setActiveSection] = useState('analysis')
+  const [visitedSections, setVisitedSections] = useState(['analysis'])
   const [balance, setBalance] = useState(0)
   const [currency, setCurrency] = useState('USD')
   const [accountType, setAccountType] = useState('real')
@@ -120,9 +121,9 @@ export default function TradingPage() {
     switch(activeSection) {
       case 'analysis': return null
       case 'signals': return <Signals signals={signals} onReset={handleResetSignals} />
-      case 'denny': return <DennyBots token={token} accountId={accountId} onBalanceUpdate={handleBalanceUpdate} signals={signals} />
-      case 'automated': return <AutomatedBot token={token} accountId={accountId} onBalanceUpdate={handleBalanceUpdate} />
-      case 'autod': return <AutoDAI token={token} accountId={accountId} onBalanceUpdate={handleBalanceUpdate} />
+      case 'denny': return null
+      case 'automated': return null
+      case 'autod': return null
       case 'settings': return <AppSettings />
       default: return null
     }
@@ -157,6 +158,9 @@ export default function TradingPage() {
       </div>
       <div className="flex-1 overflow-auto relative">
         <div className={activeSection === 'analysis' ? 'h-full' : 'hidden'}><AnalysisTool isAnalyzing={isAnalyzing} setIsAnalyzing={setIsAnalyzing} progress={progress} setProgress={setProgress} aiLogs={aiLogs} setAiLogs={setAiLogs} finalSignal={finalSignal} setFinalSignal={setFinalSignal} intervalRef={intervalRef} onSignalGenerated={handleSignalGenerated} token={token} accountId={accountId} /></div>
+        {visitedSections.includes('denny') && <div className={activeSection === 'denny' ? 'h-full' : 'hidden'}><DennyBots token={token} accountId={accountId} onBalanceUpdate={handleBalanceUpdate} signals={signals} /></div>}
+        {visitedSections.includes('automated') && <div className={activeSection === 'automated' ? 'h-full' : 'hidden'}><AutomatedBot token={token} accountId={accountId} onBalanceUpdate={handleBalanceUpdate} /></div>}
+        {visitedSections.includes('autod') && <div className={activeSection === 'autod' ? 'h-full' : 'hidden'}><AutoDAI token={token} accountId={accountId} onBalanceUpdate={handleBalanceUpdate} /></div>}
         <AnimatePresence mode="wait">
           <motion.div key={activeSection} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }} className="h-full">
             {renderSection()}
@@ -170,7 +174,7 @@ export default function TradingPage() {
             <motion.div initial={{ x: -280 }} animate={{ x: 0 }} exit={{ x: -280 }} transition={{ type: 'spring', damping: 25 }} className="absolute top-0 left-0 h-full w-64 bg-gray-900 z-50 shadow-2xl flex flex-col pt-4 border-r border-gray-800">
               <div className="px-5 pb-4 border-b border-gray-800 mb-2"><h3 className="text-white font-bold">Menu</h3></div>
               {menuItems.map((item) => (
-                <button key={item.id} onClick={() => { setActiveSection(item.id); setMenuOpen(false) }} className={`flex items-center gap-3 px-5 py-4 text-left transition-colors ${activeSection === item.id ? 'bg-orange-500/10 text-orange-500 border-r-2 border-orange-500' : 'text-gray-400 hover:bg-gray-950 hover:text-white'}`}>
+                <button key={item.id} onClick={() => { setVisitedSections(prev => prev.includes(item.id) ? prev : [...prev, item.id]); setActiveSection(item.id); setMenuOpen(false) }} className={`flex items-center gap-3 px-5 py-4 text-left transition-colors ${activeSection === item.id ? 'bg-orange-500/10 text-orange-500 border-r-2 border-orange-500' : 'text-gray-400 hover:bg-gray-950 hover:text-white'}`}>
                   <item.icon size={20} /><span className="text-sm font-medium">{item.name}</span>
                 </button>
               ))}
