@@ -40,6 +40,9 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   const isRunningRef = useRef(false)
   const tickHistoryRef = useRef([])
   const pendingProposalRef = useRef(null)
+  const sessionRef = useRef({totalTrades:0,wins:0,losses:0,lossStreak:0,stake:0.35,pl:0})
+  const configRef = useRef({stake,targetProfit,stopLoss})
+  configRef.current = {stake,targetProfit,stopLoss}
   const liveHandlersRef = useRef({})
 
   const addLog = (msg) => setLogs(prev => [...prev.slice(-20), `[${new Date().toLocaleTimeString()}] ${msg}`])
@@ -123,16 +126,26 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   }
 
   const handleContractResult = (profit) => {
-    const isWin = profit > 0; const newTotal = totalTrades + 1; setTotalTrades(newTotal)
-    if (isWin) { setWins(wins + 1); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); addLog(`✅ AI WON +$${profit.toFixed(2)}`) }
-    else { const nextLosses = consecutiveLosses + 1; setLosses(losses + 1); setConsecutiveLosses(nextLosses); const newStake = boundedNextStake(stake, currentStake, martingaleFactor, nextLosses); setCurrentStake(newStake); addLog(`❌ AI LOST -${profit.toFixed(2)} | Bounded next stake ${newStake.toFixed(2)}`); if (nextLosses >= 2) { addLog('🛑 Recovery cap reached after two consecutive losses. Stopping AI.'); setIsRunning(false); isRunningRef.current = false; return } }
-    const newPL = currentPL + profit; setCurrentPL(newPL)
-    if (newPL >= parseFloat(targetProfit)) { addLog(` Target hit! $${newPL.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; return }
-    if (newPL <= -parseFloat(stopLoss)) { addLog(`🛑 Stop loss $${newPL.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; return }
-    if (isRunningRef.current) { addLog(`P/L: $${newPL.toFixed(2)} | Trades: ${newTotal}`); addLog(`⏳ AI analyzing next trade...`); nextTradeTimer.current = setTimeout(() => { if (isRunningRef.current && ws?.readyState === WebSocket.OPEN) executeTrade() }, 2000) }
+    const session = sessionRef.current
+    const config = configRef.current
+    session.totalTrades += 1
+    if (profit > 0) {
+      session.wins += 1; session.lossStreak = 0; session.stake = parseFloat(config.stake) || 0.35
+      addLog(`✅ AI WON +$${profit.toFixed(2)}`)
+    } else {
+      session.losses += 1; session.lossStreak += 1
+      session.stake = boundedNextStake(config.stake,session.stake,martingaleFactor,session.lossStreak)
+      addLog(`❌ AI LOST -$${profit.toFixed(2)} | Bounded stake $${session.stake.toFixed(2)}`)
+    }
+    session.pl += profit
+    setTotalTrades(session.totalTrades);setWins(session.wins);setLosses(session.losses);setConsecutiveLosses(session.lossStreak);setCurrentStake(session.stake);setCurrentPL(session.pl)
+    if (session.pl >= parseFloat(config.targetProfit)) { addLog(`🎯 Target hit! $${session.pl.toFixed(2)}`); setIsRunning(false); isRunningRef.current=false; return }
+    if (session.pl <= -parseFloat(config.stopLoss)) { addLog(`🛑 Stop loss $${session.pl.toFixed(2)}`); setIsRunning(false); isRunningRef.current=false; return }
+    if (session.lossStreak >= 2) { addLog('🛑 Recovery cap reached after two consecutive losses. Stopping AI.'); setIsRunning(false); isRunningRef.current=false; return }
+    if (isRunningRef.current) { addLog(`P/L: $${session.pl.toFixed(2)} | Trades: ${session.totalTrades}`); nextTradeTimer.current=setTimeout(()=>executeTrade(),2000) }
   }
 
-  const startBot = () => { setValidationError(''); if (!ws || ws.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }; if (nextTradeTimer.current) clearTimeout(nextTradeTimer.current); setIsRunning(true); isRunningRef.current = true; setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConsecutiveLosses(0); setLogs([]); addLog(` AutoD AI Started`); addLog(`Market: ${selectedMarket}`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); const symbol = SYMBOL_MAP[selectedMarket]; ws.send(JSON.stringify({ ticks: symbol, subscribe: 1, req_id: Date.now() })); ws.send(JSON.stringify({ ticks_history: symbol, count: 50, end: 'latest', style: 'ticks', req_id: Date.now() + 1 })); nextTradeTimer.current = setTimeout(() => { if (isRunningRef.current) executeTrade() }, 3000) }
+  const startBot = () => { setValidationError(''); if (!ws || ws.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }; if (nextTradeTimer.current) clearTimeout(nextTradeTimer.current); setIsRunning(true); isRunningRef.current = true; setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConsecutiveLosses(0); sessionRef.current={totalTrades:0,wins:0,losses:0,lossStreak:0,stake:parseFloat(stake),pl:0}; setLogs([]); addLog(` AutoD AI Started`); addLog(`Market: ${selectedMarket}`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); const symbol = SYMBOL_MAP[selectedMarket]; ws.send(JSON.stringify({ ticks: symbol, subscribe: 1, req_id: Date.now() })); ws.send(JSON.stringify({ ticks_history: symbol, count: 50, end: 'latest', style: 'ticks', req_id: Date.now() + 1 })); nextTradeTimer.current = setTimeout(() => { if (isRunningRef.current) executeTrade() }, 3000) }
   const stopBot = () => { setIsRunning(false); isRunningRef.current = false; if (nextTradeTimer.current) { clearTimeout(nextTradeTimer.current); nextTradeTimer.current = null }; if (ws) ws.send(JSON.stringify({ forget: 'all', req_id: Date.now() })); addLog(`⏹️ AI Stopped`) }
   const resetBot = () => { stopBot(); setLogs(['AI reset.']); setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setValidationError(''); setCurrentContract(null) }
   const rules = TIMEFRAME_RULES[tradeType]; const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
