@@ -11,41 +11,6 @@ const TIMEFRAME_RULES = { 'Accumulators': { units: ['Ticks'], defaultUnit: 'Tick
 
 const roundStake = (value) => Math.round(value * 100) / 100
 
-// --- DIGIT-SPECIFIC STRATEGIES ---
-const analyzeDigitFrequency = (digits, window = 50) => {
-  const recent = digits.slice(-window)
-  const freq = Array(10).fill(0)
-  recent.forEach(d => freq[d]++)
-  return { freq, total: recent.length, leastFrequent: freq.indexOf(Math.min(...freq)), mostFrequent: freq.indexOf(Math.max(...freq)) }
-}
-
-const calculateDigitEntropy = (digits) => {
-  const freq = {}
-  digits.forEach(d => { freq[d] = (freq[d] || 0) + 1 })
-  const len = digits.length
-  let entropy = 0
-  Object.values(freq).forEach(count => { const p = count / len; entropy -= p * Math.log2(p) })
-  return entropy
-}
-
-const analyzeDigitPattern = (digits, window = 30) => {
-  const recent = digits.slice(-window)
-  const pattern = {}
-  for (let i = 0; i < recent.length - 1; i++) {
-    const current = recent[i], next = recent[i + 1]
-    if (!pattern[current]) pattern[current] = Array(10).fill(0)
-    pattern[current][next]++
-  }
-  return pattern
-}
-
-const calculateDigitDeviation = (digits, targetDigit) => {
-  const freq = analyzeDigitFrequency(digits, 50)
-  const expected = freq.total / 10
-  const actual = freq.freq[targetDigit]
-  return (actual - expected) / expected
-}
-
 const getQuoteDigit = value => { const text=String(value); const decimals=text.includes('.')?text.split('.')[1]:''; return Number((decimals||text).slice(-1)) }
 const analyzeDigitTrade = (tickHistory, predictedDigit, option, subTradeType) => {
   if (tickHistory.length < 50) return { confidence: 0, signal: null, reasons: ['Gathering at least 50 live ticks.'] }
