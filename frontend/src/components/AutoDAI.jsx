@@ -76,7 +76,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
             }
             if (msg.msg_type === 'proposal') { if (msg.error) addLog(`❌ Proposal failed`); else setTimeout(() => websocket.send(JSON.stringify({ buy: msg.proposal.id, price: msg.proposal.ask_price, req_id: Date.now() })), 200) }
             if (msg.msg_type === 'buy') { if (msg.error) { addLog(`❌ Buy failed`); setCurrentContract(null) } else { setCurrentContract({ id: msg.buy.contract_id }); addLog(`✅ Contract: ${msg.buy.contract_id}`); websocket.send(JSON.stringify({ proposal_open_contract: 1, contract_id: msg.buy.contract_id, subscribe: 1, req_id: Date.now() })) } }
-            if (msg.msg_type === 'proposal_open_contract') { if (!msg.error && msg.proposal_open_contract) { const contract = msg.proposal_open_contract; if (contract.is_sold) { handleContractResult(parseFloat(contract.profit)); setCurrentContract(null) } else setCurrentPL(parseFloat(contract.profit || 0)) } }
+            if (msg.msg_type === 'proposal_open_contract') { if (!msg.error && msg.proposal_open_contract) { const contract = msg.proposal_open_contract; if (contract.is_sold) { liveHandlersRef.current.handleContractResult?.(parseFloat(contract.profit)); setCurrentContract(null) } else setCurrentPL(parseFloat(contract.profit || 0)) } }
           } catch (e) { console.error(e) }
         }
         websocket.onerror = () => addLog('❌ WS Error')
