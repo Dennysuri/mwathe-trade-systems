@@ -412,7 +412,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           if (!recoveryStartTimeRef.current) recoveryStartTimeRef.current = Date.now();
           currentStakeRef.current = boundedNextStake(stake, currentStakeRef.current, martingaleFactor, consecutiveLossesRef.current)
           setCurrentStake(currentStakeRef.current)
-          if (consecutiveLossesRef.current >= 1) addLog(`⚠️ ${consecutiveLossesRef.current} consecutive loss - Forcing direction flip`)
+          if (consecutiveLossesRef.current >= 2) { addLog('🛑 Recovery cap reached after two consecutive losses. Stopping bot.'); isRunningRef.current = false; setIsRunning(false) } else addLog(`⚠️ ${consecutiveLossesRef.current} consecutive loss - Pausing recovery and rotating market`)
           addLog(`❌ LOST -$${profit.toFixed(2)} | Rotating to next market → Next: $${currentStakeRef.current.toFixed(2)}`)
         }
         
