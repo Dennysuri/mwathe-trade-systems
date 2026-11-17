@@ -70,7 +70,7 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
   const [tradeType,setTradeType]=useState('Digits'),[subTradeType,setSubTradeType]=useState('Over/Under'),[option,setOption]=useState('Over')
   const [predictedDigit,setPredictedDigit]=useState('5'),[analysisDuration,setAnalysisDuration]=useState(10),[lastDigits,setLastDigits]=useState(100)
   const [timeframeUnit,setTimeframeUnit]=useState('Ticks'),[durationValue,setDurationValue]=useState(5),[validationError,setValidationError]=useState('')
-  const wsRef=useRef(null),pricesRef=useRef({}),timerRef=useRef(null),activeRef=useRef(false)
+  const wsRef=useRef(null),pricesRef=useRef({}),lastTickAtRef=useRef({}),timerRef=useRef(null),activeRef=useRef(false)
   const addLog=msg=>setAiLogs(prev=>[...prev.slice(-8),`[${new Date().toLocaleTimeString()}] ${msg}`])
   useEffect(()=>{if(SUB_TRADE_TYPES[tradeType]?.length)setSubTradeType(SUB_TRADE_TYPES[tradeType][0]);else setSubTradeType('')},[tradeType])
   useEffect(()=>{if(subTradeType&&OPTIONS[subTradeType])setOption(OPTIONS[subTradeType][0])},[subTradeType])
@@ -81,7 +81,7 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
     setValidationError('')
     if(!token||!accountId){setValidationError('Connect a Deriv account before starting live market analysis.');return}
     if(tradeType==='Digits'&&(!/^\\d$/.test(predictedDigit))){setValidationError('Enter a digit from 0 to 9.');return}
-    stopScanner();pricesRef.current={};setIsAnalyzing(true);setProgress(0);setAiLogs([]);setFinalSignal(null);activeRef.current=true
+    stopScanner();pricesRef.current={};lastTickAtRef.current={};setIsAnalyzing(true);setProgress(0);setAiLogs([]);setFinalSignal(null);activeRef.current=true
     addLog('Connecting to authenticated Deriv market data...')
     try{
       const response=await fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'}})
@@ -98,7 +98,7 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
         timerRef.current=setInterval(()=>{
           const elapsed=Date.now()-started;setProgress(Math.min(99,elapsed/total*100))
           if(elapsed>=total){
-            const candidates=MARKET_SYMBOLS.map(symbol=>({symbol,analysis:analyseSeries(pricesRef.current[symbol]||[],{tradeType,subTradeType,option,predictedDigit})})).filter(x=>x.analysis&&x.analysis.score>=70).sort((a,b)=>b.analysis.score-a.analysis.score)
+            const candidates=MARKET_SYMBOLS.filter(symbol=>Date.now()-(lastTickAtRef.current[symbol]||0)<5000).map(symbol=>({symbol,analysis:analyseSeries(pricesRef.current[symbol]||[],{tradeType,subTradeType,option,predictedDigit})})).filter(x=>x.analysis&&x.analysis.score>=70).sort((a,b)=>b.analysis.score-a.analysis.score)
             if(!candidates.length){addLog('No eligible setup met the minimum evidence threshold. No signal sent.');started=Date.now();setProgress(0);return}
             const best=candidates[0],market=VOLATILITY_MARKETS.find(([,s])=>s===best.symbol)?.[0]||best.symbol
             const signal={id:`analysis-${best.symbol}-${Date.now()}`,timestamp:Date.now(),createdAt:Date.now(),source:'analysis-tool-live',symbol:best.symbol,market,tradeType,subTradeType,option:best.analysis.option,predictedDigit:Number(predictedDigit),barrier:best.analysis.barrier,confidence:best.analysis.score,setupScore:best.analysis.score,scoreType:'heuristic-not-probability',entry:String(best.analysis.spot),duration:durationValue,timeframeUnit,contractDuration:TIMEFRAME_RULES[tradeType].fixed?TIMEFRAME_RULES[tradeType].label:`${durationValue} ${timeframeUnit}`,detail:best.analysis.detail,marketCondition:best.analysis.score>=80?'Strong setup':'Moderate setup',expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,durationValue*({Minutes:60,Hours:3600,Days:86400}[timeframeUnit]||1))}
@@ -109,8 +109,8 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
       ws.onmessage=event=>{
         const msg=JSON.parse(event.data)
         if(msg.error){addLog(`Deriv data error: ${msg.error.message}`);return}
-        if(msg.msg_type==='history'&&msg.history?.prices){pricesRef.current[msg.echo_req?.ticks_history||msg.echo_req?.symbol||msg.history.symbol]=msg.history.prices.map(Number).filter(Number.isFinite)}
-        if(msg.msg_type==='tick'&&msg.tick?.symbol){const arr=pricesRef.current[msg.tick.symbol]||[];arr.push(Number(msg.tick.quote));pricesRef.current[msg.tick.symbol]=arr.slice(-Math.max(300,lastDigits))}
+        if(msg.msg_type==='history'&&msg.history?.prices){const symbol=msg.echo_req?.ticks_history||msg.echo_req?.symbol||msg.history.symbol;pricesRef.current[symbol]=msg.history.prices.map(Number).filter(Number.isFinite);lastTickAtRef.current[symbol]=Date.now()}
+        if(msg.msg_type==='tick'&&msg.tick?.symbol){const arr=pricesRef.current[msg.tick.symbol]||[];arr.push(Number(msg.tick.quote));pricesRef.current[msg.tick.symbol]=arr.slice(-Math.max(300,lastDigits));lastTickAtRef.current[msg.tick.symbol]=Date.now()}
       }
       ws.onerror=()=>{setValidationError('Live market-data connection failed.');stopScanner()}
       ws.onclose=()=>{if(activeRef.current){setValidationError('Live market-data feed disconnected. No signal was generated.');stopScanner()}}
