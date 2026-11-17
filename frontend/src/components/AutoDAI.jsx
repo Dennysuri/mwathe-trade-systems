@@ -38,11 +38,12 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   const logRef = useRef(null)
   const nextTradeTimer = useRef(null)
   const isRunningRef = useRef(false)
+  const wsRef = useRef(null)
   const tickHistoryRef = useRef([])
   const pendingProposalRef = useRef(null)
   const sessionRef = useRef({totalTrades:0,wins:0,losses:0,lossStreak:0,stake:0.35,pl:0})
   const configRef = useRef({stake,targetProfit,stopLoss})
-  configRef.current = {stake,targetProfit,stopLoss}
+  configRef.current = {stake,targetProfit,stopLoss,selectedMarket,tradeType,subTradeType,option,timeframeUnit,durationValue}
   const liveHandlersRef = useRef({})
 
   const addLog = (msg) => setLogs(prev => [...prev.slice(-20), `[${new Date().toLocaleTimeString()}] ${msg}`])
@@ -63,6 +64,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
         const wsUrl = data.data?.url
         if (!wsUrl) throw new Error('No WebSocket URL')
         const websocket = new WebSocket(wsUrl)
+        wsRef.current = websocket
         websocket.onopen = () => { addLog('✅ AI Connected to Deriv'); websocket.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: 1 })) }
         websocket.onmessage = (message) => {
           try {
@@ -90,20 +92,22 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   }, [isAuthenticated, token, accountId])
 
   const executeTrade = () => {
-    if (!ws || ws.readyState !== WebSocket.OPEN || !isRunningRef.current) return
+    const socket = wsRef.current
+    const config = configRef.current
+    if (!socket || socket.readyState !== WebSocket.OPEN || !isRunningRef.current) return
     const ticks = tickHistoryRef.current
     if (ticks.length < 40) { addLog('⏳ Waiting for sufficient live tick history.'); nextTradeTimer.current = setTimeout(() => executeTrade(), 2000); return }
     const recent = ticks.slice(-20), deltas = recent.slice(1).map((v,i)=>v-recent[i]), drift = ticks.at(-1)-ticks.at(-16)
     const atr = deltas.reduce((sum,v)=>sum+Math.abs(v),0)/(deltas.length||1)
     if (!atr || Math.abs(drift) < atr*3) { addLog('No sufficiently strong live setup; waiting.'); nextTradeTimer.current = setTimeout(() => executeTrade(), 2000); return }
     const direction = drift > 0 ? 'up' : 'down'
-    let selectedOption = option
+    let selectedOption = config.option
     if (selectedOption === 'Both') {
-      selectedOption = tradeType === 'Vanillas' ? (direction==='up'?'Call':'Put')
-        : tradeType === 'Touch & No Touch' ? 'Touch'
-        : tradeType === 'Multipliers' || tradeType === 'Turbos' ? (direction==='up'?'Up':'Down')
-        : subTradeType === 'Higher/Lower' ? (direction==='up'?'Higher':'Lower')
-        : subTradeType === 'Even/Odd' ? 'Even' : subTradeType === 'Matches/Differs' ? 'Differs'
+      selectedOption = config.tradeType === 'Vanillas' ? (direction==='up'?'Call':'Put')
+        : config.tradeType === 'Touch & No Touch' ? 'Touch'
+        : config.tradeType === 'Multipliers' || config.tradeType === 'Turbos' ? (direction==='up'?'Up':'Down')
+        : config.subTradeType === 'Higher/Lower' ? (direction==='up'?'Higher':'Lower')
+        : config.subTradeType === 'Even/Odd' ? 'Even' : config.subTradeType === 'Matches/Differs' ? 'Differs'
         : direction==='up'?'Rise':'Fall'
     }
     const isDown = ['Fall','Lower','Down','Put','No Touch','Under','Odd','Differs'].includes(selectedOption)
@@ -112,16 +116,16 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
       nextTradeTimer.current = setTimeout(() => executeTrade(), 2000)
       return
     }
-    const symbol = SYMBOL_MAP[selectedMarket]
-    const barrier = tradeType === 'Digits' ? (subTradeType==='Over/Under'?(selectedOption==='Over'?'2':'8'):subTradeType==='Matches/Differs'?'3':'')
-      : (tradeType==='Touch & No Touch'||subTradeType==='Higher/Lower') ? (isDown?'-':'+')+Math.max(atr*(tradeType==='Touch & No Touch'?3:2),Math.abs(ticks.at(-1))*0.0001).toFixed(4) : ''
+    const symbol = SYMBOL_MAP[config.selectedMarket]
+    const barrier = config.tradeType === 'Digits' ? (config.subTradeType==='Over/Under'?(selectedOption==='Over'?'2':'8'):config.subTradeType==='Matches/Differs'?'3':'')
+      : (config.tradeType==='Touch & No Touch'||config.subTradeType==='Higher/Lower') ? (isDown?'-':'+')+Math.max(atr*(config.tradeType==='Touch & No Touch'?3:2),Math.abs(ticks.at(-1))*0.0001).toFixed(4) : ''
     try {
-      const signal = {symbol,tradeType,subTradeType,option:selectedOption,predictedDigit:3,barrier,duration:durationValue,timeframeUnit,expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,durationValue*(timeframeUnit==='Hours'?3600:timeframeUnit==='Days'?86400:timeframeUnit==='Minutes'?60:1)),growthRate:0.01,multiplier:100,takeProfit:1,contractStopLoss:1}
-      const proposal = buildProposal(signal,currentStake)
+      const signal = {symbol,tradeType:config.tradeType,subTradeType:config.subTradeType,option:selectedOption,predictedDigit:3,barrier,duration:config.durationValue,timeframeUnit:config.timeframeUnit,expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,config.durationValue*(config.timeframeUnit==='Hours'?3600:config.timeframeUnit==='Days'?86400:config.timeframeUnit==='Minutes'?60:1)),growthRate:0.01,multiplier:100,takeProfit:1,contractStopLoss:1}
+      const proposal = buildProposal(signal,sessionRef.current.stake)
       const reqId = Date.now()
       pendingProposalRef.current = {proposal,reqId}
       addLog(`🔎 Live setup ${selectedOption}; validating ${proposal.contract_type} with Deriv.`)
-      ws.send(JSON.stringify({contracts_for:symbol,currency:'USD',req_id:reqId}))
+      socket.send(JSON.stringify({contracts_for:symbol,currency:'USD',req_id:reqId}))
     } catch (error) { addLog(`⛔ ${error.message}`); nextTradeTimer.current = setTimeout(() => executeTrade(), 3000) }
   }
 
