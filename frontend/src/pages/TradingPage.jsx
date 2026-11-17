@@ -118,13 +118,13 @@ export default function TradingPage() {
 
   const renderSection = () => {
     switch(activeSection) {
-      case 'analysis': return <AnalysisTool isAnalyzing={isAnalyzing} setIsAnalyzing={setIsAnalyzing} progress={progress} setProgress={setProgress} aiLogs={aiLogs} setAiLogs={setAiLogs} finalSignal={finalSignal} setFinalSignal={setFinalSignal} intervalRef={intervalRef} onSignalGenerated={handleSignalGenerated} />
+      case 'analysis': return null
       case 'signals': return <Signals signals={signals} onReset={handleResetSignals} />
-      case 'denny': return <DennyBots token={token} accountId={accountId} onBalanceUpdate={handleBalanceUpdate} />
+      case 'denny': return <DennyBots token={token} accountId={accountId} onBalanceUpdate={handleBalanceUpdate} signals={signals} />
       case 'automated': return <AutomatedBot token={token} accountId={accountId} onBalanceUpdate={handleBalanceUpdate} />
       case 'autod': return <AutoDAI token={token} accountId={accountId} onBalanceUpdate={handleBalanceUpdate} />
       case 'settings': return <AppSettings />
-      default: return <AnalysisTool isAnalyzing={isAnalyzing} setIsAnalyzing={setIsAnalyzing} progress={progress} setProgress={setProgress} aiLogs={aiLogs} setAiLogs={setAiLogs} finalSignal={finalSignal} setFinalSignal={setFinalSignal} intervalRef={intervalRef} onSignalGenerated={handleSignalGenerated} />
+      default: return null
     }
   }
 
@@ -156,6 +156,7 @@ export default function TradingPage() {
         </div>
       </div>
       <div className="flex-1 overflow-auto relative">
+        <div className={activeSection === 'analysis' ? 'h-full' : 'hidden'}><AnalysisTool isAnalyzing={isAnalyzing} setIsAnalyzing={setIsAnalyzing} progress={progress} setProgress={setProgress} aiLogs={aiLogs} setAiLogs={setAiLogs} finalSignal={finalSignal} setFinalSignal={setFinalSignal} intervalRef={intervalRef} onSignalGenerated={handleSignalGenerated} token={token} accountId={accountId} /></div>
         <AnimatePresence mode="wait">
           <motion.div key={activeSection} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2 }} className="h-full">
             {renderSection()}
