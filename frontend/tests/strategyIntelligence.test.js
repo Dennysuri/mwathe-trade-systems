@@ -20,7 +20,7 @@ test('digit ensemble runs independent research families in parallel and never ca
 test('expected value uses payout-adjusted break-even and uncertainty', () => {
   const result=evaluateExpectedValue({winProbability:0.8,netProfitOnWin:0.2,lossOnLoss:1,uncertainty:0.1});
   assert.equal(result.positive,false);
-  assert.ok(result.lowerBound < result.winProbability);
+  assert.ok(result.lowerBound < 0.8);
 });
 
 test('entry window rejects stale signals and accepts fresh tick contracts', () => {
