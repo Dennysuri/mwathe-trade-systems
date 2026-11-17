@@ -44,7 +44,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   const sessionRef = useRef({totalTrades:0,wins:0,losses:0,lossStreak:0,stake:0.35,pl:0})
   const configRef = useRef({stake,targetProfit,stopLoss})
   configRef.current = {stake,targetProfit,stopLoss,selectedMarket,tradeType,subTradeType,option,timeframeUnit,durationValue}
-  const liveHandlersRef = useRef({})
+
 
   const addLog = (msg) => setLogs(prev => [...prev.slice(-20), `[${new Date().toLocaleTimeString()}] ${msg}`])
   useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight }, [logs])
