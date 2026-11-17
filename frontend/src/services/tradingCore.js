@@ -14,7 +14,7 @@ export function getContractIntent(signal) {
   const {tradeType,subTradeType,option}=signal;
   if (tradeType==='Digits') {
     if (subTradeType==='Over/Under') return {contract_type:option==='Over'?'DIGITOVER':'DIGITUNDER',barrier:String(signal.predictedDigit ?? signal.barrier ?? '')};
-    if (subTradeType==='Matches/Differs') return {contract_type:option==='Matches'?'DIGITMATCH':'DIGITDIFF',barrier:String(signal.predictedDigit ?? signal.barrier ?? '')};
+    if (subTradeType==='Matches/Differs') return option==='Matches' ? {contract_type:'DIGITMATCH',barrier:String(signal.predictedDigit ?? signal.barrier ?? '')} : {contract_type:'DIGITDIFF'};
     if (subTradeType==='Even/Odd') return {contract_type:option==='Even'?'DIGITEVEN':'DIGITODD'};
   }
   if (tradeType==='Ups & Downs') {

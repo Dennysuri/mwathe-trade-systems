@@ -156,9 +156,9 @@ export default function TradingPage() {
           </div>
         </div>
       </div>
-      <div className="flex-1 overflow-auto relative">
+      <div className="flex-1 min-h-0 overflow-hidden relative">
         <div className={activeSection === 'analysis' ? 'h-full' : 'hidden'}><AnalysisTool isAnalyzing={isAnalyzing} setIsAnalyzing={setIsAnalyzing} progress={progress} setProgress={setProgress} aiLogs={aiLogs} setAiLogs={setAiLogs} finalSignal={finalSignal} setFinalSignal={setFinalSignal} intervalRef={intervalRef} onSignalGenerated={handleSignalGenerated} token={token} accountId={accountId} /></div>
-        {visitedSections.includes('denny') && <div className={activeSection === 'denny' ? 'h-full' : 'hidden'}><DennyBots token={token} accountId={accountId} onBalanceUpdate={handleBalanceUpdate} signals={signals} /></div>}
+        {visitedSections.includes('denny') && <div className={activeSection === 'denny' ? 'h-full' : 'hidden'}><DennyBots token={token} accountId={accountId} currency={currency} onBalanceUpdate={handleBalanceUpdate} signals={signals} /></div>}
         {visitedSections.includes('automated') && <div className={activeSection === 'automated' ? 'h-full' : 'hidden'}><AutomatedBot token={token} accountId={accountId} onBalanceUpdate={handleBalanceUpdate} /></div>}
         {visitedSections.includes('autod') && <div className={activeSection === 'autod' ? 'h-full' : 'hidden'}><AutoDAI token={token} accountId={accountId} onBalanceUpdate={handleBalanceUpdate} /></div>}
         <AnimatePresence mode="wait">

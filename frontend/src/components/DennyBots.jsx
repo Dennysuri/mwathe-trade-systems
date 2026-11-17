@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Activity } from 'lucide-react'
+import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, Activity } from 'lucide-react'
 import { buildProposal, isFreshSignal, boundedNextStake } from '../services/tradingCore'
 
 const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
@@ -50,7 +50,7 @@ const analyzePriceTrade = (tickHistory) => {
   return { confidence: Math.min(confidence, 99), signal, reasons }
 }
 
-export default function DennyBots({ token, accountId, onBalanceUpdate, signals = [] }) {
+export default function DennyBots({ token, accountId, currency = 'USD', onBalanceUpdate, signals = [] }) {
   const [connectedMode, setConnectedMode] = useState(false)
   const [selectedMarket, setSelectedMarket] = useState('Volatility 100 (1s) Index')
   const [tradeType, setTradeType] = useState('Digits')
@@ -81,6 +81,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate, signals =
   const isRunningRef = useRef(false)
   const reqIdRef = useRef(1)
   const tickHistoryRef = useRef([])
+  const tickSubscriptionRef = useRef(null)
   const currentStakeRef = useRef(1.00)
   const sessionPLRef = useRef(0.00)
   const totalTradesRef = useRef(0)
@@ -121,7 +122,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate, signals =
         ws.onmessage = (event) => {
           try {
             const msg = JSON.parse(event.data)
-            if (msg.msg_type === 'history' && msg.history?.prices) tickHistoryRef.current = msg.history.prices.map(Number).filter(Number.isFinite).slice(-500)
+            if (msg.msg_type === 'history' && msg.history?.prices) { tickHistoryRef.current = msg.history.prices.map(Number).filter(Number.isFinite).slice(-500); if (msg.subscription?.id) tickSubscriptionRef.current = msg.subscription.id }
             if (msg.msg_type === 'tick') tickHistoryRef.current = [...tickHistoryRef.current, Number(msg.tick.quote)].slice(-500)
             if (msg.msg_type === 'balance' && onBalanceUpdate) onBalanceUpdate(parseFloat(msg.balance.balance))
           } catch (e) {}
@@ -136,22 +137,25 @@ export default function DennyBots({ token, accountId, onBalanceUpdate, signals =
 
   const wsRequest = (request) => {
     return new Promise((resolve, reject) => {
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return reject(new Error('WebSocket not connected'))
+      const socket = wsRef.current
+      if (!socket || socket.readyState !== WebSocket.OPEN) return reject(new Error('Deriv connection is not ready. Reconnect your account and try again.'))
       const req_id = reqIdRef.current++
       const requestWithId = { ...request, req_id }
+      let timeoutId
+      const cleanup = () => { socket.removeEventListener('message', onMessage); if (timeoutId) clearTimeout(timeoutId) }
       const onMessage = (event) => {
         try {
           const msg = JSON.parse(event.data)
-          if (msg.req_id === req_id) {
-            wsRef.current.removeEventListener('message', onMessage)
-            if (msg.error) reject(new Error(msg.error.message || 'API Error'))
-            else resolve(msg)
-          }
-        } catch (e) {}
+          if (msg.req_id !== req_id) return
+          cleanup()
+          if (msg.error) reject(new Error(`${msg.error.message || 'Deriv API error'}${msg.error.code ? ` (${msg.error.code})` : ''}`))
+          else resolve(msg)
+        } catch (error) { if (error instanceof SyntaxError) return; cleanup(); reject(error) }
       }
-      wsRef.current.addEventListener('message', onMessage)
-      wsRef.current.send(JSON.stringify(requestWithId))
-      setTimeout(() => { wsRef.current.removeEventListener('message', onMessage); reject(new Error('Timeout')) }, 15000)
+      socket.addEventListener('message', onMessage)
+      try { socket.send(JSON.stringify(requestWithId)) }
+      catch (error) { cleanup(); reject(error); return }
+      timeoutId = setTimeout(() => { cleanup(); reject(new Error(`Deriv request timed out (${request.msg_type || Object.keys(request).find(key => request[key] === 1) || 'request'}).`)) }, 15000)
     })
   }
 
@@ -176,6 +180,15 @@ export default function DennyBots({ token, accountId, onBalanceUpdate, signals =
       wsRef.current.send(JSON.stringify({ proposal_open_contract: 1, contract_id: contract_id, subscribe: 1, req_id: reqIdRef.current++ }))
     })
   }
+
+  useEffect(() => {
+    const socket = wsRef.current
+    if (!socket || socket.readyState !== WebSocket.OPEN) return
+    if (tickSubscriptionRef.current) socket.send(JSON.stringify({ forget: tickSubscriptionRef.current, req_id: reqIdRef.current++ }))
+    tickSubscriptionRef.current = null
+    tickHistoryRef.current = []
+    socket.send(JSON.stringify({ ticks_history: SYMBOL_MAP[selectedMarket], count: 200, end: 'latest', style: 'ticks', subscribe: 1, req_id: reqIdRef.current++ }))
+  }, [selectedMarket])
 
   const getContractType = () => {
     if (tradeType === 'Digits') {
@@ -258,21 +271,30 @@ export default function DennyBots({ token, accountId, onBalanceUpdate, signals =
           const market = VOLATILITY_INDICES.find(name => SYMBOL_MAP[name] === signal.symbol)
           if (!market) { addLog('Rejected signal: unsupported market.'); continue }
           setSelectedMarket(market); setTradeType(signal.tradeType); setSubTradeType(signal.subTradeType || ''); setOption(signal.option); setPredictedDigit(String(signal.predictedDigit ?? predictedDigit)); setDurationValue(Number(signal.duration || durationValue)); setTimeframeUnit(signal.timeframeUnit || timeframeUnit)
-          proposalReq = buildProposal(signal, roundStake(currentStakeRef.current))
+          proposalReq = buildProposal(signal, roundStake(currentStakeRef.current), currency)
           setConfidenceScore(Number(signal.setupScore || signal.confidence || 0))
         } else {
           const symbol = SYMBOL_MAP[selectedMarket]
           const tradeStake = roundStake(currentStakeRef.current)
           const recentTicks = tickHistoryRef.current.slice(-20); const spot = recentTicks.at(-1); const atr = recentTicks.slice(1).reduce((sum,value,index)=>sum+Math.abs(value-recentTicks[index]),0)/Math.max(1,recentTicks.length-1); const down = ['Fall','Lower','Down','Put','No Touch'].includes(independentOption); const distance = Math.max(atr*(tradeType==='Touch & No Touch'?3:2),Math.abs(spot||1)*0.0001); const barrier = tradeType==='Digits'?String(predictedDigit):(['Touch & No Touch'].includes(tradeType)||subTradeType==='Higher/Lower')?(down?'-':'+')+distance.toFixed(4):''; const signal = {symbol,tradeType,subTradeType,option:independentOption,predictedDigit,barrier,duration:durationValue,timeframeUnit,expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,durationValue*60)}
-          proposalReq = buildProposal(signal, tradeStake)
+          proposalReq = buildProposal(signal, tradeStake, currency)
         }
-        const available = await wsRequest({ contracts_for: proposalReq.underlying_symbol, currency: 'USD' })
-        const offered = JSON.stringify(available.contracts_for || {})
-        if (!offered.includes(proposalReq.contract_type)) throw new Error('Deriv does not list this contract for the selected market. No trade was sent.')
+        const available = await wsRequest({ contracts_for: proposalReq.underlying_symbol })
+        const offeredContracts = available.contracts_for?.available || []
+        if (!offeredContracts.some(contract => contract.contract_type === proposalReq.contract_type)) {
+          throw new Error(`Deriv does not offer ${proposalReq.contract_type} for ${proposalReq.underlying_symbol} in ${currency}. No order was sent.`)
+        }
 
+        addLog(`Requesting ${proposalReq.contract_type} proposal on ${proposalReq.underlying_symbol}...`)
         const proposalRes = await wsRequest(proposalReq)
+        const proposal = proposalRes.proposal
+        if (!proposal?.id || !Number.isFinite(Number(proposal.ask_price)) || Number(proposal.ask_price) <= 0) {
+          throw new Error('Deriv returned an incomplete or invalid trade proposal. No order was sent.')
+        }
         if (!isRunningRef.current) break
-        const buyRes = await wsRequest({ buy: proposalRes.proposal.id, price: proposalRes.proposal.ask_price })
+        addLog('Proposal received. Sending purchase request...')
+        const buyRes = await wsRequest({ buy: proposal.id, price: Number(proposal.ask_price) })
+        if (!buyRes.buy?.contract_id) throw new Error('Deriv did not confirm the purchase. Check your account statement before retrying.')
         if (!isRunningRef.current) break
 
         addLog(`✅ Contract purchased: ${buyRes.buy.contract_id}`)
@@ -326,7 +348,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate, signals =
     sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0
     currentStakeRef.current = parseFloat(stake)
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setConfidenceScore(0); setLogs([])
-    addLog(`🚀 DENNY BOT - INSTITUTIONAL MODE`)
+    addLog('🚀 DENNY BOT STARTED')
     addLog(`Market: ${selectedMarket} | Stake: $${stake} | Martingale: ${martingaleFactor}x`)
     addLog(`Target: $${targetProfit} | Stop: $${stopLoss} | Min Conf: ${minConfidence}%`)
     runTradeCycle()
@@ -337,15 +359,14 @@ export default function DennyBots({ token, accountId, onBalanceUpdate, signals =
   const rules = TIMEFRAME_RULES[tradeType]
   const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
   return (
-    <div className="h-full flex flex-col bg-gray-950 text-white p-2 overflow-hidden">
-      <div className="flex items-center gap-2 pb-1 border-b border-gray-800 mb-2 flex-shrink-0"><div className="w-7 h-7 bg-gradient-to-br from-orange-500 to-green-500 rounded-lg flex items-center justify-center"><Activity size={16} className="text-white" /></div><div><h2 className="text-base font-bold text-white">Denny Bots <span className="text-xs text-orange-400">INSTITUTIONAL</span></h2><p className="text-[10px] text-gray-400 flex items-center gap-1"><ShieldCheck size={10} /> Multi-Strategy Analysis System</p></div></div>
+    <div className="h-full min-h-0 flex flex-col bg-gray-950 text-white p-2 overflow-hidden">
+      <div className="flex items-center gap-2 pb-1 border-b border-gray-800 mb-2 flex-shrink-0"><div className="w-7 h-7 bg-gradient-to-br from-orange-500 to-green-500 rounded-lg flex items-center justify-center"><Activity size={16} className="text-white" /></div><div><h2 className="text-base font-bold text-white">Denny Bots</h2></div></div>
       {validationError && <div className="bg-red-900/20 border border-red-500/50 rounded-lg p-2 mb-2 flex items-center gap-2 flex-shrink-0"><AlertCircle size={12} className="text-red-500" /><p className="text-red-400 text-[10px] font-medium">{validationError}</p></div>}
-      <div className="bg-gray-900 rounded-lg p-2 border border-gray-800 mb-2 flex-shrink-0 overflow-y-auto" style={{maxHeight: '28vh'}}>
+      <div className="bg-gray-900 rounded-lg p-2 border border-gray-800 mb-2 flex-shrink-0 min-h-0 overflow-y-auto" style={{maxHeight: '28vh'}}>
         <h3 className="text-white font-bold text-xs flex items-center gap-1 mb-2"><Target size={12} className="text-orange-500" /> Parameters</h3>
         <label className="flex items-center justify-between bg-black/60 border border-sky-500/30 rounded px-2 py-2 mb-2 text-xs"><span className="font-bold text-sky-300">Connect Analysis Tool</span><input type="checkbox" checked={connectedMode} onChange={e => setConnectedMode(e.target.checked)} disabled={isRunning} /></label>
         {connectedMode && <p className="text-[10px] text-sky-300 mb-2">Analysis Tool supplies the strategy. Stake, target, stop loss and recovery remain local.</p>}
-        <label className="flex items-center justify-between bg-black/60 border border-sky-500/30 rounded px-2 py-2 mb-2 text-xs"><span className="font-bold text-sky-300">Connect Analysis Tool</span><input type="checkbox" checked={connectedMode} onChange={e => setConnectedMode(e.target.checked)} disabled={isRunning} /></label>
-        {connectedMode && <p className="text-[10px] text-sky-300 mb-2">Analysis Tool controls market and strategy. Only stake, target, stop loss and recovery remain configurable.</p>}
+        
         <div className="mb-2"><label className="text-[10px] text-gray-400 uppercase font-bold">Market</label><select value={selectedMarket} onChange={e => setSelectedMarket(e.target.value)} disabled={isRunning || connectedMode} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white">{VOLATILITY_INDICES.map(m => <option key={m} className="text-white">{m}</option>)}</select></div>
         <div className="grid grid-cols-2 gap-2 mb-2"><div><label className="text-[10px] text-gray-400 uppercase font-bold">Type</label><select value={tradeType} onChange={e => setTradeType(e.target.value)} disabled={isRunning || connectedMode} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white">{TRADE_TYPES.map(t => <option key={t} className="text-white">{t}</option>)}</select></div>{SUB_TRADE_TYPES[tradeType]?.length > 0 && <div><label className="text-[10px] text-gray-400 uppercase font-bold">Sub Type</label><select value={subTradeType} onChange={e => setSubTradeType(e.target.value)} disabled={isRunning || connectedMode} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white">{SUB_TRADE_TYPES[tradeType].map(t => <option key={t} className="text-white">{t}</option>)}</select></div>}</div>
         {subTradeType && OPTIONS[subTradeType] && <div className="mb-2"><label className="text-[10px] text-gray-400 uppercase font-bold mb-1 block">Option</label><div className="grid grid-cols-3 gap-1">{OPTIONS[subTradeType].map(opt => <button key={opt} onClick={() => setOption(opt)} disabled={isRunning || connectedMode} className={`py-1.5 rounded text-xs font-bold border ${option === opt ? 'bg-green-500/20 border-green-500 text-green-400' : 'bg-black border-gray-700 text-gray-400'}`}>{opt}</button>)}</div></div>}
@@ -358,7 +379,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate, signals =
       <div className="bg-gray-900 rounded-lg p-2 border border-green-500/30 mb-2 flex-shrink-0"><h3 className="text-white font-bold text-xs mb-1 flex items-center gap-1"><TrendingUp size={12} className="text-green-500" /> Performance</h3><div className="grid grid-cols-4 gap-1 text-center"><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">P/L</p><p className={`font-bold text-xs ${currentPL >= 0 ? 'text-green-500' : 'text-red-500'}`}>{currentPL >= 0 ? '+' : ''}{currentPL.toFixed(2)}</p></div><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Win Rate</p><p className="text-sky-400 font-bold text-xs">{winRate}%</p></div><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Trades</p><p className="text-white font-bold text-xs">{totalTrades}</p></div><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Next</p><p className="text-orange-400 font-bold text-xs">{currentStake.toFixed(2)}</p></div></div></div>
       <div className="grid grid-cols-3 gap-2 flex-shrink-0 mb-2"><button onClick={startBot} disabled={isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${isRunning ? 'bg-gray-800 text-gray-500' : 'bg-green-500 text-black'}`}><Play size={14} /> Run</button><button onClick={stopBot} disabled={!isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${!isRunning ? 'bg-gray-800 text-gray-500' : 'bg-red-500 text-white'}`}><Square size={14} /> Stop</button><button onClick={resetBot} className="py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs bg-gray-800 border border-gray-700 text-orange-400"><RefreshCw size={14} /> Reset</button></div>
       <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col">
-        <div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">ANALYSIS LOG (Scrollable)</span></div>
+        <div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">ANALYSIS LOG</span></div>
         <div ref={logRef} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5" style={{scrollBehavior: 'smooth'}}>
           {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('TARGET') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') || log.includes('Error') ? 'text-red-500' : log.includes('🚀') || log.includes('📊') || log.includes('') ? 'text-sky-400' : log.includes('⏹️') || log.includes('⚠️') ? 'text-orange-400' : 'text-gray-400'}>{log}</p>)}
         </div>
