@@ -345,7 +345,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const signal = {
           symbol: currentTarget.symbol, tradeType, subTradeType, option: tradeDirection,
           predictedDigit: currentTarget.selectedDigit ?? predictedDigit, barrier,
-          duration: durationValue, timeframeUnit,
+          duration: durationValue, timeframeUnit, createdAt: Date.now(),
           expiryEpoch: Math.floor(Date.now()/1000) + Math.max(60, durationValue * (timeframeUnit === 'Hours' ? 3600 : timeframeUnit === 'Days' ? 86400 : timeframeUnit === 'Minutes' ? 60 : 1)),
           growthRate: 0.01, multiplier: 100, takeProfit: 1, contractStopLoss: 1
         }
@@ -353,6 +353,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const available = await wsRequest({ contracts_for: currentTarget.symbol, currency: 'USD' })
         if (!JSON.stringify(available.contracts_for || {}).includes(proposalReq.contract_type)) throw new Error(`Deriv does not offer ${proposalReq.contract_type} for ${currentTarget.name}. No trade was sent.`)
         const proposalRes = await wsRequest(proposalReq); if (!isRunningRef.current) break
+        const entryCheck = validateEntryWindow(signal, { maxSignalAgeMs: 15000, proposalBudgetMs: 300, minimumRemainingMs: 250 }); if (!entryCheck.valid) { addLog(`Entry expired before purchase: ${entryCheck.reason}`); continue }
         const buyRes = await wsRequest({ buy: proposalRes.proposal.id, price: proposalRes.proposal.ask_price }); if (!isRunningRef.current) break
         addLog(`✅ Contract: ${buyRes.buy.contract_id}`)
         
