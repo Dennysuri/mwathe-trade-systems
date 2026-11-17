@@ -242,14 +242,6 @@ export default function DennyBots({ token, accountId, onBalanceUpdate, signals =
           await new Promise(r => setTimeout(r, 1500)); continue
         } else addLog('Setup threshold met. Checking contract availability...')
 
-        const symbol = SYMBOL_MAP[selectedMarket]
-        const contractType = getContractType()
-        const tradeStake = roundStake(currentStakeRef.current)
-        addLog(`🚀 Trade: ${contractType} ${durationValue}${timeframeUnit[0]} $${tradeStake.toFixed(2)}`)
-
-        const proposalReq = { proposal: 1, amount: tradeStake, basis: 'stake', contract_type: contractType, currency: 'USD', duration: durationValue, duration_unit: timeframeUnit === 'Minutes' ? 'm' : 't', underlying_symbol: symbol }
-        if (tradeType === 'Digits' && subTradeType === 'Over/Under' && predictedDigit) proposalReq.barrier = predictedDigit
-
         } else {
           addLog('Waiting for a fresh Analysis Tool signal...', true)
         }
