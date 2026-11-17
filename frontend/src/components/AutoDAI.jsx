@@ -91,10 +91,10 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   const executeTrade = () => {
     if (!ws || ws.readyState !== WebSocket.OPEN || !isRunningRef.current) return
     const ticks = tickHistoryRef.current
-    if (ticks.length < 40) { addLog('⏳ Waiting for sufficient live tick history.'); nextTradeTimer.current = setTimeout(() => liveHandlersRef.current.executeTrade?.(), 2000); return }
+    if (ticks.length < 40) { addLog('⏳ Waiting for sufficient live tick history.'); nextTradeTimer.current = setTimeout(() => executeTrade(), 2000); return }
     const recent = ticks.slice(-20), deltas = recent.slice(1).map((v,i)=>v-recent[i]), drift = ticks.at(-1)-ticks.at(-16)
     const atr = deltas.reduce((sum,v)=>sum+Math.abs(v),0)/(deltas.length||1)
-    if (!atr || Math.abs(drift) < atr*3) { addLog('No sufficiently strong live setup; waiting.'); nextTradeTimer.current = setTimeout(() => liveHandlersRef.current.executeTrade?.(), 2000); return }
+    if (!atr || Math.abs(drift) < atr*3) { addLog('No sufficiently strong live setup; waiting.'); nextTradeTimer.current = setTimeout(() => executeTrade(), 2000); return }
     const direction = drift > 0 ? 'up' : 'down'
     let selectedOption = option
     if (selectedOption === 'Both') {
@@ -108,7 +108,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     const isDown = ['Fall','Lower','Down','Put','No Touch','Under','Odd','Differs'].includes(selectedOption)
     if ((direction==='up' && isDown) || (direction==='down' && !isDown && !['Touch'].includes(selectedOption))) {
       addLog('Selected direction conflicts with current tick trend; no trade sent.')
-      nextTradeTimer.current = setTimeout(() => liveHandlersRef.current.executeTrade?.(), 2000)
+      nextTradeTimer.current = setTimeout(() => executeTrade(), 2000)
       return
     }
     const symbol = SYMBOL_MAP[selectedMarket]
@@ -121,7 +121,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
       pendingProposalRef.current = {proposal,reqId}
       addLog(`🔎 Live setup ${selectedOption}; validating ${proposal.contract_type} with Deriv.`)
       ws.send(JSON.stringify({contracts_for:symbol,currency:'USD',req_id:reqId}))
-    } catch (error) { addLog(`⛔ ${error.message}`); nextTradeTimer.current = setTimeout(() => liveHandlersRef.current.executeTrade?.(), 3000) }
+    } catch (error) { addLog(`⛔ ${error.message}`); nextTradeTimer.current = setTimeout(() => executeTrade(), 3000) }
   }
 
   const handleContractResult = (profit) => {
