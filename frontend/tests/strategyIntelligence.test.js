@@ -1,0 +1,31 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { evaluateStrategyEnsemble, evaluateExpectedValue, validateEntryWindow } from '../src/services/strategyIntelligence.js';
+
+test('digit ensemble waits for sufficient observations', async () => {
+  const result = await evaluateStrategyEnsemble(Array.from({length:120},(_,i)=>100.01+i/100), {tradeType:'Digits',subTradeType:'Matches/Differs',option:'Both',predictedDigit:3});
+  assert.equal(result.ready,false);
+  assert.equal(result.tradable,false);
+});
+
+test('digit ensemble runs independent research families in parallel and never calls them calibrated', async () => {
+  const prices = Array.from({length:300},(_,i)=>100+(i%10)/100);
+  const result = await evaluateStrategyEnsemble(prices,{tradeType:'Digits',subTradeType:'Even/Odd',option:'Both',predictedDigit:5});
+  assert.equal(result.ready,true);
+  assert.equal(result.tradable,false);
+  assert.ok(result.strategies.length>=3);
+  assert.ok(result.strategies.every(s=>s.calibrated===false));
+});
+
+test('expected value uses payout-adjusted break-even and uncertainty', () => {
+  const result=evaluateExpectedValue({winProbability:0.8,netProfitOnWin:0.2,lossOnLoss:1,uncertainty:0.1});
+  assert.equal(result.positive,false);
+  assert.ok(result.lowerBound < result.winProbability);
+});
+
+test('entry window rejects stale signals and accepts fresh tick contracts', () => {
+  const stale=validateEntryWindow({createdAt:1000,option:'Over',timeframeUnit:'Ticks'}, {now:5000,maxSignalAgeMs:1000});
+  assert.equal(stale.valid,false);
+  const fresh=validateEntryWindow({createdAt:4900,option:'Over',timeframeUnit:'Ticks'}, {now:5000});
+  assert.equal(fresh.valid,true);
+});
