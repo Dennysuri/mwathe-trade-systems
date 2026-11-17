@@ -199,12 +199,17 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       if (subTradeType === 'Over/Under') return dir === 'Over' ? 'DIGITOVER' : 'DIGITUNDER'
       if (subTradeType === 'Even/Odd') return dir === 'Even' ? 'DIGITEVEN' : 'DIGITODD'
       if (subTradeType === 'Matches/Differs') return dir === 'Matches' ? 'DIGITMATCH' : 'DIGITDIFF'
-      return 'DIGITDIFF'
     }
-    if (tradeType === 'Ups & Downs') return (dir === 'Rise' || dir === 'Higher' || dir === 'Up') ? 'CALL' : 'PUT'
-    if (tradeType === 'Touch & No Touch') return dir === 'Touch' ? 'TOUCH' : 'NOTOUCH'
-    if (tradeType === 'Multipliers' || tradeType === 'Turbos') return dir === 'Up' ? 'CALL' : 'PUT'
-    return dir === 'Call' ? 'CALL' : 'PUT'
+    if (tradeType === 'Ups & Downs') {
+      if (subTradeType === 'Higher/Lower') return dir === 'Higher' ? 'HIGHER' : 'LOWER'
+      return dir === 'Rise' ? 'CALL' : 'PUT'
+    }
+    if (tradeType === 'Touch & No Touch') return dir === 'Touch' ? 'ONETOUCH' : 'NOTOUCH'
+    if (tradeType === 'Multipliers') return dir === 'Up' ? 'MULTUP' : 'MULTDOWN'
+    if (tradeType === 'Turbos') return dir === 'Up' ? 'TURBOSLONG' : 'TURBOSSHORT'
+    if (tradeType === 'Accumulators') return 'ACCU'
+    if (tradeType === 'Vanillas') return dir === 'Call' ? 'VANILLALONGCALL' : 'VANILLALONGPUT'
+    return null
   }
 
   // HARD GATES & SCORING ENGINE
@@ -346,15 +351,25 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         addLog(`🎯 LOCKED: ${currentTarget.name} | Score: ${currentTarget.score}% | Direction: ${tradeDirection}`)
         addLog('🚀 EXECUTING...')
         
+        const spot = tickDataRef.current[currentTarget.symbol]?.at(-1)
+        const recentTicks = (tickDataRef.current[currentTarget.symbol] || []).slice(-15)
+        const atrNow = calcATR(recentTicks, Math.min(14, Math.max(2, recentTicks.length - 1))) || Math.abs(spot || 1) * 0.0001
         let barrier = null
-        const contractType = getContractType(tradeDirection)
-        if (tradeType === 'Digits') {
-          if (subTradeType === 'Over/Under') barrier = predictedDigit
-          else if (subTradeType === 'Matches/Differs' && currentTarget.selectedDigit !== null) barrier = currentTarget.selectedDigit.toString()
-        } else if (tradeType === 'Touch & No Touch' && predictedDigit) { barrier = predictedDigit }
-        
-        const proposalReq = { proposal: 1, amount: roundStake(currentStakeRef.current), basis: 'stake', contract_type: contractType, currency: 'USD', duration: durationValue, duration_unit: timeframeUnit === 'Minutes' ? 'm' : 't', underlying_symbol: currentTarget.symbol }
-        if (barrier) proposalReq.barrier = barrier
+        if (tradeType === 'Digits' && ['Over/Under','Matches/Differs'].includes(subTradeType)) barrier = String(currentTarget.selectedDigit ?? predictedDigit)
+        if (tradeType === 'Touch & No Touch' || (tradeType === 'Ups & Downs' && subTradeType === 'Higher/Lower')) {
+          const isDown = ['Fall','Lower','Down','Put','No Touch'].includes(tradeDirection)
+          barrier = (isDown ? '-' : '+') + Math.max(atrNow * (tradeType === 'Touch & No Touch' ? 3 : 2), Math.abs(spot || 1) * 0.0001).toFixed(4)
+        }
+        const signal = {
+          symbol: currentTarget.symbol, tradeType, subTradeType, option: tradeDirection,
+          predictedDigit: currentTarget.selectedDigit ?? predictedDigit, barrier,
+          duration: durationValue, timeframeUnit,
+          expiryEpoch: Math.floor(Date.now()/1000) + Math.max(60, durationValue * (timeframeUnit === 'Hours' ? 3600 : timeframeUnit === 'Days' ? 86400 : timeframeUnit === 'Minutes' ? 60 : 1)),
+          growthRate: 0.01, multiplier: 100, takeProfit: 1, contractStopLoss: 1
+        }
+        const proposalReq = buildProposal(signal, roundStake(currentStakeRef.current))
+        const available = await wsRequest({ contracts_for: currentTarget.symbol, currency: 'USD' })
+        if (!JSON.stringify(available.contracts_for || {}).includes(proposalReq.contract_type)) throw new Error(`Deriv does not offer ${proposalReq.contract_type} for ${currentTarget.name}. No trade was sent.`)
         const proposalRes = await wsRequest(proposalReq); if (!isRunningRef.current) break
         const buyRes = await wsRequest({ buy: proposalRes.proposal.id, price: proposalRes.proposal.ask_price }); if (!isRunningRef.current) break
         addLog(`✅ Contract: ${buyRes.buy.contract_id}`)
