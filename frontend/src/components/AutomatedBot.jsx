@@ -283,8 +283,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     const allMarkets = [];
     const threshold = isRecovery ? 75 : 70;
     
-    Object.keys(SYMBOL_MAP).forEach(name => {
-      const sym = SYMBOL_MAP[name]
+    UNIQUE_MARKETS.forEach(([name,sym]) => {
       const res = calculateConfluence(sym, isRecovery)
       allMarkets.push({ symbol: sym, score: res.score, name, selectedDigit: res.selectedDigit, selectedOption: res.selectedOption })
     });
