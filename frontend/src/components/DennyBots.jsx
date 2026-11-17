@@ -282,10 +282,9 @@ export default function DennyBots({ token, accountId, onBalanceUpdate, signals =
         }
 
         if (analysis.confidence < minConf) {
-          addLog(`⚠️ Setup not perfect (${analysis.confidence}%), executing best available signal...`)
-        } else {
-          addLog(`✅ High confidence setup detected! Executing...`)
-        }
+          addLog(`⏸️ Setup score ${analysis.confidence} below threshold ${minConf}. No trade.`)
+          await new Promise(r => setTimeout(r, 1500)); continue
+        } else addLog('Setup threshold met. Checking contract availability...')
 
         const symbol = SYMBOL_MAP[selectedMarket]
         const contractType = getContractType()
@@ -342,8 +341,9 @@ export default function DennyBots({ token, accountId, onBalanceUpdate, signals =
           lossesRef.current += 1
           consecutiveLossesRef.current += 1
           const martingale = parseFloat(martingaleFactor) || 1.5
-          currentStakeRef.current = roundStake(currentStakeRef.current * martingale)
-          addLog(`❌ LOST -$${profit.toFixed(2)} | Next stake: $${currentStakeRef.current.toFixed(2)}`)
+          currentStakeRef.current = boundedNextStake(stake, currentStakeRef.current, martingale, consecutiveLossesRef.current)
+          addLog(`❌ LOST -${profit.toFixed(2)} | Bounded next stake: ${currentStakeRef.current.toFixed(2)}`)
+          if (consecutiveLossesRef.current >= 2) { addLog('🛑 Recovery limit reached after two consecutive losses. Stopping.'); isRunningRef.current = false; setIsRunning(false) }
         }
 
         setTotalTrades(totalTradesRef.current)
