@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, Activity } from 'lucide-react'
 import { buildProposal, isFreshSignal, boundedNextStake } from '../services/tradingCore'
-import { validateEntryWindow } from '../services/strategyIntelligence'
+import { evaluateStrategyEnsemble, validateEntryWindow } from '../services/strategyIntelligence'
 
 const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
 const SYMBOL_MAP = { 'Volatility 10 (1s) Index': 'R_10', 'Volatility 10 Index': 'R_10', 'Volatility 15 (1s) Index': 'R_15', 'Volatility 25 (1s) Index': 'R_25', 'Volatility 25 Index': 'R_25', 'Volatility 30 (1s) Index': 'R_30', 'Volatility 50 (1s) Index': 'R_50', 'Volatility 50 Index': 'R_50', 'Volatility 75 (1s) Index': 'R_75', 'Volatility 75 Index': 'R_75', 'Volatility 90 (1s) Index': 'R_90', 'Volatility 100 (1s) Index': 'R_100', 'Volatility 100 Index': 'R_100' }
@@ -283,6 +283,8 @@ export default function DennyBots({ token, accountId, currency = 'USD', onBalanc
           executionSignal = signal
           proposalReq = buildProposal(signal, tradeStake, currency)
         }
+        const researchReport = await evaluateStrategyEnsemble(tickHistoryRef.current, executionSignal)
+        if (!researchReport.ready || !researchReport.tradable) { addLog('Thamira: WAIT — strategy evidence is not yet independently calibrated. No order sent.'); await new Promise(r => setTimeout(r, 1500)); continue }
         const entryCheck = validateEntryWindow(executionSignal, { maxSignalAgeMs: 15000, proposalBudgetMs: 1500, minimumRemainingMs: 500 })
         if (!entryCheck.valid) { addLog(`Rejected entry: ${entryCheck.reason}`); continue }
         const available = await wsRequest({ contracts_for: proposalReq.underlying_symbol })
