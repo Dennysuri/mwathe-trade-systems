@@ -22,7 +22,7 @@ export default function Signals({ signals, onReset }) {
         <div className="flex flex-col items-center justify-center h-64 bg-mwathe-darkgray rounded-xl border border-gray-800">
           <AlertCircle className="text-mwathe-gray mb-3" size={40} />
           <p className="text-mwathe-gray text-center max-w-xs">
-            No active signals. Start an analysis in the Analysis Tool to generate signals with 95-100% confidence.
+            No active signals. Start the Analysis Tool to scan live Deriv market data. Signals are evidence-based setups, not guaranteed outcomes.
           </p>
         </div>
       ) : (
