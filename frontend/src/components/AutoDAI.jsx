@@ -147,7 +147,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     try {
       const signal = {symbol,tradeType:config.tradeType,subTradeType:config.subTradeType,option:selectedOption,predictedDigit:selectedOption==='Over'?2:selectedOption==='Under'?8:3,barrier,duration:config.durationValue,timeframeUnit:config.timeframeUnit,createdAt:Date.now(),expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,config.durationValue*(config.timeframeUnit==='Hours'?3600:config.timeframeUnit==='Days'?86400:config.timeframeUnit==='Minutes'?60:1)),growthRate:0.01,multiplier:100,takeProfit:1,contractStopLoss:1}
       const researchReport = await evaluateStrategyEnsemble(ticks, signal)
-      if (!researchReport.ready || !researchReport.tradable) { addLog('Thamira: WAIT — strategy evidence is not yet independently calibrated. No order sent.'); nextTradeTimer.current = setTimeout(() => executeTrade(), 2000); return }
+      if (!researchReport.ready || !researchReport.tradable) { const candidate=researchReport.candidate; if(candidate) addLog(`Thamira candidate: ${candidate.option} | relative score ${candidate.score}/94. Execution remains gated pending independent calibration and payout validation.`); nextTradeTimer.current = setTimeout(() => executeTrade(), 500); return }
       const proposal = buildProposal(signal,sessionRef.current.stake)
       const reqId = Date.now()
       pendingProposalRef.current = {proposal,reqId}; pendingEntryRef.current = signal
