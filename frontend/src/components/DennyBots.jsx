@@ -284,7 +284,7 @@ export default function DennyBots({ token, accountId, currency = 'USD', onBalanc
           proposalReq = buildProposal(signal, tradeStake, currency)
         }
         const researchReport = await evaluateStrategyEnsemble(tickHistoryRef.current, executionSignal)
-        if (!researchReport.ready || !researchReport.tradable) { addLog('Thamira: WAIT — strategy evidence is not yet independently calibrated. No order sent.'); await new Promise(r => setTimeout(r, 1500)); continue }
+        if (!researchReport.ready || !researchReport.tradable) { const candidate=researchReport.candidate; if(candidate) addLog(`Thamira candidate: ${candidate.option} | relative score ${candidate.score}/94. Execution remains gated until independent calibration and payout validation.`); await new Promise(r => setTimeout(r, 500)); continue }
         const entryCheck = validateEntryWindow(executionSignal, { maxSignalAgeMs: 15000, proposalBudgetMs: 1500, minimumRemainingMs: 500 })
         if (!entryCheck.valid) { addLog(`Rejected entry: ${entryCheck.reason}`); continue }
         const available = await wsRequest({ contracts_for: proposalReq.underlying_symbol })
