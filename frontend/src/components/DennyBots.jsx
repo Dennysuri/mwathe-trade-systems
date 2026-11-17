@@ -255,7 +255,8 @@ export default function DennyBots({ token, accountId, onBalanceUpdate, signals =
           await new Promise(r => setTimeout(r, 2000))
         }
 
-        if (!connectedMode) {\n        addLog('🔬 Analyzing market setup...')
+        if (!connectedMode) {
+        addLog('🔬 Analyzing market setup...')
         let analysis
         if (tradeType === 'Digits') {
           analysis = analyzeDigitTrade(tickHistoryRef.current, predictedDigit, option)
@@ -294,7 +295,31 @@ export default function DennyBots({ token, accountId, onBalanceUpdate, signals =
         const proposalReq = { proposal: 1, amount: tradeStake, basis: 'stake', contract_type: contractType, currency: 'USD', duration: durationValue, duration_unit: timeframeUnit === 'Minutes' ? 'm' : 't', underlying_symbol: symbol }
         if (tradeType === 'Digits' && subTradeType === 'Over/Under' && predictedDigit) proposalReq.barrier = predictedDigit
 
-        } else {\n          addLog('Waiting for a fresh Analysis Tool signal...', true)\n        }\n\n        let proposalReq\n        if (connectedMode) {\n          const signal = [...signalsRef.current].find(item => isFreshSignal(item) && !consumedSignalsRef.current.has(item.id))\n          if (!signal) { await new Promise(r => setTimeout(r, 1000)); continue }\n          consumedSignalsRef.current.add(signal.id)\n          const market = VOLATILITY_INDICES.find(name => SYMBOL_MAP[name] === signal.symbol)\n          if (!market) { addLog('Rejected signal: unsupported market.'); continue }\n          setSelectedMarket(market); setTradeType(signal.tradeType); setSubTradeType(signal.subTradeType || ''); setOption(signal.option); setPredictedDigit(String(signal.predictedDigit ?? predictedDigit)); setDurationValue(Number(signal.duration || durationValue)); setTimeframeUnit(signal.timeframeUnit || timeframeUnit)\n          proposalReq = buildProposal(signal, roundStake(currentStakeRef.current))\n          setConfidenceScore(Number(signal.setupScore || signal.confidence || 0))\n        } else {\n          const symbol = SYMBOL_MAP[selectedMarket]\n          const tradeStake = roundStake(currentStakeRef.current)\n          const signal = {symbol,tradeType,subTradeType,option,predictedDigit,barrier:tradeType==='Digits'?predictedDigit:'',duration:durationValue,timeframeUnit,expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,durationValue*60)}\n          proposalReq = buildProposal(signal, tradeStake)\n        }\n        const available = await wsRequest({ contracts_for: proposalReq.underlying_symbol, currency: 'USD' })\n        const offered = JSON.stringify(available.contracts_for || {})\n        if (!offered.includes(proposalReq.contract_type)) throw new Error('Deriv does not list this contract for the selected market. No trade was sent.')\n\n        const proposalRes = await wsRequest(proposalReq)
+        } else {
+          addLog('Waiting for a fresh Analysis Tool signal...', true)
+        }
+
+        let proposalReq
+        if (connectedMode) {
+          const signal = [...signalsRef.current].find(item => isFreshSignal(item) && !consumedSignalsRef.current.has(item.id))
+          if (!signal) { await new Promise(r => setTimeout(r, 1000)); continue }
+          consumedSignalsRef.current.add(signal.id)
+          const market = VOLATILITY_INDICES.find(name => SYMBOL_MAP[name] === signal.symbol)
+          if (!market) { addLog('Rejected signal: unsupported market.'); continue }
+          setSelectedMarket(market); setTradeType(signal.tradeType); setSubTradeType(signal.subTradeType || ''); setOption(signal.option); setPredictedDigit(String(signal.predictedDigit ?? predictedDigit)); setDurationValue(Number(signal.duration || durationValue)); setTimeframeUnit(signal.timeframeUnit || timeframeUnit)
+          proposalReq = buildProposal(signal, roundStake(currentStakeRef.current))
+          setConfidenceScore(Number(signal.setupScore || signal.confidence || 0))
+        } else {
+          const symbol = SYMBOL_MAP[selectedMarket]
+          const tradeStake = roundStake(currentStakeRef.current)
+          const signal = {symbol,tradeType,subTradeType,option,predictedDigit,barrier:tradeType==='Digits'?predictedDigit:'',duration:durationValue,timeframeUnit,expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,durationValue*60)}
+          proposalReq = buildProposal(signal, tradeStake)
+        }
+        const available = await wsRequest({ contracts_for: proposalReq.underlying_symbol, currency: 'USD' })
+        const offered = JSON.stringify(available.contracts_for || {})
+        if (!offered.includes(proposalReq.contract_type)) throw new Error('Deriv does not list this contract for the selected market. No trade was sent.')
+
+        const proposalRes = await wsRequest(proposalReq)
         if (!isRunningRef.current) break
         const buyRes = await wsRequest({ buy: proposalRes.proposal.id, price: proposalRes.proposal.ask_price })
         if (!isRunningRef.current) break
@@ -364,7 +389,11 @@ export default function DennyBots({ token, accountId, onBalanceUpdate, signals =
       <div className="flex items-center gap-2 pb-1 border-b border-gray-800 mb-2 flex-shrink-0"><div className="w-7 h-7 bg-gradient-to-br from-orange-500 to-green-500 rounded-lg flex items-center justify-center"><Activity size={16} className="text-white" /></div><div><h2 className="text-base font-bold text-white">Denny Bots <span className="text-xs text-orange-400">INSTITUTIONAL</span></h2><p className="text-[10px] text-gray-400 flex items-center gap-1"><ShieldCheck size={10} /> Multi-Strategy Analysis System</p></div></div>
       {validationError && <div className="bg-red-900/20 border border-red-500/50 rounded-lg p-2 mb-2 flex items-center gap-2 flex-shrink-0"><AlertCircle size={12} className="text-red-500" /><p className="text-red-400 text-[10px] font-medium">{validationError}</p></div>}
       <div className="bg-gray-900 rounded-lg p-2 border border-gray-800 mb-2 flex-shrink-0 overflow-y-auto" style={{maxHeight: '28vh'}}>
-        <h3 className="text-white font-bold text-xs flex items-center gap-1 mb-2"><Target size={12} className="text-orange-500" /> Parameters</h3>\n        <label className="flex items-center justify-between bg-black/60 border border-sky-500/30 rounded px-2 py-2 mb-2 text-xs"><span className="font-bold text-sky-300">Connect Analysis Tool</span><input type="checkbox" checked={connectedMode} onChange={e => setConnectedMode(e.target.checked)} disabled={isRunning} /></label>\n        {connectedMode && <p className="text-[10px] text-sky-300 mb-2">Analysis Tool supplies the strategy. Stake, target, stop loss and recovery remain local.</p>}\n        <label className="flex items-center justify-between bg-black/60 border border-sky-500/30 rounded px-2 py-2 mb-2 text-xs"><span className="font-bold text-sky-300">Connect Analysis Tool</span><input type="checkbox" checked={connectedMode} onChange={e => setConnectedMode(e.target.checked)} disabled={isRunning} /></label>\n        {connectedMode && <p className="text-[10px] text-sky-300 mb-2">Analysis Tool controls market and strategy. Only stake, target, stop loss and recovery remain configurable.</p>}
+        <h3 className="text-white font-bold text-xs flex items-center gap-1 mb-2"><Target size={12} className="text-orange-500" /> Parameters</h3>
+        <label className="flex items-center justify-between bg-black/60 border border-sky-500/30 rounded px-2 py-2 mb-2 text-xs"><span className="font-bold text-sky-300">Connect Analysis Tool</span><input type="checkbox" checked={connectedMode} onChange={e => setConnectedMode(e.target.checked)} disabled={isRunning} /></label>
+        {connectedMode && <p className="text-[10px] text-sky-300 mb-2">Analysis Tool supplies the strategy. Stake, target, stop loss and recovery remain local.</p>}
+        <label className="flex items-center justify-between bg-black/60 border border-sky-500/30 rounded px-2 py-2 mb-2 text-xs"><span className="font-bold text-sky-300">Connect Analysis Tool</span><input type="checkbox" checked={connectedMode} onChange={e => setConnectedMode(e.target.checked)} disabled={isRunning} /></label>
+        {connectedMode && <p className="text-[10px] text-sky-300 mb-2">Analysis Tool controls market and strategy. Only stake, target, stop loss and recovery remain configurable.</p>}
         <div className="mb-2"><label className="text-[10px] text-gray-400 uppercase font-bold">Market</label><select value={selectedMarket} onChange={e => setSelectedMarket(e.target.value)} disabled={isRunning || connectedMode} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white">{VOLATILITY_INDICES.map(m => <option key={m} className="text-white">{m}</option>)}</select></div>
         <div className="grid grid-cols-2 gap-2 mb-2"><div><label className="text-[10px] text-gray-400 uppercase font-bold">Type</label><select value={tradeType} onChange={e => setTradeType(e.target.value)} disabled={isRunning || connectedMode} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white">{TRADE_TYPES.map(t => <option key={t} className="text-white">{t}</option>)}</select></div>{SUB_TRADE_TYPES[tradeType]?.length > 0 && <div><label className="text-[10px] text-gray-400 uppercase font-bold">Sub Type</label><select value={subTradeType} onChange={e => setSubTradeType(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white">{SUB_TRADE_TYPES[tradeType].map(t => <option key={t} className="text-white">{t}</option>)}</select></div>}</div>
         {subTradeType && OPTIONS[subTradeType] && <div className="mb-2"><label className="text-[10px] text-gray-400 uppercase font-bold mb-1 block">Option</label><div className="grid grid-cols-3 gap-1">{OPTIONS[subTradeType].map(opt => <button key={opt} onClick={() => setOption(opt)} disabled={isRunning || connectedMode} className={`py-1.5 rounded text-xs font-bold border ${option === opt ? 'bg-green-500/20 border-green-500 text-green-400' : 'bg-black border-gray-700 text-gray-400'}`}>{opt}</button>)}</div></div>}
