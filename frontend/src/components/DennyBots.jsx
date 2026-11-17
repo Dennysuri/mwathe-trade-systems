@@ -46,41 +46,24 @@ const calculateDigitDeviation = (digits, targetDigit) => {
   return (actual - expected) / expected
 }
 
-const analyzeDigitTrade = (tickHistory, predictedDigit, option) => {
-  if (tickHistory.length < 20) return { confidence: 10, signal: 'CALL', reasons: ['Gathering initial data...'] }
-  
-  const digits = tickHistory.map(t => parseInt(t.toString().slice(-1)))
-  const targetDigit = parseInt(predictedDigit)
-  const analysis = analyzeDigitFrequency(digits, 50)
-  const entropy = calculateDigitEntropy(digits)
-  const pattern = analyzeDigitPattern(digits, 30)
-  const deviation = calculateDigitDeviation(digits, targetDigit)
-  
-  let confidence = 20 // Base confidence
-  let reasons = []
-  
-  // Strategy 1: Frequency
-  if (analysis.leastFrequent === targetDigit) { confidence += 25; reasons.push(`Digit ${targetDigit} is cold (due)`) }
-  else if (analysis.mostFrequent === targetDigit) { confidence += 10; reasons.push(`Digit ${targetDigit} is hot`) }
-  
-  // Strategy 2: Entropy
-  if (entropy < 2.8) { confidence += 20; reasons.push(`Low entropy (${entropy.toFixed(2)}) = predictable`) }
-  else { confidence += 5 }
-  
-  // Strategy 3: Pattern
-  const lastDigit = digits[digits.length - 1]
-  if (pattern[lastDigit]) {
-    const totalTransitions = pattern[lastDigit].reduce((a,b) => a+b, 0)
-    const nextDigitProb = pattern[lastDigit][targetDigit] / totalTransitions
-    if (nextDigitProb > 0.25) { confidence += 25; reasons.push(`${(nextDigitProb*100).toFixed(0)}% chance after ${lastDigit}`) }
-    else if (nextDigitProb > 0.12) { confidence += 15 }
-  }
-  
-  // Strategy 4: Deviation
-  if (deviation < -0.2) { confidence += 20; reasons.push(`Digit ${targetDigit} is statistically due`) }
-  
-  const signal = confidence > 50 ? (option === 'Over' ? 'CALL' : 'PUT') : 'CALL'
-  return { confidence: Math.min(confidence, 99), signal, reasons }
+const getQuoteDigit = value => { const text=String(value); const decimals=text.includes('.')?text.split('.')[1]:''; return Number((decimals||text).slice(-1)) }
+const analyzeDigitTrade = (tickHistory, predictedDigit, option, subTradeType) => {
+  if (tickHistory.length < 50) return { confidence: 0, signal: null, reasons: ['Gathering at least 50 live ticks.'] }
+  const digits = tickHistory.map(getQuoteDigit)
+  const target = Math.max(0,Math.min(9,parseInt(predictedDigit,10)||0))
+  const previous = digits.at(-1)
+  const transitions = digits.slice(0,-1).reduce((out,d,i)=>{if(d===previous)out.push(digits[i+1]);return out},[])
+  if (transitions.length < 8) return { confidence: 0, signal: null, reasons: ['Insufficient repeated-state transitions.'] }
+  const rate = predicate => (transitions.filter(predicate).length+1)/(transitions.length+2)
+  let choices
+  if (subTradeType==='Over/Under') choices=[{name:'Over',p:rate(d=>d>target),base:(9-target)/10},{name:'Under',p:rate(d=>d<target),base:target/10}]
+  else if (subTradeType==='Matches/Differs') choices=[{name:'Matches',p:rate(d=>d===target),base:0.1},{name:'Differs',p:rate(d=>d!==target),base:0.9}]
+  else choices=[{name:'Even',p:rate(d=>d%2===0),base:0.5},{name:'Odd',p:rate(d=>d%2===1),base:0.5}]
+  const chosen=option==='Both'?choices.sort((x,y)=>(y.p-y.base)-(x.p-x.base))[0]:choices.find(x=>x.name===option)
+  if(!chosen)return {confidence:0,signal:null,reasons:['Unsupported digit option.']}
+  const edge=chosen.p-chosen.base
+  const confidence=Math.max(0,Math.min(90,Math.round(50+edge*400)))
+  return {confidence,signal:chosen.name,reasons:[`Observed conditional rate ${(chosen.p*100).toFixed(1)}% vs baseline ${(chosen.base*100).toFixed(1)}% over ${transitions.length} matching transitions.`]}
 }
 
 const analyzePriceTrade = (tickHistory) => {
@@ -259,7 +242,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate, signals =
         addLog('🔬 Analyzing market setup...')
         let analysis
         if (tradeType === 'Digits') {
-          analysis = analyzeDigitTrade(tickHistoryRef.current, predictedDigit, option)
+          analysis = analyzeDigitTrade(tickHistoryRef.current, predictedDigit, option, subTradeType)
         } else {
           analysis = analyzePriceTrade(tickHistoryRef.current)
         }
@@ -276,7 +259,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate, signals =
           await new Promise(r => setTimeout(r, 5000))
           waitTime += 5000
           
-          if (tradeType === 'Digits') analysis = analyzeDigitTrade(tickHistoryRef.current, predictedDigit, option)
+          if (tradeType === 'Digits') analysis = analyzeDigitTrade(tickHistoryRef.current, predictedDigit, option, subTradeType)
           else analysis = analyzePriceTrade(tickHistoryRef.current)
           setConfidenceScore(analysis.confidence)
         }
