@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Activity, Lock } from 'lucide-react'
-import { boundedNextStake, buildProposal } from '../services/tradingCore'
+import { boundedNextStake, buildProposal, MARKET_SYMBOLS } from '../services/tradingCore'
 
 const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
 const SYMBOL_MAP = { 'Volatility 10 (1s) Index': 'R_10', 'Volatility 10 Index': 'R_10', 'Volatility 15 (1s) Index': 'R_15', 'Volatility 25 (1s) Index': 'R_25', 'Volatility 25 Index': 'R_25', 'Volatility 30 (1s) Index': 'R_30', 'Volatility 50 (1s) Index': 'R_50', 'Volatility 50 Index': 'R_50', 'Volatility 75 (1s) Index': 'R_75', 'Volatility 75 Index': 'R_75', 'Volatility 90 (1s) Index': 'R_90', 'Volatility 100 (1s) Index': 'R_100', 'Volatility 100 Index': 'R_100' }
@@ -10,6 +10,7 @@ const OPTIONS = { 'Over/Under': ['Over', 'Under', 'Both'], 'Even/Odd': ['Even', 
 const TIMEFRAME_RULES = { 'Accumulators': { units: ['Ticks'], defaultUnit: 'Ticks', min: 1, max: 85, fixed: true, label: '1 - 85 ticks' }, 'Multipliers': { units: ['Auto'], defaultUnit: 'Auto', min: 1, max: 1, fixed: true, label: 'Auto' }, 'Digits': { units: ['Ticks'], defaultUnit: 'Ticks', min: 1, max: 10, fixed: false }, 'Turbos': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false }, 'Ups & Downs': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false }, 'Touch & No Touch': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false }, 'Vanillas': { units: ['Minutes', 'Hours', 'Days'], defaultUnit: 'Minutes', min: 1, maxMap: { 'Minutes': 1440, 'Hours': 24, 'Days': 30 }, fixed: false } }
 
 const getQuoteDigit = value => { const text=String(value); const decimals=text.includes('.')?text.split('.')[1]:''; return Number((decimals||text).slice(-1)) }
+const MARKET_LABEL_BY_SYMBOL = Object.fromEntries(Object.entries(SYMBOL_MAP).map(([label,symbol])=>[symbol,label]))
 
 export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
@@ -41,7 +42,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   const nextTradeTimer = useRef(null)
   const isRunningRef = useRef(false)
   const wsRef = useRef(null)
-  const tickHistoryRef = useRef([])
+  const tickHistoryRef = useRef({})
   const pendingProposalRef = useRef(null)
   const sessionRef = useRef({totalTrades:0,wins:0,losses:0,lossStreak:0,stake:0.35,pl:0})
   const configRef = useRef({stake,targetProfit,stopLoss})
@@ -72,8 +73,8 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
           try {
             const msg = JSON.parse(message.data)
             if (msg.msg_type === 'balance' && onBalanceUpdate) onBalanceUpdate(parseFloat(msg.balance.balance))
-            if (msg.msg_type === 'history' && msg.history?.prices) tickHistoryRef.current = msg.history.prices.map(Number).filter(Number.isFinite).slice(-500)
-            if (msg.msg_type === 'tick' && msg.tick?.quote !== undefined) tickHistoryRef.current = [...tickHistoryRef.current, Number(msg.tick.quote)].slice(-500)
+            if (msg.msg_type === 'history' && msg.history?.prices) { const symbol = msg.echo_req?.ticks_history || msg.history.symbol; if (symbol) tickHistoryRef.current[symbol] = msg.history.prices.map(Number).filter(Number.isFinite).slice(-500) }
+            if (msg.msg_type === 'tick' && msg.tick?.quote !== undefined) { const symbol = msg.tick.symbol; const current = tickHistoryRef.current[symbol] || []; tickHistoryRef.current[symbol] = [...current, Number(msg.tick.quote)].slice(-500) }
             if (msg.msg_type === 'contracts_for' && pendingProposalRef.current?.reqId === msg.req_id) {
               const pending = pendingProposalRef.current; pendingProposalRef.current = null
               if (msg.error || !JSON.stringify(msg.contracts_for || {}).includes(pending.proposal.contract_type)) addLog('⛔ Deriv does not offer this contract for the selected market. No trade sent.')
@@ -97,11 +98,17 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     const socket = wsRef.current
     const config = configRef.current
     if (!socket || socket.readyState !== WebSocket.OPEN || !isRunningRef.current) return
-    const ticks = tickHistoryRef.current
-    if (ticks.length < 40) { addLog('⏳ Waiting for sufficient live tick history.'); nextTradeTimer.current = setTimeout(() => executeTrade(), 2000); return }
-    const recent = ticks.slice(-20), deltas = recent.slice(1).map((v,i)=>v-recent[i]), drift = ticks.at(-1)-ticks.at(-16)
-    const atr = deltas.reduce((sum,v)=>sum+Math.abs(v),0)/(deltas.length||1)
-    if (!atr || Math.abs(drift) < atr*3) { addLog('No sufficiently strong live setup; waiting.'); nextTradeTimer.current = setTimeout(() => executeTrade(), 2000); return }
+    const candidates = MARKET_SYMBOLS.map(symbol => {
+      const series = tickHistoryRef.current[symbol] || []
+      if (series.length < 40) return null
+      const sample = series.slice(-20), moves = sample.slice(1).map((v,i)=>v-sample[i]), driftValue = series.at(-1)-series.at(-16)
+      const volatility = moves.reduce((sum,v)=>sum+Math.abs(v),0)/(moves.length||1)
+      return volatility>0 ? {symbol,ticks:series,drift:driftValue,atr:volatility,score:Math.abs(driftValue)/volatility} : null
+    }).filter(item=>item && item.score>=3).sort((a,b)=>b.score-a.score)
+    if (!candidates.length) { addLog('⏳ Scanning live markets; no eligible setup yet.'); nextTradeTimer.current=setTimeout(()=>executeTrade(),2000); return }
+    const best = candidates[0]
+    const ticks = best.ticks, atr = best.atr, drift = best.drift, symbol = best.symbol
+    setSelectedMarket(MARKET_LABEL_BY_SYMBOL[symbol] || symbol)
     const direction = drift > 0 ? 'up' : 'down'
     let selectedOption = config.option
     if (selectedOption === 'Both') {
@@ -151,7 +158,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     if (isRunningRef.current) { addLog(`P/L: $${session.pl.toFixed(2)} | Trades: ${session.totalTrades}`); nextTradeTimer.current=setTimeout(()=>executeTrade(),2000) }
   }
 
-  const startBot = () => { setValidationError(''); if (!ws || ws.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }; if (nextTradeTimer.current) clearTimeout(nextTradeTimer.current); setIsRunning(true); isRunningRef.current = true; setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConsecutiveLosses(0); sessionRef.current={totalTrades:0,wins:0,losses:0,lossStreak:0,stake:parseFloat(stake),pl:0}; setLogs([]); addLog(` AutoD AI Started`); addLog(`Market: ${selectedMarket}`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); tickHistoryRef.current=[]; const symbol = SYMBOL_MAP[selectedMarket]; ws.send(JSON.stringify({ ticks_history: symbol, count: 200, end: 'latest', style: 'ticks', subscribe: 1, req_id: Date.now() })); nextTradeTimer.current = setTimeout(() => { if (isRunningRef.current) executeTrade() }, 3000) }
+  const startBot = () => { setValidationError(''); if (!ws || ws.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }; if (nextTradeTimer.current) clearTimeout(nextTradeTimer.current); setIsRunning(true); isRunningRef.current = true; setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConsecutiveLosses(0); sessionRef.current={totalTrades:0,wins:0,losses:0,lossStreak:0,stake:parseFloat(stake),pl:0}; setLogs([]); addLog(` AutoD AI Started`); addLog('Market: autonomous scan across volatility indices'); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); tickHistoryRef.current={}; MARKET_SYMBOLS.forEach((symbol,index)=>ws.send(JSON.stringify({ ticks_history: symbol, count: 200, end: 'latest', style: 'ticks', subscribe: 1, req_id: Date.now()+index }))); nextTradeTimer.current = setTimeout(() => { if (isRunningRef.current) executeTrade() }, 3000) }
   const stopBot = () => { setIsRunning(false); isRunningRef.current = false; if (nextTradeTimer.current) { clearTimeout(nextTradeTimer.current); nextTradeTimer.current = null }; addLog(`⏹️ AI stopped new entries; any open contract remains monitored until settlement.`) }
   const resetBot = () => { stopBot(); setLogs(['AI reset.']); setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setValidationError(''); setCurrentContract(null) }
   const rules = TIMEFRAME_RULES[tradeType]; const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
