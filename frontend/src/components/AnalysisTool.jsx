@@ -94,15 +94,15 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
         ws.send(JSON.stringify({balance:1,req_id:900001}))
         MARKET_SYMBOLS.forEach((symbol,index)=>ws.send(JSON.stringify({ticks_history:symbol,count:Math.max(100,lastDigits),end:'latest',style:'ticks',subscribe:1,req_id:910000+index})))
         addLog('Historical windows requested; live tick subscriptions started across volatility markets.')
-        const started=Date.now(),total=analysisDuration*1000
+        let started=Date.now();const total=analysisDuration*1000
         timerRef.current=setInterval(()=>{
           const elapsed=Date.now()-started;setProgress(Math.min(99,elapsed/total*100))
           if(elapsed>=total){
             const candidates=MARKET_SYMBOLS.map(symbol=>({symbol,analysis:analyseSeries(pricesRef.current[symbol]||[],{tradeType,subTradeType,option,predictedDigit})})).filter(x=>x.analysis&&x.analysis.score>=70).sort((a,b)=>b.analysis.score-a.analysis.score)
-            if(!candidates.length){addLog('No eligible setup met the minimum evidence threshold. No signal sent.');setProgress(100);stopScanner();return}
+            if(!candidates.length){addLog('No eligible setup met the minimum evidence threshold. No signal sent.');started=Date.now();setProgress(0);return}
             const best=candidates[0],market=VOLATILITY_MARKETS.find(([,s])=>s===best.symbol)?.[0]||best.symbol
             const signal={id:`analysis-${best.symbol}-${Date.now()}`,timestamp:Date.now(),createdAt:Date.now(),source:'analysis-tool-live',symbol:best.symbol,market,tradeType,subTradeType,option:best.analysis.option,predictedDigit:Number(predictedDigit),barrier:best.analysis.barrier,confidence:best.analysis.score,setupScore:best.analysis.score,scoreType:'heuristic-not-probability',entry:String(best.analysis.spot),duration:durationValue,timeframeUnit,contractDuration:TIMEFRAME_RULES[tradeType].fixed?TIMEFRAME_RULES[tradeType].label:`${durationValue} ${timeframeUnit}`,detail:best.analysis.detail,marketCondition:best.analysis.score>=80?'Strong setup':'Moderate setup',expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,durationValue*({Minutes:60,Hours:3600,Days:86400}[timeframeUnit]||1))}
-            setFinalSignal(signal);onSignalGenerated?.(signal);addLog(`Live signal: ${market} / ${signal.option}, setup score ${signal.setupScore}/100.`);setProgress(100);stopScanner()
+            setFinalSignal(signal);onSignalGenerated?.(signal);addLog(`Live signal: ${market} / ${signal.option}, setup score ${signal.setupScore}/100.`);started=Date.now();setProgress(0)
           }
         },250)
       }
