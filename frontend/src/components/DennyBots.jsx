@@ -326,7 +326,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate, signals =
 
         addLog(`✅ Contract purchased: ${buyRes.buy.contract_id}`)
         const contractResult = await monitorContract(buyRes.buy.contract_id)
-        if (!isRunningRef.current || !contractResult) break
+        if (!contractResult) break
 
         const profit = parseFloat(contractResult.profit || 0)
         const isWin = profit > 0
@@ -380,7 +380,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate, signals =
     runTradeCycle()
   }
 
-  const stopBot = () => { isRunningRef.current = false; setIsRunning(false); if (wsRef.current) wsRef.current.send(JSON.stringify({ forget: 'all', req_id: reqIdRef.current++ })); addLog(`⏹️ Stopped`) }
+  const stopBot = () => { isRunningRef.current = false; setIsRunning(false); addLog(`⏹️ Stopped new entries; any open contract remains monitored until settlement.`) }
   const resetBot = () => { stopBot(); setLogs(['System reset.']); setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setValidationError(''); setConfidenceScore(0); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake) }
   const rules = TIMEFRAME_RULES[tradeType]
   const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
