@@ -133,29 +133,65 @@ function contractSpecificStrategies(prices, config) {
 }
 
 /**
- * Evaluate all applicable strategy families concurrently. The returned
- * recommendation is deliberately non-tradable until payout-aware, calibrated
- * out-of-sample evidence is supplied by the validation layer.
+ * Evaluate applicable strategy families and produce a ranked research candidate.
+ * The score is a relative setup-strength index, never a win probability.
+ * Candidate discovery is deliberately separate from trade authorization.
  */
+function rankOpportunity(strategies, config) {
+  const digit = strategies.find(s => s.family === 'digit-distribution');
+  if (digit) {
+    const options = digit.metrics.options || [];
+    const best = options.reduce((a, b) => !a || b.edge > a.edge ? b : a, null);
+    const transition = strategies.find(s => s.family === 'digit-transition');
+    const conditional = transition?.metrics.options?.find(x => x.option === best?.option);
+    const edge = Math.max(0, best?.edge || 0);
+    const conditionalEdge = Math.max(0, (conditional?.observed || 0) - (conditional?.baseline || 0));
+    const score = clamp(50 + edge * 240 + conditionalEdge * 100, 0, 94);
+    return { option: best?.option || config.option, score: Math.round(score),
+      supportingFamilies: [digit.family, ...(conditional?.observations >= 12 ? ['digit-transition'] : [])],
+      evidence: { observedRate: best?.observed, baseline: best?.baseline, conditionalObservations: conditional?.observations || 0 },
+      note: 'Relative digit-pattern setup score; not a calibrated probability.' };
+  }
+  const momentum = strategies.find(s => s.family === 'momentum')?.metrics;
+  const reversion = strategies.find(s => s.family === 'mean-reversion')?.metrics;
+  const regime = strategies.find(s => s.family === 'volatility-regime')?.metrics;
+  if (!momentum) return null;
+  const direction = momentum.direction;
+  const directionalAgreement = direction === 'up' ? momentum.upRate : direction === 'down' ? momentum.downRate : 0.5;
+  const momentumStrength = Math.abs(momentum.momentum || 0) / Math.max(momentum.volatility || regime?.volatility || 0, Number.EPSILON);
+  const rangeExtreme = Math.max(reversion?.rangePosition || 0.5, 1 - (reversion?.rangePosition || 0.5));
+  const score = clamp(45 + Math.min(22, momentumStrength * 8) + Math.max(0, directionalAgreement - 0.5) * 70
+    + Math.max(0, rangeExtreme - 0.8) * 30, 0, 94);
+  return { option: config.option === 'Both' ? (direction === 'up' ? 'Rise' : direction === 'down' ? 'Fall' : 'Both') : config.option,
+    direction, score: Math.round(score),
+    supportingFamilies: strategies.map(s => s.family),
+    evidence: { directionalAgreement, momentumStrength, volatility: regime?.volatility ?? null, rangePosition: reversion?.rangePosition ?? null },
+    note: 'Relative multi-family setup score; not a calibrated probability.' };
+}
+
 export async function evaluateStrategyEnsemble(prices, config = {}) {
   const clean = (prices || []).map(Number).filter(Number.isFinite);
   const min = config.tradeType === 'Digits' ? 200 : 80;
   if (clean.length < min) return {
     ready: false, tradable: false, sampleSize: clean.length, strategies: [],
-    reasons: [`Need at least ${min} observations; currently have ${clean.length}.`],
-    conviction: null, decision: 'WAIT'
+    candidate: null, reasons: [`Building live sample: ${clean.length}/${min} observations.`],
+    conviction: null, decision: 'COLLECTING'
   };
   const jobs = config.tradeType === 'Digits'
     ? [() => digitStrategies(clean, config)]
     : [() => contractSpecificStrategies(clean, config)];
-  const strategyGroups = await Promise.all(jobs.map(async run => run()));
+  const strategyGroups = await Promise.all(jobs.map(run => Promise.resolve().then(run)));
   const strategies = strategyGroups.flat();
-  const best = strategies.find(s => s.status === 'research-only') || null;
+  const candidate = rankOpportunity(strategies, config);
+  const promising = Boolean(candidate && candidate.score >= 62);
   return {
     ready: true, tradable: false, sampleSize: clean.length, strategies,
-    bestResearch: best, conviction: null, decision: 'WAIT',
-    reasons: ['Models are research-only until independently calibrated on unseen outcomes.',
-      'A payout-aware expected-value calculation is required before any trade can be authorised.']
+    candidate: promising ? candidate : null,
+    watchCandidate: candidate, conviction: candidate?.score ?? null,
+    decision: promising ? 'CANDIDATE' : 'MONITOR',
+    reasons: promising
+      ? ['A comparatively strong live setup was detected; this score is a ranking aid, not a calibrated win probability.', 'Automated execution remains gated pending independent validation and payout-aware expected value.']
+      : ['No setup currently meets the relative-strength threshold; continue scanning without a long pause.']
   };
 }
 
