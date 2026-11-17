@@ -41,7 +41,6 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   const isRunningRef = useRef(false)
   const tickHistoryRef = useRef([])
   const pendingProposalRef = useRef(null)
-  const statsRef = useRef({totalTrades:0,wins:0,losses:0,consecutiveLosses:0,currentStake:0.35,currentPL:0})
   const liveHandlersRef = useRef({})
 
   const addLog = (msg) => setLogs(prev => [...prev.slice(-20), `[${new Date().toLocaleTimeString()}] ${msg}`])
