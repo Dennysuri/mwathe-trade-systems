@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Zap } from 'lucide-react'
 import { boundedNextStake, buildProposal } from '../services/tradingCore'
+import { validateEntryWindow } from '../services/strategyIntelligence'
 
 const SYMBOL_MAP = { 
   'Volatility 10 (1s) Index': 'R_10', 'Volatility 10 Index': 'R_10', 'Volatility 15 (1s) Index': 'R_15',
