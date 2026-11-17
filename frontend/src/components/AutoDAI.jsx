@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Activity, Lock } from 'lucide-react'
+import { boundedNextStake } from '../services/tradingCore'
 
 const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
 const SYMBOL_MAP = { 'Volatility 10 (1s) Index': 'R_10', 'Volatility 10 Index': 'R_10', 'Volatility 15 (1s) Index': 'R_15', 'Volatility 25 (1s) Index': 'R_25', 'Volatility 25 Index': 'R_25', 'Volatility 30 (1s) Index': 'R_30', 'Volatility 50 (1s) Index': 'R_50', 'Volatility 50 Index': 'R_50', 'Volatility 75 (1s) Index': 'R_75', 'Volatility 75 Index': 'R_75', 'Volatility 90 (1s) Index': 'R_90', 'Volatility 100 (1s) Index': 'R_100', 'Volatility 100 Index': 'R_100' }
@@ -91,7 +92,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   const handleContractResult = (profit) => {
     const isWin = profit > 0; const newTotal = totalTrades + 1; setTotalTrades(newTotal)
     if (isWin) { setWins(wins + 1); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); addLog(`✅ AI WON +$${profit.toFixed(2)}`) }
-    else { setLosses(losses + 1); setConsecutiveLosses(consecutiveLosses + 1); const newStake = currentStake * martingaleFactor; setCurrentStake(newStake); addLog(`❌ AI LOST -$${profit.toFixed(2)}`) }
+    else { const nextLosses = consecutiveLosses + 1; setLosses(losses + 1); setConsecutiveLosses(nextLosses); const newStake = boundedNextStake(stake, currentStake, martingaleFactor, nextLosses); setCurrentStake(newStake); addLog(`❌ AI LOST -${profit.toFixed(2)} | Bounded next stake ${newStake.toFixed(2)}`); if (nextLosses >= 2) { addLog('🛑 Recovery cap reached after two consecutive losses. Stopping AI.'); setIsRunning(false); isRunningRef.current = false; return } }
     const newPL = currentPL + profit; setCurrentPL(newPL)
     if (newPL >= parseFloat(targetProfit)) { addLog(` Target hit! $${newPL.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; return }
     if (newPL <= -parseFloat(stopLoss)) { addLog(`🛑 Stop loss $${newPL.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; return }
@@ -119,7 +120,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
 
   return (
     <div className="h-full flex flex-col bg-gray-950 text-white p-2 overflow-hidden">
-      <div className="flex items-center gap-2 pb-1 border-b border-gray-800 mb-2 flex-shrink-0"><div className="w-7 h-7 bg-gradient-to-br from-orange-500 to-green-500 rounded-lg flex items-center justify-center"><Activity size={16} className="text-white" /></div><div><h2 className="text-base font-bold text-white">AutoD AI</h2><p className="text-[10px] text-gray-400 flex items-center gap-1"><ShieldCheck size={10} /> Zero Consecutive Losses</p></div></div>
+      <div className="flex items-center gap-2 pb-1 border-b border-gray-800 mb-2 flex-shrink-0"><div className="w-7 h-7 bg-gradient-to-br from-orange-500 to-green-500 rounded-lg flex items-center justify-center"><Activity size={16} className="text-white" /></div><div><h2 className="text-base font-bold text-white">AutoD AI</h2><p className="text-[10px] text-gray-400 flex items-center gap-1"><ShieldCheck size={10} /> Risk-Limited Trading</p></div></div>
       {validationError && <div className="bg-red-900/20 border border-red-500/50 rounded-lg p-2 mb-2 flex items-center gap-2 flex-shrink-0"><AlertCircle size={12} className="text-red-500" /><p className="text-red-400 text-[10px] font-medium">{validationError}</p></div>}
       <div className="bg-gray-900 rounded-lg p-2 border border-gray-800 mb-2 flex-shrink-0 overflow-y-auto" style={{maxHeight: '28vh'}}>
         <h3 className="text-white font-bold text-xs flex items-center gap-1 mb-2"><Target size={12} className="text-orange-500" /> Parameters</h3>
