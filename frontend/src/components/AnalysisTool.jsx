@@ -26,7 +26,6 @@ const TIMEFRAME_RULES = {
   Vanillas:{units:['Minutes','Hours','Days'],defaultUnit:'Minutes',min:1,maxMap:{Minutes:1440,Hours:24,Days:30},fixed:false}
 }
 const TRADE_TYPES=Object.keys(TIMEFRAME_RULES)
-const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))
 const lastDigit=value=>{const s=String(value);const decimals=s.includes('.')?s.split('.')[1]:'';return Number((decimals || s).slice(-1))}
 const mean=values=>values.reduce((a,b)=>a+b,0)/(values.length||1)
 const analyseSeries=(prices,config)=>{
@@ -95,35 +94,41 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
         ws.send(JSON.stringify({balance:1,req_id:900001}))
         MARKET_SYMBOLS.forEach((symbol,index)=>ws.send(JSON.stringify({ticks_history:symbol,count:Math.max(100,lastDigits),end:'latest',style:'ticks',subscribe:1,req_id:910000+index})))
         addLog('Historical windows requested; live tick subscriptions started across volatility markets.')
-        let started=Date.now();const total=analysisDuration*1000
+        let lastScanAt=0
         timerRef.current=setInterval(async()=>{
-          const elapsed=Date.now()-started;setProgress(Math.min(99,elapsed/total*100))
-          if(elapsed<total||scanInFlightRef.current)return
+          const now=Date.now()
+          setProgress(Math.min(99,Math.max(0,(now-lastScanAt)/500)*100))
+          if(now-lastScanAt<500||scanInFlightRef.current)return
+          lastScanAt=now
           scanInFlightRef.current=true
           try {
             const config={tradeType,subTradeType,option,predictedDigit:Number(predictedDigit),duration:durationValue,timeframeUnit}
             const reports=await Promise.all(MARKET_SYMBOLS.map(async symbol=>{
-              const fresh=Date.now()-(lastTickAtRef.current[symbol]||0)<5000
+              const fresh=now-(lastTickAtRef.current[symbol]||0)<5000
               if(!fresh)return {symbol,report:null,stale:true}
               const report=await evaluateStrategyEnsemble(pricesRef.current[symbol]||[],config)
               return {symbol,report,stale:false}
             }))
             const ready=reports.filter(item=>item.report?.ready)
-            const top=ready.slice(0,4)
+            const candidates=ready.filter(item=>item.report.candidate).sort((a,b)=>b.report.candidate.score-a.report.candidate.score)
+            const top=candidates.slice(0,4)
             if(!ready.length){
-              addLog('Research scan complete: insufficient independent observations. No trade signal issued.')
+              addLog('Thamira: collecting fresh observations across all 13 markets; next scan continues immediately.')
+              setFinalSignal({researchOnly:true,market:'Building live market picture',option:config.option,contractDuration:`${durationValue} ${timeframeUnit}`,sampleSize:reports.reduce((n,item)=>n+(item.report?.sampleSize||0),0),marketCount:0,detail:'Live feed remains active. Short recheck cycle; no forced entry.'})
+            } else if(!top.length){
+              addLog(`Thamira: monitoring ${ready.length}/13 fresh markets — no setup currently clears the relative-strength threshold. Rechecking in 0.5s.`)
+              setFinalSignal({researchOnly:true,market:'Thamira monitoring all markets',option:config.option,contractDuration:`${durationValue} ${timeframeUnit}`,sampleSize:ready.reduce((n,item)=>n+item.report.sampleSize,0),marketCount:ready.length,detail:'No qualifying candidate at this instant. Continuous scanning remains active.'})
             } else {
-              addLog(`Parallel strategy research completed across ${ready.length} fresh markets.`)
+              const best=top[0],label=VOLATILITY_MARKETS.find(([,sym])=>sym===best.symbol)?.[0]||best.symbol
+              addLog(`Thamira: strongest candidate ${label} | setup score ${best.report.candidate.score}/94 | ${best.report.candidate.option}`)
               top.forEach(item=>{
-                const label=VOLATILITY_MARKETS.find(([,sym])=>sym===item.symbol)?.[0]||item.symbol
-                const families=item.report.strategies.map(strategy=>strategy.family).join(', ')
-                addLog(`${label}: ${item.report.sampleSize} observations; ${families}`)
+                const market=VOLATILITY_MARKETS.find(([,sym])=>sym===item.symbol)?.[0]||item.symbol
+                addLog(`${market}: ${item.report.candidate.score}/94 relative score; ${item.report.candidate.supportingFamilies.join(', ')}`)
               })
-              addLog('Thamira decision: WAIT — models need unseen-outcome calibration and payout-adjusted expected-value validation.')
-              setFinalSignal({researchOnly:true,market:'Parallel research report',option:config.option,contractDuration:`${durationValue} ${timeframeUnit}`,sampleSize:ready.reduce((n,item)=>n+item.report.sampleSize,0),marketCount:ready.length,detail:'Research only. No trade was authorised; probability calibration and payout validation are required.'})
+              setFinalSignal({researchOnly:true,market:label,option:best.report.candidate.option,contractDuration:`${durationValue} ${timeframeUnit}`,sampleSize:best.report.sampleSize,marketCount:candidates.length,score:best.report.candidate.score,detail:'Top-ranked live setup. Relative research score only, not a verified win probability; automated entry still requires independent calibration and payout validation.'})
             }
           } catch(error) { addLog(`Strategy research error: ${error.message}`) }
-          finally { scanInFlightRef.current=false;started=Date.now();setProgress(0) }
+          finally { scanInFlightRef.current=false;setProgress(100) }
         },250)
       }
       ws.onmessage=event=>{
