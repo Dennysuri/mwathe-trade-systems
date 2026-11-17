@@ -43,9 +43,7 @@ export default function Dashboard() {
         <div className="w-32 h-1 rounded-full bg-gradient-to-r from-mwathe-orange via-mwathe-green to-mwathe-skyblue"></div>
         
         <p className="text-mwathe-gray text-center text-sm max-w-xs leading-relaxed">
-          Institutional-grade AI trading engine. 
-          Zero consecutive losses. 
-          Unmatched precision across all Deriv markets.
+          AI-assisted trading tools with live market data, configurable risk controls, and transparent signal monitoring.
         </p>
       </motion.div>
 
