@@ -203,6 +203,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate, signals =
           await new Promise(r => setTimeout(r, 2000))
         }
 
+        let independentOption = option
         if (!connectedMode) {
         addLog('🔬 Analyzing market setup...')
         let analysis
@@ -212,6 +213,13 @@ export default function DennyBots({ token, accountId, onBalanceUpdate, signals =
           analysis = analyzePriceTrade(tickHistoryRef.current)
         }
         
+        if (option === 'Both') {
+          if (tradeType === 'Digits') independentOption = analysis.signal
+          else if (tradeType === 'Ups & Downs') independentOption = subTradeType === 'Higher/Lower' ? (analysis.signal === 'CALL' ? 'Higher' : 'Lower') : (analysis.signal === 'CALL' ? 'Rise' : 'Fall')
+          else if (tradeType === 'Vanillas') independentOption = analysis.signal === 'CALL' ? 'Call' : 'Put'
+          else if (tradeType === 'Multipliers' || tradeType === 'Turbos') independentOption = analysis.signal === 'CALL' ? 'Up' : 'Down'
+          else if (tradeType === 'Touch & No Touch') independentOption = analysis.confidence >= 70 ? 'Touch' : 'No Touch'
+        }
         setConfidenceScore(analysis.confidence)
         addLog(`📊 Confidence: ${analysis.confidence}% | Signals: ${analysis.reasons.join(', ')}`)
 
