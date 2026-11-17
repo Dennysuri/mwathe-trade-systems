@@ -126,7 +126,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
       nextTradeTimer.current = setTimeout(() => executeTrade(), 2000)
       return
     }
-    const symbol = SYMBOL_MAP[config.selectedMarket]
+
     const barrier = config.tradeType === 'Digits' ? (config.subTradeType==='Over/Under'?(selectedOption==='Over'?'2':'8'):config.subTradeType==='Matches/Differs'?'3':'')
       : (config.tradeType==='Touch & No Touch'||config.subTradeType==='Higher/Lower') ? ((config.tradeType==='Touch & No Touch'?direction==='down':isDown)?'-':'+')+Math.max(atr*(config.tradeType==='Touch & No Touch'?3:2),Math.abs(ticks.at(-1))*0.0001).toFixed(4) : ''
     try {
