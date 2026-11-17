@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Zap } from 'lucide-react'
-import { boundedNextStake } from '../services/tradingCore'
+import { boundedNextStake, buildProposal } from '../services/tradingCore'
 
 const SYMBOL_MAP = { 
   'Volatility 10 (1s) Index': 'R_10', 'Volatility 10 Index': 'R_10', 'Volatility 15 (1s) Index': 'R_15',
@@ -235,60 +235,22 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     const slope20 = last20[last20.length-1] - last20[0]
 
     if (tradeType === 'Digits') {
-      // Gate for Digits: Prefer Mean Reversion (Hurst < 0.55)
-      if (hurst > 0.60) return { score: 0, selectedDigit: null, selectedOption: null } // Veto: Market trending too hard for digits
-      
-      if (subTradeType === 'Over/Under') {
-        const td = parseInt(predictedDigit)
-        const last10 = digits.slice(-10); const last20D = digits.slice(-20)
-        if (isRecovery && lastFailedDirectionRef.current) {
-          if (lastFailedDirectionRef.current === 'Over') { if (!last10.includes(td)) score += 35; if (!last20D.includes(td)) score += 30 } 
-          else { const freq = digits.filter(d => d === td).length / digits.length; if (freq > 0.12) score += 40; if (freq > 0.10) score += 25 }
-        } else {
-          if (!last10.includes(td)) score += 30; if (!last20D.includes(td)) score += 25
-          const freq = digits.filter(d => d === td).length / digits.length
-          if (freq < 0.06) score += 25; else if (freq < 0.09) score += 15
-        }
-        if (calcEntropy(digits) < 2.5) score += 15
-        if (option === 'Both') selectedOption = score > 50 ? 'Over' : 'Under'
-        selectedDigit = td
-      } else if (subTradeType === 'Matches/Differs') {
-        let coldestDigit = 0, bestScore = 0
-        for (let d = 0; d <= 9; d++) {
-          let absence = 0
-          for (let i = digits.length - 1; i >= 0; i--) { if (digits[i] === d) break; absence++ }
-          let digitScore = 0
-          if (absence >= 15) digitScore += 45; else if (absence >= 10) digitScore += 30; else if (absence >= 7) digitScore += 20
-          const freq = digits.filter(x => x === d).length / digits.length
-          if (freq < 0.05) digitScore += 35; else if (freq < 0.08) digitScore += 20
-          if (digitScore > bestScore) { bestScore = digitScore; coldestDigit = d }
-        }
-        selectedDigit = coldestDigit; score = bestScore
-        if (selectedOption === 'Matches' && score < 90) score = 0
-      } else if (subTradeType === 'Even/Odd') {
-        const evenDigits = [0,2,4,6,8]; const oddDigits = [1,3,5,7,9]
-        const evenFreq = digits.filter(d => evenDigits.includes(d)).length / digits.length
-        const oddFreq = digits.filter(d => oddDigits.includes(d)).length / digits.length
-        let evenStreak = 0, oddStreak = 0
-        for (let i = digits.length - 1; i >= 0; i--) { if (evenDigits.includes(digits[i])) evenStreak++; else break }
-        for (let i = digits.length - 1; i >= 0; i--) { if (oddDigits.includes(digits[i])) oddStreak++; else break }
-        
-        if (isRecovery && lastFailedDirectionRef.current) {
-          const losingSide = lastFailedDirectionRef.current
-          const currentStreakOfLosingSide = losingSide === 'Even' ? evenStreak : oddStreak
-          if (currentStreakOfLosingSide >= 2) { selectedOption = losingSide === 'Even' ? 'Odd' : 'Even'; score += 50; if (currentStreakOfLosingSide >= 3) score += 30 } 
-          else { score = 0 }
-        } else {
-          if (option === 'Both') selectedOption = evenStreak > oddStreak ? 'Odd' : 'Even'
-          else selectedOption = option
-          const oppositeStreak = selectedOption === 'Even' ? oddStreak : evenStreak
-          if (oppositeStreak >= 3) score += 80
-          else if (oppositeStreak >= 2) score += 60
-          else if (oppositeStreak >= 1) score += 50
-          const targetFreq = selectedOption === 'Even' ? evenFreq : oddFreq
-          if (targetFreq < 0.50) score += 25; else if (targetFreq < 0.52) score += 15
-        }
-      }
+      const td = Math.max(0,Math.min(9,parseInt(predictedDigit,10)||0))
+      const previous = digits[digits.length-1]
+      const transitions = digits.slice(0,-1).reduce((acc,d,i)=>{if(d===previous)acc.push(digits[i+1]);return acc},[])
+      if (transitions.length < 8) return { score: 0, selectedDigit: null, selectedOption: null }
+      const eventRate = predicate => (transitions.filter(predicate).length + 1) / (transitions.length + 2)
+      const candidates = subTradeType === 'Over/Under'
+        ? [{name:'Over',p:eventRate(d=>d>td),base:(9-td)/10},{name:'Under',p:eventRate(d=>d<td),base:td/10}]
+        : subTradeType === 'Matches/Differs'
+          ? [{name:'Matches',p:eventRate(d=>d===td),base:0.1},{name:'Differs',p:eventRate(d=>d!==td),base:0.9}]
+          : [{name:'Even',p:eventRate(d=>d%2===0),base:0.5},{name:'Odd',p:eventRate(d=>d%2===1),base:0.5}]
+      const selected = option === 'Both' ? candidates.sort((x,y)=>(y.p-y.base)-(x.p-x.base))[0] : candidates.find(x=>x.name===option)
+      if (!selected) return { score: 0, selectedDigit: null, selectedOption: null }
+      const edge=selected.p-selected.base
+      score=edge>0.04?Math.min(90,Math.round(50+edge*400)):0
+      selectedOption=selected.name
+      selectedDigit=td
     } else if (tradeType === 'Ups & Downs' || tradeType === 'Multipliers' || tradeType === 'Turbos' || tradeType === 'Vanillas') {
       // HARD GATE 1: Market Regime (Must be trending)
       if (hurst < 0.55) return { score: 0, selectedDigit: null, selectedOption: null }
