@@ -107,7 +107,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
       const volatility = moves.reduce((sum,v)=>sum+Math.abs(v),0)/(moves.length||1)
       return volatility>0 ? {symbol,ticks:series,drift:driftValue,atr:volatility,score:config.tradeType==='Accumulators'?Math.abs(series.at(-1))/(volatility||1):Math.abs(driftValue)/volatility} : null
     }).filter(item=>item && item.score>=(config.tradeType==='Accumulators'?50:3)).sort((a,b)=>b.score-a.score)
-    if (!candidates.length) { addLog('⏳ Scanning live markets; no eligible setup yet.'); nextTradeTimer.current=setTimeout(()=>executeTrade(),2000); return }
+    if (!candidates.length) { addLog('⏳ Scanning live markets; no eligible setup yet.'); nextTradeTimer.current=setTimeout(()=>executeTrade(),500); return }
     const best = candidates[0]
     const ticks = best.ticks, atr = best.atr, drift = best.drift, symbol = best.symbol
     setSelectedMarket(MARKET_LABEL_BY_SYMBOL[symbol] || symbol)
@@ -125,20 +125,20 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     if (config.tradeType === 'Digits') {
       const digits = ticks.slice(-120).map(getQuoteDigit), previous = digits.at(-1)
       const transitions = digits.slice(0,-1).reduce((out,d,i)=>{if(d===previous)out.push(digits[i+1]);return out},[])
-      if (transitions.length < 10) { addLog('Insufficient conditional digit history; no trade.'); nextTradeTimer.current=setTimeout(()=>executeTrade(),2000); return }
+      if (transitions.length < 10) { addLog('Insufficient conditional digit history; no trade.'); nextTradeTimer.current=setTimeout(()=>executeTrade(),500); return }
       const rate = predicate => (transitions.filter(predicate).length+1)/(transitions.length+2)
       const target = 3
       const candidates = config.subTradeType==='Over/Under'?[{name:'Over',p:rate(d=>d>2),base:0.7},{name:'Under',p:rate(d=>d<8),base:0.8}]
         :config.subTradeType==='Matches/Differs'?[{name:'Matches',p:rate(d=>d===target),base:0.1},{name:'Differs',p:rate(d=>d!==target),base:0.9}]
         :[{name:'Even',p:rate(d=>d%2===0),base:0.5},{name:'Odd',p:rate(d=>d%2===1),base:0.5}]
       const chosen=config.option==='Both'?candidates.sort((a,b)=>(b.p-b.base)-(a.p-a.base))[0]:candidates.find(item=>item.name===selectedOption)
-      if(!chosen || chosen.p-chosen.base<0.04){addLog('Digit edge did not exceed the minimum threshold; no trade.');nextTradeTimer.current=setTimeout(()=>executeTrade(),2000);return}
+      if(!chosen || chosen.p-chosen.base<0.04){addLog('Digit edge did not exceed the minimum threshold; no trade.');nextTradeTimer.current=setTimeout(()=>executeTrade(),500);return}
       selectedOption=chosen.name
     }
     const isDown = ['Fall','Lower','Down','Put','No Touch','Under','Odd','Differs'].includes(selectedOption)
     if (config.tradeType !== 'Digits' && config.tradeType !== 'Accumulators' && config.tradeType !== 'Touch & No Touch' && ((direction==='up' && isDown) || (direction==='down' && !isDown))) {
       addLog('Selected direction conflicts with current tick trend; no trade sent.')
-      nextTradeTimer.current = setTimeout(() => executeTrade(), 2000)
+      nextTradeTimer.current = setTimeout(() => executeTrade(), 500)
       return
     }
 
@@ -173,7 +173,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     if (session.pl >= parseFloat(config.targetProfit)) { addLog(`🎯 Target hit! $${session.pl.toFixed(2)}`); setIsRunning(false); isRunningRef.current=false; return }
     if (session.pl <= -parseFloat(config.stopLoss)) { addLog(`🛑 Stop loss $${session.pl.toFixed(2)}`); setIsRunning(false); isRunningRef.current=false; return }
     if (session.lossStreak >= 2) { addLog('🛑 Recovery cap reached after two consecutive losses. Stopping AI.'); setIsRunning(false); isRunningRef.current=false; return }
-    if (isRunningRef.current) { addLog(`P/L: $${session.pl.toFixed(2)} | Trades: ${session.totalTrades}`); nextTradeTimer.current=setTimeout(()=>executeTrade(),2000) }
+    if (isRunningRef.current) { addLog(`P/L: $${session.pl.toFixed(2)} | Trades: ${session.totalTrades}`); nextTradeTimer.current=setTimeout(()=>executeTrade(),500) }
   }
 
   const startBot = () => { setValidationError(''); if (!ws || ws.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }; if (nextTradeTimer.current) clearTimeout(nextTradeTimer.current); setIsRunning(true); isRunningRef.current = true; setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConsecutiveLosses(0); sessionRef.current={totalTrades:0,wins:0,losses:0,lossStreak:0,stake:parseFloat(stake),pl:0}; setLogs([]); addLog(` AutoD AI Started`); addLog('Market: autonomous scan across volatility indices'); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); tickHistoryRef.current={}; MARKET_SYMBOLS.forEach((symbol,index)=>ws.send(JSON.stringify({ ticks_history: symbol, count: 200, end: 'latest', style: 'ticks', subscribe: 1, req_id: Date.now()+index }))); nextTradeTimer.current = setTimeout(() => { if (isRunningRef.current) executeTrade() }, 3000) }
