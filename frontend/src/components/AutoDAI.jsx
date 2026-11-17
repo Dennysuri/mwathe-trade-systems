@@ -50,7 +50,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   useEffect(() => { const rules = TIMEFRAME_RULES[tradeType]; setTimeframeUnit(rules.defaultUnit); setDurationValue(rules.min) }, [tradeType])
   useEffect(() => { if (!isRunning) setCurrentStake(parseFloat(stake) || 0.35) }, [stake, isRunning])
 
-  const handleLogin = () => { if (password === AI_PASSWORD) { setIsAuthenticated(true); setPasswordError('') } else setPasswordError('Invalid password') }
+  const handleLogin = async () => { setPasswordError(''); try { const response = await fetch('/api/autod-auth', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password }) }); const result = await response.json(); if (!response.ok || !result.authenticated) throw new Error(result.error || 'Authentication failed'); setIsAuthenticated(true); setPassword('') } catch (error) { setPasswordError(error.message || 'Authentication failed') } }
 
   useEffect(() => {
     if (!isAuthenticated || !token || !accountId) return
