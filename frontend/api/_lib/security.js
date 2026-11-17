@@ -64,16 +64,16 @@ export async function enforceRateLimit(req, res, { key, limit, windowSeconds }) 
         'Content-Type': 'application/json',
       },
       body: JSON.stringify([
+        ['SET', redisKey, '0', 'NX', 'EX', windowSeconds],
         ['INCR', redisKey],
-        ['EXPIRE', redisKey, windowSeconds, 'NX'],
       ]),
       signal: AbortSignal.timeout(4000),
     })
 
     if (!response.ok) throw new Error('Rate-limit store unavailable')
     const results = await response.json()
-    const count = Number(results?.[0]?.result)
-    if (!Number.isFinite(count) || results?.[1]?.error) throw new Error('Invalid rate-limit response')
+    const count = Number(results?.[1]?.result)
+    if (!Number.isFinite(count) || results?.[0]?.error || results?.[1]?.error) throw new Error('Invalid rate-limit response')
 
     res.setHeader('RateLimit-Limit', String(limit))
     res.setHeader('RateLimit-Remaining', String(Math.max(0, limit - count)))
