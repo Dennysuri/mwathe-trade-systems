@@ -29,3 +29,15 @@ test('entry window rejects stale signals and accepts fresh tick contracts', () =
   const fresh=validateEntryWindow({createdAt:4900,option:'Over',timeframeUnit:'Ticks'}, {now:5000});
   assert.equal(fresh.valid,true);
 });
+
+test('Thamira ranks a candidate without presenting its score as probability or authorizing a trade', async () => {
+  const prices = Array.from({length:300},(_,i)=>100 + Math.sin(i/4)*0.03 + i*0.0008);
+  const result = await evaluateStrategyEnsemble(prices,{tradeType:'Ups & Downs',subTradeType:'Rise/Fall',option:'Both'});
+  assert.equal(result.tradable,false);
+  assert.ok(['CANDIDATE','MONITOR'].includes(result.decision));
+  if (result.candidate) {
+    assert.ok(result.candidate.score >= 62);
+    assert.ok(result.candidate.score <= 94);
+    assert.match(result.candidate.note,/not a calibrated probability/i);
+  }
+});
