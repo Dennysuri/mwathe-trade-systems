@@ -44,8 +44,8 @@ export default function Signals({ signals, onReset }) {
                     </p>
                   </div>
                   <div className="text-right">
-                    <p className="text-mwathe-green font-bold text-lg">{signal.confidence}%</p>
-                    <p className="text-mwathe-gray text-xs">Confidence</p>
+                    <p className="text-mwathe-green font-bold text-lg">{signal.setupScore ?? signal.confidence}%</p>
+                    <p className="text-mwathe-gray text-xs">Setup score</p>
                   </div>
                 </div>
                 
@@ -63,8 +63,8 @@ export default function Signals({ signals, onReset }) {
                     <p className="text-mwathe-orange font-medium text-sm">{signal.marketCondition}</p>
                   </div>
                   <div>
-                    <p className="text-mwathe-gray text-xs mb-1">Signal Accuracy</p>
-                    <p className="text-mwathe-green font-bold">{signal.confidence}%</p>
+                    <p className="text-mwathe-gray text-xs mb-1">Signal Source</p>
+                    <p className="text-mwathe-green font-bold text-xs">{signal.source === 'analysis-tool-live' ? 'Live Deriv data' : 'Unverified'}</p>
                   </div>
                 </div>
               </motion.div>
