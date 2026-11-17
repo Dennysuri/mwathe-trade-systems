@@ -125,8 +125,8 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
       const transitions = digits.slice(0,-1).reduce((out,d,i)=>{if(d===previous)out.push(digits[i+1]);return out},[])
       if (transitions.length < 10) { addLog('Insufficient conditional digit history; no trade.'); nextTradeTimer.current=setTimeout(()=>executeTrade(),2000); return }
       const rate = predicate => (transitions.filter(predicate).length+1)/(transitions.length+2)
-      const target = config.subTradeType==='Over/Under'?(selectedOption==='Over'?2:8):3
-      const candidates = config.subTradeType==='Over/Under'?[{name:'Over',p:rate(d=>d>target),base:0.7},{name:'Under',p:rate(d=>d<target),base:0.2}]
+      const target = 3
+      const candidates = config.subTradeType==='Over/Under'?[{name:'Over',p:rate(d=>d>2),base:0.7},{name:'Under',p:rate(d=>d<8),base:0.8}]
         :config.subTradeType==='Matches/Differs'?[{name:'Matches',p:rate(d=>d===target),base:0.1},{name:'Differs',p:rate(d=>d!==target),base:0.9}]
         :[{name:'Even',p:rate(d=>d%2===0),base:0.5},{name:'Odd',p:rate(d=>d%2===1),base:0.5}]
       const chosen=config.option==='Both'?candidates.sort((a,b)=>(b.p-b.base)-(a.p-a.base))[0]:candidates.find(item=>item.name===selectedOption)
