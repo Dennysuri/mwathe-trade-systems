@@ -345,8 +345,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     if (isRecovery && recoveryStartTimeRef.current) {
       const waitTime = Date.now() - recoveryStartTimeRef.current;
       if (waitTime > 45000 && validMarkets.length === 0) {
-        allMarkets.sort((a, b) => b.score - a.score);
-        if (allMarkets[0].score > 60) return [allMarkets[0]]; // Only take relative best if > 60
+        return []; // Do not lower the quality threshold after a timeout
       }
     }
 
@@ -411,7 +410,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           lossesRef.current += 1; consecutiveLossesRef.current++
           lastFailedDirectionRef.current = tradeDirection; recoveryIndex++
           if (!recoveryStartTimeRef.current) recoveryStartTimeRef.current = Date.now();
-          currentStakeRef.current = roundStake(currentStakeRef.current * (parseFloat(martingaleFactor) || 1.5))
+          currentStakeRef.current = boundedNextStake(stake, currentStakeRef.current, martingaleFactor, consecutiveLossesRef.current)
           setCurrentStake(currentStakeRef.current)
           if (consecutiveLossesRef.current >= 1) addLog(`⚠️ ${consecutiveLossesRef.current} consecutive loss - Forcing direction flip`)
           addLog(`❌ LOST -$${profit.toFixed(2)} | Rotating to next market → Next: $${currentStakeRef.current.toFixed(2)}`)
