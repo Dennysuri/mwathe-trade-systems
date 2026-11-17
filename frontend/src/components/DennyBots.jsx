@@ -271,21 +271,30 @@ export default function DennyBots({ token, accountId, currency = 'USD', onBalanc
           const market = VOLATILITY_INDICES.find(name => SYMBOL_MAP[name] === signal.symbol)
           if (!market) { addLog('Rejected signal: unsupported market.'); continue }
           setSelectedMarket(market); setTradeType(signal.tradeType); setSubTradeType(signal.subTradeType || ''); setOption(signal.option); setPredictedDigit(String(signal.predictedDigit ?? predictedDigit)); setDurationValue(Number(signal.duration || durationValue)); setTimeframeUnit(signal.timeframeUnit || timeframeUnit)
-          proposalReq = buildProposal(signal, roundStake(currentStakeRef.current))
+          proposalReq = buildProposal(signal, roundStake(currentStakeRef.current), currency)
           setConfidenceScore(Number(signal.setupScore || signal.confidence || 0))
         } else {
           const symbol = SYMBOL_MAP[selectedMarket]
           const tradeStake = roundStake(currentStakeRef.current)
           const recentTicks = tickHistoryRef.current.slice(-20); const spot = recentTicks.at(-1); const atr = recentTicks.slice(1).reduce((sum,value,index)=>sum+Math.abs(value-recentTicks[index]),0)/Math.max(1,recentTicks.length-1); const down = ['Fall','Lower','Down','Put','No Touch'].includes(independentOption); const distance = Math.max(atr*(tradeType==='Touch & No Touch'?3:2),Math.abs(spot||1)*0.0001); const barrier = tradeType==='Digits'?String(predictedDigit):(['Touch & No Touch'].includes(tradeType)||subTradeType==='Higher/Lower')?(down?'-':'+')+distance.toFixed(4):''; const signal = {symbol,tradeType,subTradeType,option:independentOption,predictedDigit,barrier,duration:durationValue,timeframeUnit,expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,durationValue*60)}
-          proposalReq = buildProposal(signal, tradeStake)
+          proposalReq = buildProposal(signal, tradeStake, currency)
         }
-        const available = await wsRequest({ contracts_for: proposalReq.underlying_symbol, currency: 'USD' })
-        const offered = JSON.stringify(available.contracts_for || {})
-        if (!offered.includes(proposalReq.contract_type)) throw new Error('Deriv does not list this contract for the selected market. No trade was sent.')
+        const available = await wsRequest({ contracts_for: proposalReq.underlying_symbol, currency })
+        const offeredContracts = available.contracts_for?.available || []
+        if (!offeredContracts.some(contract => contract.contract_type === proposalReq.contract_type)) {
+          throw new Error(`Deriv does not offer ${proposalReq.contract_type} for ${proposalReq.underlying_symbol} in ${currency}. No order was sent.`)
+        }
 
+        addLog(`Requesting ${proposalReq.contract_type} proposal on ${proposalReq.underlying_symbol}...`)
         const proposalRes = await wsRequest(proposalReq)
+        const proposal = proposalRes.proposal
+        if (!proposal?.id || !Number.isFinite(Number(proposal.ask_price)) || Number(proposal.ask_price) <= 0) {
+          throw new Error('Deriv returned an incomplete or invalid trade proposal. No order was sent.')
+        }
         if (!isRunningRef.current) break
-        const buyRes = await wsRequest({ buy: proposalRes.proposal.id, price: proposalRes.proposal.ask_price })
+        addLog('Proposal received. Sending purchase request...')
+        const buyRes = await wsRequest({ buy: proposal.id, price: Number(proposal.ask_price) })
+        if (!buyRes.buy?.contract_id) throw new Error('Deriv did not confirm the purchase. Check your account statement before retrying.')
         if (!isRunningRef.current) break
 
         addLog(`✅ Contract purchased: ${buyRes.buy.contract_id}`)
