@@ -110,7 +110,7 @@ export default function TradingPage() {
     }
   }
 
-  const handleSignalGenerated = (signal) => { setSignals(prev => [signal, ...prev]) }
+  const handleSignalGenerated = (signal) => { setSignals(prev => prev.some(item => item.id === signal.id) ? prev : [signal, ...prev].slice(0, 100)) }
   const handleResetSignals = () => { setSignals([]) }
   const handleBalanceUpdate = (newBalance) => { setBalance(newBalance) }
 
