@@ -14,6 +14,7 @@ const OPTIONS = { 'Over/Under': ['Over', 'Under', 'Both'], 'Matches/Differs': ['
 const TIMEFRAME_RULES = { 'Digits': { units: ['Ticks'], defaultUnit: 'Ticks', min: 1, max: 10 }, 'Ups & Downs': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1 }, 'Touch & No Touch': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1 }, 'Multipliers': { units: ['Auto'], defaultUnit: 'Auto', min: 1, fixed: true }, 'Accumulators': { units: ['Ticks'], defaultUnit: 'Ticks', min: 1, max: 85 }, 'Vanillas': { units: ['Minutes', 'Hours', 'Days'], defaultUnit: 'Minutes', min: 1 }, 'Turbos': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1 } }
 
 const roundStake = (v) => Math.round(v * 100) / 100
+const getLastDigit = value => { const text=String(value); const decimals=text.includes('.')?text.split('.')[1]:''; return Number((decimals||text).slice(-1)) }
 const calcEntropy = (arr) => { const unique = new Set(arr.slice(-20)).size; return unique <= 3 ? 1.5 : 3.2 }
 const calcRSI = (ticks, p=14) => { if(ticks.length<p+1) return 50; let g=0,l=0; for(let i=ticks.length-p;i<ticks.length;i++){const c=ticks[i]-ticks[i-1]; if(c>0)g+=c; else l-=c} return 100-(100/(1+(g/(l||1)))) }
 const calcATR = (ticks, p=14) => { if(ticks.length<p+1) return 0; let tr=0; for(let i=ticks.length-p;i<ticks.length;i++) tr+=Math.abs(ticks[i]-ticks[i-1]); return tr/p }
@@ -199,7 +200,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     if (!ticks || ticks.length < 30) return { score: 0, selectedDigit: null, selectedOption: null }
     
     let score = 0
-    const digits = ticks.map(t => parseInt(t.toString().slice(-1)))
+    const digits = ticks.map(getLastDigit)
     let selectedDigit = null
     let selectedOption = option
     
