@@ -77,8 +77,8 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
               if (msg.error || !JSON.stringify(msg.contracts_for || {}).includes(pending.proposal.contract_type)) addLog('⛔ Deriv does not offer this contract for the selected market. No trade sent.')
               else websocket.send(JSON.stringify({...pending.proposal,req_id:Date.now()}))
             }
-            if (msg.msg_type === 'proposal') { if (msg.error) addLog(`❌ Proposal failed`); else setTimeout(() => websocket.send(JSON.stringify({ buy: msg.proposal.id, price: msg.proposal.ask_price, req_id: Date.now() })), 200) }
-            if (msg.msg_type === 'buy') { if (msg.error) { addLog(`❌ Buy failed`); setCurrentContract(null) } else { setCurrentContract({ id: msg.buy.contract_id }); addLog(`✅ Contract: ${msg.buy.contract_id}`); websocket.send(JSON.stringify({ proposal_open_contract: 1, contract_id: msg.buy.contract_id, subscribe: 1, req_id: Date.now() })) } }
+            if (msg.msg_type === 'proposal') { if (msg.error) { addLog(`❌ Proposal failed: ${msg.error.message || 'Deriv rejected the proposal'}`); if (isRunningRef.current) nextTradeTimer.current=setTimeout(()=>executeTrade(),3000) } else setTimeout(() => websocket.send(JSON.stringify({ buy: msg.proposal.id, price: msg.proposal.ask_price, req_id: Date.now() })), 200) }
+            if (msg.msg_type === 'buy') { if (msg.error) { addLog(`❌ Buy failed: ${msg.error.message || 'Deriv rejected the purchase'}`); setCurrentContract(null); if (isRunningRef.current) nextTradeTimer.current=setTimeout(()=>executeTrade(),3000) } else { setCurrentContract({ id: msg.buy.contract_id }); addLog(`✅ Contract: ${msg.buy.contract_id}`); websocket.send(JSON.stringify({ proposal_open_contract: 1, contract_id: msg.buy.contract_id, subscribe: 1, req_id: Date.now() })) } }
             if (msg.msg_type === 'proposal_open_contract') { if (!msg.error && msg.proposal_open_contract) { const contract = msg.proposal_open_contract; if (contract.is_sold) { handleContractResult(parseFloat(contract.profit)); setCurrentContract(null) } else setCurrentPL(parseFloat(contract.profit || 0)) } }
           } catch (e) { console.error(e) }
         }
@@ -88,7 +88,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
       } catch (err) { addLog(`❌ Connection failed`) }
     }
     connectWS()
-    return () => { if (ws) ws.close() }
+    return () => { if (wsRef.current) { wsRef.current.close(); wsRef.current = null } }
   }, [isAuthenticated, token, accountId])
 
   const executeTrade = () => {
@@ -149,8 +149,8 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     if (isRunningRef.current) { addLog(`P/L: $${session.pl.toFixed(2)} | Trades: ${session.totalTrades}`); nextTradeTimer.current=setTimeout(()=>executeTrade(),2000) }
   }
 
-  const startBot = () => { setValidationError(''); if (!ws || ws.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }; if (nextTradeTimer.current) clearTimeout(nextTradeTimer.current); setIsRunning(true); isRunningRef.current = true; setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConsecutiveLosses(0); sessionRef.current={totalTrades:0,wins:0,losses:0,lossStreak:0,stake:parseFloat(stake),pl:0}; setLogs([]); addLog(` AutoD AI Started`); addLog(`Market: ${selectedMarket}`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); const symbol = SYMBOL_MAP[selectedMarket]; ws.send(JSON.stringify({ ticks: symbol, subscribe: 1, req_id: Date.now() })); ws.send(JSON.stringify({ ticks_history: symbol, count: 50, end: 'latest', style: 'ticks', req_id: Date.now() + 1 })); nextTradeTimer.current = setTimeout(() => { if (isRunningRef.current) executeTrade() }, 3000) }
-  const stopBot = () => { setIsRunning(false); isRunningRef.current = false; if (nextTradeTimer.current) { clearTimeout(nextTradeTimer.current); nextTradeTimer.current = null }; if (ws) ws.send(JSON.stringify({ forget: 'all', req_id: Date.now() })); addLog(`⏹️ AI Stopped`) }
+  const startBot = () => { setValidationError(''); if (!ws || ws.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }; if (nextTradeTimer.current) clearTimeout(nextTradeTimer.current); setIsRunning(true); isRunningRef.current = true; setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConsecutiveLosses(0); sessionRef.current={totalTrades:0,wins:0,losses:0,lossStreak:0,stake:parseFloat(stake),pl:0}; setLogs([]); addLog(` AutoD AI Started`); addLog(`Market: ${selectedMarket}`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); tickHistoryRef.current=[]; const symbol = SYMBOL_MAP[selectedMarket]; ws.send(JSON.stringify({ ticks_history: symbol, count: 200, end: 'latest', style: 'ticks', subscribe: 1, req_id: Date.now() })); nextTradeTimer.current = setTimeout(() => { if (isRunningRef.current) executeTrade() }, 3000) }
+  const stopBot = () => { setIsRunning(false); isRunningRef.current = false; if (nextTradeTimer.current) { clearTimeout(nextTradeTimer.current); nextTradeTimer.current = null }; addLog(`⏹️ AI stopped new entries; any open contract remains monitored until settlement.`) }
   const resetBot = () => { stopBot(); setLogs(['AI reset.']); setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setValidationError(''); setCurrentContract(null) }
   const rules = TIMEFRAME_RULES[tradeType]; const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
   if (!isAuthenticated) {
