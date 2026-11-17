@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Activity } from 'lucide-react'
+import { buildProposal, isFreshSignal, boundedNextStake } from '../services/tradingCore'
 
 const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
 const SYMBOL_MAP = { 'Volatility 10 (1s) Index': 'R_10', 'Volatility 10 Index': 'R_10', 'Volatility 15 (1s) Index': 'R_15', 'Volatility 25 (1s) Index': 'R_25', 'Volatility 25 Index': 'R_25', 'Volatility 30 (1s) Index': 'R_30', 'Volatility 50 (1s) Index': 'R_50', 'Volatility 50 Index': 'R_50', 'Volatility 75 (1s) Index': 'R_75', 'Volatility 75 Index': 'R_75', 'Volatility 90 (1s) Index': 'R_90', 'Volatility 100 (1s) Index': 'R_100', 'Volatility 100 Index': 'R_100' }
@@ -10,76 +11,24 @@ const TIMEFRAME_RULES = { 'Accumulators': { units: ['Ticks'], defaultUnit: 'Tick
 
 const roundStake = (value) => Math.round(value * 100) / 100
 
-// --- DIGIT-SPECIFIC STRATEGIES ---
-const analyzeDigitFrequency = (digits, window = 50) => {
-  const recent = digits.slice(-window)
-  const freq = Array(10).fill(0)
-  recent.forEach(d => freq[d]++)
-  return { freq, total: recent.length, leastFrequent: freq.indexOf(Math.min(...freq)), mostFrequent: freq.indexOf(Math.max(...freq)) }
-}
-
-const calculateDigitEntropy = (digits) => {
-  const freq = {}
-  digits.forEach(d => { freq[d] = (freq[d] || 0) + 1 })
-  const len = digits.length
-  let entropy = 0
-  Object.values(freq).forEach(count => { const p = count / len; entropy -= p * Math.log2(p) })
-  return entropy
-}
-
-const analyzeDigitPattern = (digits, window = 30) => {
-  const recent = digits.slice(-window)
-  const pattern = {}
-  for (let i = 0; i < recent.length - 1; i++) {
-    const current = recent[i], next = recent[i + 1]
-    if (!pattern[current]) pattern[current] = Array(10).fill(0)
-    pattern[current][next]++
-  }
-  return pattern
-}
-
-const calculateDigitDeviation = (digits, targetDigit) => {
-  const freq = analyzeDigitFrequency(digits, 50)
-  const expected = freq.total / 10
-  const actual = freq.freq[targetDigit]
-  return (actual - expected) / expected
-}
-
-const analyzeDigitTrade = (tickHistory, predictedDigit, option) => {
-  if (tickHistory.length < 20) return { confidence: 10, signal: 'CALL', reasons: ['Gathering initial data...'] }
-  
-  const digits = tickHistory.map(t => parseInt(t.toString().slice(-1)))
-  const targetDigit = parseInt(predictedDigit)
-  const analysis = analyzeDigitFrequency(digits, 50)
-  const entropy = calculateDigitEntropy(digits)
-  const pattern = analyzeDigitPattern(digits, 30)
-  const deviation = calculateDigitDeviation(digits, targetDigit)
-  
-  let confidence = 20 // Base confidence
-  let reasons = []
-  
-  // Strategy 1: Frequency
-  if (analysis.leastFrequent === targetDigit) { confidence += 25; reasons.push(`Digit ${targetDigit} is cold (due)`) }
-  else if (analysis.mostFrequent === targetDigit) { confidence += 10; reasons.push(`Digit ${targetDigit} is hot`) }
-  
-  // Strategy 2: Entropy
-  if (entropy < 2.8) { confidence += 20; reasons.push(`Low entropy (${entropy.toFixed(2)}) = predictable`) }
-  else { confidence += 5 }
-  
-  // Strategy 3: Pattern
-  const lastDigit = digits[digits.length - 1]
-  if (pattern[lastDigit]) {
-    const totalTransitions = pattern[lastDigit].reduce((a,b) => a+b, 0)
-    const nextDigitProb = pattern[lastDigit][targetDigit] / totalTransitions
-    if (nextDigitProb > 0.25) { confidence += 25; reasons.push(`${(nextDigitProb*100).toFixed(0)}% chance after ${lastDigit}`) }
-    else if (nextDigitProb > 0.12) { confidence += 15 }
-  }
-  
-  // Strategy 4: Deviation
-  if (deviation < -0.2) { confidence += 20; reasons.push(`Digit ${targetDigit} is statistically due`) }
-  
-  const signal = confidence > 50 ? (option === 'Over' ? 'CALL' : 'PUT') : 'CALL'
-  return { confidence: Math.min(confidence, 99), signal, reasons }
+const getQuoteDigit = value => { const text=String(value); const decimals=text.includes('.')?text.split('.')[1]:''; return Number((decimals||text).slice(-1)) }
+const analyzeDigitTrade = (tickHistory, predictedDigit, option, subTradeType) => {
+  if (tickHistory.length < 50) return { confidence: 0, signal: null, reasons: ['Gathering at least 50 live ticks.'] }
+  const digits = tickHistory.map(getQuoteDigit)
+  const target = Math.max(0,Math.min(9,parseInt(predictedDigit,10)||0))
+  const previous = digits.at(-1)
+  const transitions = digits.slice(0,-1).reduce((out,d,i)=>{if(d===previous)out.push(digits[i+1]);return out},[])
+  if (transitions.length < 8) return { confidence: 0, signal: null, reasons: ['Insufficient repeated-state transitions.'] }
+  const rate = predicate => (transitions.filter(predicate).length+1)/(transitions.length+2)
+  let choices
+  if (subTradeType==='Over/Under') choices=[{name:'Over',p:rate(d=>d>target),base:(9-target)/10},{name:'Under',p:rate(d=>d<target),base:target/10}]
+  else if (subTradeType==='Matches/Differs') choices=[{name:'Matches',p:rate(d=>d===target),base:0.1},{name:'Differs',p:rate(d=>d!==target),base:0.9}]
+  else choices=[{name:'Even',p:rate(d=>d%2===0),base:0.5},{name:'Odd',p:rate(d=>d%2===1),base:0.5}]
+  const chosen=option==='Both'?choices.sort((x,y)=>(y.p-y.base)-(x.p-x.base))[0]:choices.find(x=>x.name===option)
+  if(!chosen)return {confidence:0,signal:null,reasons:['Unsupported digit option.']}
+  const edge=chosen.p-chosen.base
+  const confidence=Math.max(0,Math.min(90,Math.round(50+edge*400)))
+  return {confidence,signal:chosen.name,reasons:[`Observed conditional rate ${(chosen.p*100).toFixed(1)}% vs baseline ${(chosen.base*100).toFixed(1)}% over ${transitions.length} matching transitions.`]}
 }
 
 const analyzePriceTrade = (tickHistory) => {
@@ -101,7 +50,8 @@ const analyzePriceTrade = (tickHistory) => {
   return { confidence: Math.min(confidence, 99), signal, reasons }
 }
 
-export default function DennyBots({ token, accountId, onBalanceUpdate }) {
+export default function DennyBots({ token, accountId, onBalanceUpdate, signals = [] }) {
+  const [connectedMode, setConnectedMode] = useState(false)
   const [selectedMarket, setSelectedMarket] = useState('Volatility 100 (1s) Index')
   const [tradeType, setTradeType] = useState('Digits')
   const [subTradeType, setSubTradeType] = useState('Over/Under')
@@ -137,6 +87,9 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
   const winsRef = useRef(0)
   const lossesRef = useRef(0)
   const consecutiveLossesRef = useRef(0)
+  const signalsRef = useRef(signals)
+  const consumedSignalsRef = useRef(new Set())
+  useEffect(() => { signalsRef.current = signals }, [signals])
 
   const addLog = (msg, silent = false) => {
     if (silent) return
@@ -163,11 +116,13 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
         ws.onopen = () => { 
           addLog('✅ Connected to Deriv API')
           ws.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: reqIdRef.current++ }))
+          ws.send(JSON.stringify({ ticks_history: SYMBOL_MAP[selectedMarket], count: 200, end: 'latest', style: 'ticks', subscribe: 1, req_id: reqIdRef.current++ }))
         }
         ws.onmessage = (event) => {
           try {
             const msg = JSON.parse(event.data)
-            if (msg.msg_type === 'tick') tickHistoryRef.current = [...tickHistoryRef.current, msg.tick.quote].slice(-100)
+            if (msg.msg_type === 'history' && msg.history?.prices) tickHistoryRef.current = msg.history.prices.map(Number).filter(Number.isFinite).slice(-500)
+            if (msg.msg_type === 'tick') tickHistoryRef.current = [...tickHistoryRef.current, Number(msg.tick.quote)].slice(-500)
             if (msg.msg_type === 'balance' && onBalanceUpdate) onBalanceUpdate(parseFloat(msg.balance.balance))
           } catch (e) {}
         }
@@ -248,16 +203,25 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
           await new Promise(r => setTimeout(r, 2000))
         }
 
+        let independentOption = option
+        if (!connectedMode) {
         addLog('🔬 Analyzing market setup...')
         let analysis
         if (tradeType === 'Digits') {
-          analysis = analyzeDigitTrade(tickHistoryRef.current, predictedDigit, option)
+          analysis = analyzeDigitTrade(tickHistoryRef.current, predictedDigit, option, subTradeType)
         } else {
           analysis = analyzePriceTrade(tickHistoryRef.current)
         }
         
+        if (option === 'Both') {
+          if (tradeType === 'Digits') independentOption = analysis.signal
+          else if (tradeType === 'Ups & Downs') independentOption = subTradeType === 'Higher/Lower' ? (analysis.signal === 'CALL' ? 'Higher' : 'Lower') : (analysis.signal === 'CALL' ? 'Rise' : 'Fall')
+          else if (tradeType === 'Vanillas') independentOption = analysis.signal === 'CALL' ? 'Call' : 'Put'
+          else if (tradeType === 'Multipliers' || tradeType === 'Turbos') independentOption = analysis.signal === 'CALL' ? 'Up' : 'Down'
+          else if (tradeType === 'Touch & No Touch') independentOption = analysis.confidence >= 70 ? 'Touch' : 'No Touch'
+        }
         setConfidenceScore(analysis.confidence)
-        addLog(`📊 Confidence: ${analysis.confidence}% | Signals: ${analysis.reasons.join(', ')}`)
+        addLog(`📊 Setup score: ${analysis.confidence}/100 | Signals: ${analysis.reasons.join(', ')}`)
 
         const minConf = parseFloat(minConfidence) || 70
         let waitTime = 0
@@ -268,24 +232,39 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
           await new Promise(r => setTimeout(r, 5000))
           waitTime += 5000
           
-          if (tradeType === 'Digits') analysis = analyzeDigitTrade(tickHistoryRef.current, predictedDigit, option)
+          if (tradeType === 'Digits') analysis = analyzeDigitTrade(tickHistoryRef.current, predictedDigit, option, subTradeType)
           else analysis = analyzePriceTrade(tickHistoryRef.current)
           setConfidenceScore(analysis.confidence)
         }
 
         if (analysis.confidence < minConf) {
-          addLog(`⚠️ Setup not perfect (${analysis.confidence}%), executing best available signal...`)
+          addLog(`⏸️ Setup score ${analysis.confidence} below threshold ${minConf}. No trade.`)
+          await new Promise(r => setTimeout(r, 1500)); continue
+        } else addLog('Setup threshold met. Checking contract availability...')
+
         } else {
-          addLog(`✅ High confidence setup detected! Executing...`)
+          addLog('Waiting for a fresh Analysis Tool signal...', true)
         }
 
-        const symbol = SYMBOL_MAP[selectedMarket]
-        const contractType = getContractType()
-        const tradeStake = roundStake(currentStakeRef.current)
-        addLog(`🚀 Trade: ${contractType} ${durationValue}${timeframeUnit[0]} $${tradeStake.toFixed(2)}`)
-
-        const proposalReq = { proposal: 1, amount: tradeStake, basis: 'stake', contract_type: contractType, currency: 'USD', duration: durationValue, duration_unit: timeframeUnit === 'Minutes' ? 'm' : 't', underlying_symbol: symbol }
-        if (tradeType === 'Digits' && subTradeType === 'Over/Under' && predictedDigit) proposalReq.barrier = predictedDigit
+        let proposalReq
+        if (connectedMode) {
+          const signal = [...signalsRef.current].find(item => isFreshSignal(item) && !consumedSignalsRef.current.has(item.id))
+          if (!signal) { await new Promise(r => setTimeout(r, 1000)); continue }
+          consumedSignalsRef.current.add(signal.id)
+          const market = VOLATILITY_INDICES.find(name => SYMBOL_MAP[name] === signal.symbol)
+          if (!market) { addLog('Rejected signal: unsupported market.'); continue }
+          setSelectedMarket(market); setTradeType(signal.tradeType); setSubTradeType(signal.subTradeType || ''); setOption(signal.option); setPredictedDigit(String(signal.predictedDigit ?? predictedDigit)); setDurationValue(Number(signal.duration || durationValue)); setTimeframeUnit(signal.timeframeUnit || timeframeUnit)
+          proposalReq = buildProposal(signal, roundStake(currentStakeRef.current))
+          setConfidenceScore(Number(signal.setupScore || signal.confidence || 0))
+        } else {
+          const symbol = SYMBOL_MAP[selectedMarket]
+          const tradeStake = roundStake(currentStakeRef.current)
+          const recentTicks = tickHistoryRef.current.slice(-20); const spot = recentTicks.at(-1); const atr = recentTicks.slice(1).reduce((sum,value,index)=>sum+Math.abs(value-recentTicks[index]),0)/Math.max(1,recentTicks.length-1); const down = ['Fall','Lower','Down','Put','No Touch'].includes(independentOption); const distance = Math.max(atr*(tradeType==='Touch & No Touch'?3:2),Math.abs(spot||1)*0.0001); const barrier = tradeType==='Digits'?String(predictedDigit):(['Touch & No Touch'].includes(tradeType)||subTradeType==='Higher/Lower')?(down?'-':'+')+distance.toFixed(4):''; const signal = {symbol,tradeType,subTradeType,option:independentOption,predictedDigit,barrier,duration:durationValue,timeframeUnit,expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,durationValue*60)}
+          proposalReq = buildProposal(signal, tradeStake)
+        }
+        const available = await wsRequest({ contracts_for: proposalReq.underlying_symbol, currency: 'USD' })
+        const offered = JSON.stringify(available.contracts_for || {})
+        if (!offered.includes(proposalReq.contract_type)) throw new Error('Deriv does not list this contract for the selected market. No trade was sent.')
 
         const proposalRes = await wsRequest(proposalReq)
         if (!isRunningRef.current) break
@@ -294,7 +273,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
 
         addLog(`✅ Contract purchased: ${buyRes.buy.contract_id}`)
         const contractResult = await monitorContract(buyRes.buy.contract_id)
-        if (!isRunningRef.current || !contractResult) break
+        if (!contractResult) break
 
         const profit = parseFloat(contractResult.profit || 0)
         const isWin = profit > 0
@@ -310,8 +289,9 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
           lossesRef.current += 1
           consecutiveLossesRef.current += 1
           const martingale = parseFloat(martingaleFactor) || 1.5
-          currentStakeRef.current = roundStake(currentStakeRef.current * martingale)
-          addLog(`❌ LOST -$${profit.toFixed(2)} | Next stake: $${currentStakeRef.current.toFixed(2)}`)
+          currentStakeRef.current = boundedNextStake(stake, currentStakeRef.current, martingale, consecutiveLossesRef.current)
+          addLog(`❌ LOST -${profit.toFixed(2)} | Bounded next stake: ${currentStakeRef.current.toFixed(2)}`)
+          if (consecutiveLossesRef.current >= 2) { addLog('🛑 Recovery limit reached after two consecutive losses. Stopping.'); isRunningRef.current = false; setIsRunning(false) }
         }
 
         setTotalTrades(totalTradesRef.current)
@@ -348,7 +328,7 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
     runTradeCycle()
   }
 
-  const stopBot = () => { isRunningRef.current = false; setIsRunning(false); if (wsRef.current) wsRef.current.send(JSON.stringify({ forget: 'all', req_id: reqIdRef.current++ })); addLog(`⏹️ Stopped`) }
+  const stopBot = () => { isRunningRef.current = false; setIsRunning(false); addLog(`⏹️ Stopped new entries; any open contract remains monitored until settlement.`) }
   const resetBot = () => { stopBot(); setLogs(['System reset.']); setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setValidationError(''); setConfidenceScore(0); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake) }
   const rules = TIMEFRAME_RULES[tradeType]
   const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
@@ -358,13 +338,17 @@ export default function DennyBots({ token, accountId, onBalanceUpdate }) {
       {validationError && <div className="bg-red-900/20 border border-red-500/50 rounded-lg p-2 mb-2 flex items-center gap-2 flex-shrink-0"><AlertCircle size={12} className="text-red-500" /><p className="text-red-400 text-[10px] font-medium">{validationError}</p></div>}
       <div className="bg-gray-900 rounded-lg p-2 border border-gray-800 mb-2 flex-shrink-0 overflow-y-auto" style={{maxHeight: '28vh'}}>
         <h3 className="text-white font-bold text-xs flex items-center gap-1 mb-2"><Target size={12} className="text-orange-500" /> Parameters</h3>
-        <div className="mb-2"><label className="text-[10px] text-gray-400 uppercase font-bold">Market</label><select value={selectedMarket} onChange={e => setSelectedMarket(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white">{VOLATILITY_INDICES.map(m => <option key={m} className="text-white">{m}</option>)}</select></div>
-        <div className="grid grid-cols-2 gap-2 mb-2"><div><label className="text-[10px] text-gray-400 uppercase font-bold">Type</label><select value={tradeType} onChange={e => setTradeType(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white">{TRADE_TYPES.map(t => <option key={t} className="text-white">{t}</option>)}</select></div>{SUB_TRADE_TYPES[tradeType]?.length > 0 && <div><label className="text-[10px] text-gray-400 uppercase font-bold">Sub Type</label><select value={subTradeType} onChange={e => setSubTradeType(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white">{SUB_TRADE_TYPES[tradeType].map(t => <option key={t} className="text-white">{t}</option>)}</select></div>}</div>
-        {subTradeType && OPTIONS[subTradeType] && <div className="mb-2"><label className="text-[10px] text-gray-400 uppercase font-bold mb-1 block">Option</label><div className="grid grid-cols-3 gap-1">{OPTIONS[subTradeType].map(opt => <button key={opt} onClick={() => setOption(opt)} disabled={isRunning} className={`py-1.5 rounded text-xs font-bold border ${option === opt ? 'bg-green-500/20 border-green-500 text-green-400' : 'bg-black border-gray-700 text-gray-400'}`}>{opt}</button>)}</div></div>}
-        {tradeType === 'Digits' && subTradeType === 'Over/Under' && <div className="mb-2"><label className="text-[10px] text-gray-400 uppercase font-bold">Digit (0-9)</label><input type="number" min="0" max="9" value={predictedDigit} onChange={e => setPredictedDigit(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div>}
-        <div className="grid grid-cols-2 gap-2 mb-2"><div><label className="text-[10px] text-gray-400 uppercase font-bold">Time</label>{rules.fixed ? <input type="text" value={rules.label} disabled className="w-full bg-black/50 border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-gray-500" /> : <select value={timeframeUnit} onChange={e => { setTimeframeUnit(e.target.value); setDurationValue(rules.min) }} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white">{rules.units.map(u => <option key={u} className="text-white">{u}</option>)}</select>}</div><div><label className="text-[10px] text-gray-400 uppercase font-bold">Duration</label><input type="number" value={durationValue} onChange={e => setDurationValue(parseInt(e.target.value) || 0)} disabled={isRunning || rules.fixed} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div></div>
+        <label className="flex items-center justify-between bg-black/60 border border-sky-500/30 rounded px-2 py-2 mb-2 text-xs"><span className="font-bold text-sky-300">Connect Analysis Tool</span><input type="checkbox" checked={connectedMode} onChange={e => setConnectedMode(e.target.checked)} disabled={isRunning} /></label>
+        {connectedMode && <p className="text-[10px] text-sky-300 mb-2">Analysis Tool supplies the strategy. Stake, target, stop loss and recovery remain local.</p>}
+        <label className="flex items-center justify-between bg-black/60 border border-sky-500/30 rounded px-2 py-2 mb-2 text-xs"><span className="font-bold text-sky-300">Connect Analysis Tool</span><input type="checkbox" checked={connectedMode} onChange={e => setConnectedMode(e.target.checked)} disabled={isRunning} /></label>
+        {connectedMode && <p className="text-[10px] text-sky-300 mb-2">Analysis Tool controls market and strategy. Only stake, target, stop loss and recovery remain configurable.</p>}
+        <div className="mb-2"><label className="text-[10px] text-gray-400 uppercase font-bold">Market</label><select value={selectedMarket} onChange={e => setSelectedMarket(e.target.value)} disabled={isRunning || connectedMode} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white">{VOLATILITY_INDICES.map(m => <option key={m} className="text-white">{m}</option>)}</select></div>
+        <div className="grid grid-cols-2 gap-2 mb-2"><div><label className="text-[10px] text-gray-400 uppercase font-bold">Type</label><select value={tradeType} onChange={e => setTradeType(e.target.value)} disabled={isRunning || connectedMode} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white">{TRADE_TYPES.map(t => <option key={t} className="text-white">{t}</option>)}</select></div>{SUB_TRADE_TYPES[tradeType]?.length > 0 && <div><label className="text-[10px] text-gray-400 uppercase font-bold">Sub Type</label><select value={subTradeType} onChange={e => setSubTradeType(e.target.value)} disabled={isRunning || connectedMode} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white">{SUB_TRADE_TYPES[tradeType].map(t => <option key={t} className="text-white">{t}</option>)}</select></div>}</div>
+        {subTradeType && OPTIONS[subTradeType] && <div className="mb-2"><label className="text-[10px] text-gray-400 uppercase font-bold mb-1 block">Option</label><div className="grid grid-cols-3 gap-1">{OPTIONS[subTradeType].map(opt => <button key={opt} onClick={() => setOption(opt)} disabled={isRunning || connectedMode} className={`py-1.5 rounded text-xs font-bold border ${option === opt ? 'bg-green-500/20 border-green-500 text-green-400' : 'bg-black border-gray-700 text-gray-400'}`}>{opt}</button>)}</div></div>}
+        {tradeType === 'Digits' && subTradeType === 'Over/Under' && <div className="mb-2"><label className="text-[10px] text-gray-400 uppercase font-bold">Digit (0-9)</label><input type="number" min="0" max="9" value={predictedDigit} onChange={e => setPredictedDigit(e.target.value)} disabled={isRunning || connectedMode} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div>}
+        <div className="grid grid-cols-2 gap-2 mb-2"><div><label className="text-[10px] text-gray-400 uppercase font-bold">Time</label>{rules.fixed ? <input type="text" value={rules.label} disabled className="w-full bg-black/50 border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-gray-500" /> : <select value={timeframeUnit} onChange={e => { setTimeframeUnit(e.target.value); setDurationValue(rules.min) }} disabled={isRunning || connectedMode} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white">{rules.units.map(u => <option key={u} className="text-white">{u}</option>)}</select>}</div><div><label className="text-[10px] text-gray-400 uppercase font-bold">Duration</label><input type="number" value={durationValue} onChange={e => setDurationValue(parseInt(e.target.value) || 0)} disabled={isRunning || connectedMode || rules.fixed} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div></div>
         <div className="grid grid-cols-2 gap-2 mb-2"><div><label className="text-[10px] text-gray-400 uppercase font-bold">Stake</label><input type="number" step="0.01" value={stake} onChange={e => setStake(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div><div><label className="text-[10px] text-gray-400 uppercase font-bold">Martingale</label><input type="number" step="0.1" value={martingaleFactor} onChange={e => setMartingaleFactor(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div></div>
-        <div className="grid grid-cols-2 gap-2 mb-2"><div><label className="text-[10px] text-gray-400 uppercase font-bold">Min Confidence %</label><input type="number" min="50" max="95" value={minConfidence} onChange={e => setMinConfidence(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div><div><label className="text-[10px] text-gray-400 uppercase font-bold">Current Confidence</label><div className={`w-full border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 font-bold ${confidenceScore >= 70 ? 'text-green-400' : confidenceScore >= 50 ? 'text-orange-400' : 'text-red-400'}`}>{confidenceScore.toFixed(0)}%</div></div></div>
+        <div className="grid grid-cols-2 gap-2 mb-2"><div><label className="text-[10px] text-gray-400 uppercase font-bold">Min Confidence %</label><input type="number" min="50" max="95" value={minConfidence} onChange={e => setMinConfidence(e.target.value)} disabled={isRunning || connectedMode} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div><div><label className="text-[10px] text-gray-400 uppercase font-bold">Current Setup Score</label><div className={`w-full border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 font-bold ${confidenceScore >= 70 ? 'text-green-400' : confidenceScore >= 50 ? 'text-orange-400' : 'text-red-400'}`}>{confidenceScore.toFixed(0)}%</div></div></div>
         <div className="grid grid-cols-2 gap-2"><div><label className="text-[10px] text-gray-400 uppercase font-bold">Target</label><input type="number" step="0.01" value={targetProfit} onChange={e => setTargetProfit(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div><div><label className="text-[10px] text-gray-400 uppercase font-bold">Stop Loss</label><input type="number" step="0.01" value={stopLoss} onChange={e => setStopLoss(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div></div>
       </div>
       <div className="bg-gray-900 rounded-lg p-2 border border-green-500/30 mb-2 flex-shrink-0"><h3 className="text-white font-bold text-xs mb-1 flex items-center gap-1"><TrendingUp size={12} className="text-green-500" /> Performance</h3><div className="grid grid-cols-4 gap-1 text-center"><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">P/L</p><p className={`font-bold text-xs ${currentPL >= 0 ? 'text-green-500' : 'text-red-500'}`}>{currentPL >= 0 ? '+' : ''}{currentPL.toFixed(2)}</p></div><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Win Rate</p><p className="text-sky-400 font-bold text-xs">{winRate}%</p></div><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Trades</p><p className="text-white font-bold text-xs">{totalTrades}</p></div><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Next</p><p className="text-orange-400 font-bold text-xs">{currentStake.toFixed(2)}</p></div></div></div>

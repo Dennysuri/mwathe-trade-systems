@@ -22,7 +22,7 @@ export default function Signals({ signals, onReset }) {
         <div className="flex flex-col items-center justify-center h-64 bg-mwathe-darkgray rounded-xl border border-gray-800">
           <AlertCircle className="text-mwathe-gray mb-3" size={40} />
           <p className="text-mwathe-gray text-center max-w-xs">
-            No active signals. Start an analysis in the Analysis Tool to generate signals with 95-100% confidence.
+            No active signals. Start the Analysis Tool to scan live Deriv market data. Signals are evidence-based setups, not guaranteed outcomes.
           </p>
         </div>
       ) : (
@@ -44,8 +44,8 @@ export default function Signals({ signals, onReset }) {
                     </p>
                   </div>
                   <div className="text-right">
-                    <p className="text-mwathe-green font-bold text-lg">{signal.confidence}%</p>
-                    <p className="text-mwathe-gray text-xs">Confidence</p>
+                    <p className="text-mwathe-green font-bold text-lg">{signal.setupScore ?? signal.confidence}%</p>
+                    <p className="text-mwathe-gray text-xs">Setup score</p>
                   </div>
                 </div>
                 
@@ -63,8 +63,8 @@ export default function Signals({ signals, onReset }) {
                     <p className="text-mwathe-orange font-medium text-sm">{signal.marketCondition}</p>
                   </div>
                   <div>
-                    <p className="text-mwathe-gray text-xs mb-1">Signal Accuracy</p>
-                    <p className="text-mwathe-green font-bold">{signal.confidence}%</p>
+                    <p className="text-mwathe-gray text-xs mb-1">Signal Source</p>
+                    <p className="text-mwathe-green font-bold text-xs">{signal.source === 'analysis-tool-live' ? 'Live Deriv data' : 'Unverified'}</p>
                   </div>
                 </div>
               </motion.div>
