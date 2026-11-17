@@ -10,76 +10,48 @@ export default function Callback() {
 
   useEffect(() => {
     const handleCallback = async () => {
-      console.log('📍 Callback URL:', window.location.href)
-      
+      const params = new URLSearchParams(location.search)
+      const code = params.get('code')
+      const state = params.get('state')
+      const errorParam = params.get('error')
+
+      // Remove OAuth query parameters from the visible URL and browser history
+      // before making requests or rendering any error state.
+      window.history.replaceState({}, document.title, window.location.pathname)
+
       try {
-        const params = new URLSearchParams(location.search)
-        const code = params.get('code')
-        const state = params.get('state')
-        const errorParam = params.get('error')
+        if (errorParam) throw new Error('Authorization was denied.')
+        if (!code || code.length > 4096) throw new Error('No valid authorization code received.')
 
-        if (errorParam) {
-          throw new Error(params.get('error_description') || 'Authorization denied')
-        }
-
-        if (!code) {
-          throw new Error('No authorization code received')
-        }
-
-        console.log('✅ Code received:', code.substring(0, 20) + '...')
-
-        // Verify state
         const storedState = sessionStorage.getItem('oauth_state')
-        if (state !== storedState) {
-          throw new Error('State mismatch')
-        }
+        if (!storedState || state !== storedState) throw new Error('State mismatch. Please reconnect.')
 
-        // Get code_verifier from storage
         const { codeVerifier } = getStoredPKCE()
-        if (!codeVerifier) {
-          throw new Error('PKCE code_verifier not found')
-        }
+        if (!codeVerifier) throw new Error('PKCE verification data is missing. Please reconnect.')
 
-        console.log('🔄 Exchanging code for token...')
-        const REDIRECT_URI = window.location.origin + '/callback'
-        
-        // Exchange code for access token
+        const redirectUri = window.location.origin + '/callback'
         const tokenResponse = await fetch('/api/exchange-token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            code, 
-            redirect_uri: REDIRECT_URI,
-            code_verifier: codeVerifier 
-          }),
+          body: JSON.stringify({ code, redirect_uri: redirectUri, code_verifier: codeVerifier }),
         })
 
-        if (!tokenResponse.ok) {
-          const errorData = await tokenResponse.json()
-          console.error('❌ Token exchange error:', errorData)
-          throw new Error(errorData.error || 'Token exchange failed')
+        const tokenData = await tokenResponse.json().catch(() => ({}))
+        if (!tokenResponse.ok || typeof tokenData.access_token !== 'string') {
+          throw new Error(tokenData.error || 'Token exchange failed. Please reconnect.')
         }
 
-        const tokenData = await tokenResponse.json()
-        console.log('✅ Access token received successfully!')
-
-        // Store the access token
         localStorage.setItem('deriv_access_token', tokenData.access_token)
         localStorage.setItem('oauth_connected', 'true')
         clearPKCE()
-        
         setStatus('Authentication successful! Redirecting...')
-        
-        setTimeout(() => {
-          navigate('/trading', { replace: true })
-        }, 500)
 
+        window.setTimeout(() => navigate('/trading', { replace: true }), 500)
       } catch (err) {
-        console.error('❌ OAuth error:', err)
-        setError(err.message)
-        setTimeout(() => {
-          navigate('/navigation', { replace: true })
-        }, 3000)
+        clearPKCE()
+        console.error('OAuth callback failed.')
+        setError(err.message || 'Authentication failed. Please try again.')
+        window.setTimeout(() => navigate('/navigation', { replace: true }), 3000)
       }
     }
 

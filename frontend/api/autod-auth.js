@@ -1,7 +1,20 @@
 import { timingSafeEqual } from 'node:crypto'
+import { enforceRateLimit, isAllowedOrigin, setPrivateResponseHeaders } from './_lib/security.js'
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
+  setPrivateResponseHeaders(res)
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST')
+    return res.status(405).json({ error: 'Method not allowed' })
+  }
+
+  if (!isAllowedOrigin(req)) return res.status(403).json({ error: 'Request origin is not allowed.' })
+  const allowed = await enforceRateLimit(req, res, {
+    key: 'autod-auth',
+    limit: 8,
+    windowSeconds: 900,
+  })
+  if (!allowed) return
 
   const expected = process.env.AUTOD_AI_PASSWORD
   if (!expected) return res.status(503).json({ error: 'AutoD AI authentication is not configured on the server.' })
