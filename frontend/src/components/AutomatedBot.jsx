@@ -354,7 +354,6 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         if (!JSON.stringify(available.contracts_for || {}).includes(proposalReq.contract_type)) throw new Error(`Deriv does not offer ${proposalReq.contract_type} for ${currentTarget.name}. No trade was sent.`)
         const proposalRes = await wsRequest(proposalReq); if (!isRunningRef.current) break
         const entryCheck = validateEntryWindow(signal, { maxSignalAgeMs: 15000, proposalBudgetMs: 300, minimumRemainingMs: 250 }); if (!entryCheck.valid) { addLog(`Entry expired before purchase: ${entryCheck.reason}`); continue }
-        const entryCheck = validateEntryWindow(signal, { maxSignalAgeMs: 15000, proposalBudgetMs: 300, minimumRemainingMs: 250 }); if (!entryCheck.valid) { addLog(`Entry expired before purchase: ${entryCheck.reason}`); continue }
         const buyRes = await wsRequest({ buy: proposalRes.proposal.id, price: proposalRes.proposal.ask_price }); if (!isRunningRef.current) break
         addLog(`✅ Contract: ${buyRes.buy.contract_id}`)
         
