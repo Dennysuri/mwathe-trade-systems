@@ -52,7 +52,7 @@ const analyseSeries=(prices,config)=>{
     if(option==='Both')option=config.tradeType==='Vanillas'?(direction==='up'?'Call':'Put'):config.tradeType==='Touch & No Touch'?(trend>0.35?'Touch':'No Touch'):config.subTradeType==='Higher/Lower'?(direction==='up'?'Higher':'Lower'):direction==='up'?'Rise':'Fall'
     const aligned=(direction==='up'?up:down)/deltas.length
     score=Math.round(Math.min(90,50+Math.max(0,aligned-0.5)*100+Math.min(15,trend*30)))
-    if(['Higher/Lower'].includes(config.subTradeType))option=option==='Rise'?'Higher':option==='Fall'?'Lower':option
+    if(['Higher/Lower'].includes(config.subTradeType)){option=option==='Rise'?'Higher':option==='Fall'?'Lower':option;const atr=mean(deltas.map(Math.abs));barrier=(direction==='up'?'+':'-')+Math.max(atr*2,Math.abs(prices.at(-1))*0.0001).toFixed(4)}
     if(config.tradeType==='Multipliers')option=direction==='up'?'Up':'Down'
     if(config.tradeType==='Turbos')option=direction==='up'?'Up':'Down'
     if(config.tradeType==='Touch & No Touch'){
