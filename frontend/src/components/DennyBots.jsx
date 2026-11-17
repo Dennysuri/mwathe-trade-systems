@@ -285,8 +285,6 @@ export default function DennyBots({ token, accountId, currency = 'USD', onBalanc
         }
         const entryCheck = validateEntryWindow(executionSignal, { maxSignalAgeMs: 15000, proposalBudgetMs: 1500, minimumRemainingMs: 500 })
         if (!entryCheck.valid) { addLog(`Rejected entry: ${entryCheck.reason}`); continue }
-        const entryCheck = validateEntryWindow(executionSignal, { maxSignalAgeMs: 15000, proposalBudgetMs: 1500, minimumRemainingMs: 500 })
-        if (!entryCheck.valid) { addLog(`Rejected entry: ${entryCheck.reason}`); continue }
         const available = await wsRequest({ contracts_for: proposalReq.underlying_symbol })
         const offeredContracts = available.contracts_for?.available || []
         if (!offeredContracts.some(contract => contract.contract_type === proposalReq.contract_type)) {
