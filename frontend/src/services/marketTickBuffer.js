@@ -5,6 +5,7 @@
 export const MARKET_TICK_BUFFER_SIZE = 500;
 
 const finiteValues = values => (Array.isArray(values) ? values : [])
+  .filter(value => value !== null && value !== undefined && value !== '')
   .map(Number)
   .filter(Number.isFinite);
 
