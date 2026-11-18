@@ -69,9 +69,9 @@ const analyseSeries=(prices,config)=>{
 
 export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setProgress,aiLogs,setAiLogs,finalSignal,setFinalSignal,intervalRef,onSignalGenerated,token,accountId,currency='USD'}){
   const [tradeType,setTradeType]=useState('Digits'),[subTradeType,setSubTradeType]=useState('Over/Under'),[option,setOption]=useState('Over')
-  const [predictedDigit,setPredictedDigit]=useState('5'),[analysisDuration,setAnalysisDuration]=useState(10),[lastDigits,setLastDigits]=useState(100)
+  const [predictedDigit,setPredictedDigit]=useState('5'),[analysisDuration,setAnalysisDuration]=useState(10),[lastDigits,setLastDigits]=useState(300)
   const [timeframeUnit,setTimeframeUnit]=useState('Ticks'),[durationValue,setDurationValue]=useState(5),[validationError,setValidationError]=useState('')
-  const wsRef=useRef(null),pricesRef=useRef({}),lastTickAtRef=useRef({}),timerRef=useRef(null),activeRef=useRef(false),scanInFlightRef=useRef(false),lastEmittedSignalRef=useRef({}),proposalReqIdRef=useRef(920000),paperQuoteRequestsRef=useRef(new Map()),paperQuoteInFlightRef=useRef(new Set())
+  const wsRef=useRef(null),pricesRef=useRef({}),lastTickAtRef=useRef({}),timerRef=useRef(null),activeRef=useRef(false),scanInFlightRef=useRef(false),lastEmittedSignalRef=useRef({}),proposalReqIdRef=useRef(920000),paperQuoteRequestsRef=useRef(new Map()),paperQuoteInFlightRef=useRef(new Set()),cycleStartedAtRef=useRef(0)
   const addLog=msg=>setAiLogs(prev=>[...prev.slice(-8),`[${new Date().toLocaleTimeString()}] ${msg}`])
   useEffect(()=>{if(SUB_TRADE_TYPES[tradeType]?.length)setSubTradeType(SUB_TRADE_TYPES[tradeType][0]);else setSubTradeType('')},[tradeType])
   useEffect(()=>{if(subTradeType&&OPTIONS[subTradeType])setOption(OPTIONS[subTradeType][0])},[subTradeType])
@@ -82,7 +82,7 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
     setValidationError('')
     if(!token||!accountId){setValidationError('Connect a Deriv account before starting live market analysis.');return}
     if(tradeType==='Digits'&&(!Number.isInteger(Number(predictedDigit))||predictedDigit===''||Number(predictedDigit)<0||Number(predictedDigit)>9)){setValidationError('Enter a whole-number target digit from 0 to 9.');return}
-    stopScanner();paperQuoteRequestsRef.current.clear();paperQuoteInFlightRef.current.clear();pricesRef.current={};lastTickAtRef.current={};resetPaperTrials();setIsAnalyzing(true);setProgress(0);setAiLogs([]);setFinalSignal(null);activeRef.current=true
+    stopScanner();cycleStartedAtRef.current=Date.now();paperQuoteRequestsRef.current.clear();paperQuoteInFlightRef.current.clear();pricesRef.current={};lastTickAtRef.current={};resetPaperTrials();setIsAnalyzing(true);setProgress(0);setAiLogs([]);setFinalSignal(null);activeRef.current=true
     addLog('Connecting to authenticated Deriv market data...')
     try{
       const response=await fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'}})
@@ -92,17 +92,61 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
       const ws=new WebSocket(url);wsRef.current=ws
       ws.onopen=()=>{
         if(!activeRef.current)return
+        cycleStartedAtRef.current=Date.now()
         ws.send(JSON.stringify({balance:1,req_id:900001}))
-        MARKET_SYMBOLS.forEach((symbol,index)=>ws.send(JSON.stringify({ticks_history:symbol,count:Math.max(100,lastDigits),end:'latest',style:'ticks',subscribe:1,req_id:910000+index})))
+        MARKET_SYMBOLS.forEach((symbol,index)=>ws.send(JSON.stringify({ticks_history:symbol,count:Math.max(200,lastDigits),end:'latest',style:'ticks',subscribe:1,req_id:910000+index})))
         addLog('Historical windows requested; live tick subscriptions started across volatility markets.')
         let lastScanAt=0
+        let cycleBest=null
+        const publishCandidate=best=>{
+          const label=VOLATILITY_MARKETS.find(([,sym])=>sym===best.symbol)?.[0]||best.symbol
+          const candidate=best.report.candidate
+          const nowSignal=Date.now()
+          const series=pricesRef.current[best.symbol]||[]
+          const deltas=series.slice(1).map((value,index)=>Math.abs(value-series[index])).filter(Number.isFinite)
+          const atr=deltas.slice(-30).reduce((sum,value)=>sum+value,0)/Math.max(1,Math.min(30,deltas.length))
+          let signalBarrier=tradeType==='Digits'?String(Number(predictedDigit)):''
+          if(tradeType==='Touch & No Touch'||subTradeType==='Higher/Lower'){
+            const down=['Fall','Lower','Down','Put','No Touch'].includes(candidate.option)
+            const distance=Math.max(atr*(tradeType==='Touch & No Touch'?3:2),Math.abs(series.at(-1)||1)*0.0001)
+            signalBarrier=(down?'-':'+')+distance.toFixed(4)
+          }
+          const signalKey=[best.symbol,tradeType,subTradeType,candidate.option,predictedDigit,signalBarrier].join('|')
+          if(candidate.option!=='Both' && nowSignal-(lastEmittedSignalRef.current[signalKey]||0)>=2000){
+            const signal={id:`analysis-${best.symbol}-${nowSignal}`,source:'analysis-tool-live',symbol:best.symbol,market:label,tradeType,subTradeType,option:candidate.option,predictedDigit:Number(predictedDigit),barrier:signalBarrier,duration:durationValue,timeframeUnit,createdAt:nowSignal,expiryEpoch:timeframeUnit==='Ticks'?undefined:Math.floor(nowSignal/1000)+Math.max(60,durationValue*(timeframeUnit==='Hours'?3600:timeframeUnit==='Days'?86400:timeframeUnit==='Minutes'?60:1)),setupScore:candidate.score,confidence:candidate.score,researchOnly:true}
+            if(onSignalGenerated) onSignalGenerated(signal)
+            lastEmittedSignalRef.current[signalKey]=nowSignal
+            if(tradeType==='Digits'&&timeframeUnit==='Ticks'&&!paperQuoteInFlightRef.current.has(signalKey)&&getPaperForwardSummary({...signal,currency}).pending===0){
+              try{
+                const proposal=buildProposal({...signal,currency},1,currency)
+                const req_id=++proposalReqIdRef.current
+                paperQuoteRequestsRef.current.set(req_id,{signal:{...signal,currency},signalKey,label})
+                paperQuoteInFlightRef.current.add(signalKey)
+                ws.send(JSON.stringify({...proposal,req_id}))
+                setTimeout(()=>{const pendingRequest=paperQuoteRequestsRef.current.get(req_id);if(pendingRequest){paperQuoteRequestsRef.current.delete(req_id);paperQuoteInFlightRef.current.delete(pendingRequest.signalKey);addLog(`Paper proposal timed out for ${pendingRequest.label}; no sample recorded.`)}},12000)
+                addLog(`Requesting quote-matched paper sample: ${label} | ${candidate.option} | stake basis ${currency} 1.00; no purchase.`)
+              }catch(error){paperQuoteInFlightRef.current.delete(signalKey);addLog(`Paper quote skipped: ${error.message}`)}
+            }
+            addLog(`Thamira signal handed to Denny Bots: ${label} | ${candidate.option} | score ${candidate.score}/94. Execution remains independently gated.`)
+          }
+          addLog(`Analysis window result: strongest candidate ${label} | score ${candidate.score}/94 | ${candidate.option}`)
+          setFinalSignal({researchOnly:true,market:label,option:candidate.option,contractDuration:`${durationValue} ${timeframeUnit}`,sampleSize:best.report.sampleSize,marketCount:1,score:candidate.score,detail:'Best candidate retained across the complete selected analysis window. Relative research score only, not a verified win probability.'})
+        }
         timerRef.current=setInterval(async()=>{
           const now=Date.now()
-          setProgress(Math.min(99,Math.max(0,(now-lastScanAt)/500)*100))
+          const cycleMs=analysisDuration*1000
+          const elapsed=now-cycleStartedAtRef.current
+          if(elapsed>=cycleMs){
+            if(cycleBest)publishCandidate(cycleBest)
+            else {addLog(`Analysis window completed (${analysisDuration}s): no qualifying setup found across the live market set.`);setFinalSignal({researchOnly:true,market:'No qualifying setup this window',option,contractDuration:`${durationValue} ${timeframeUnit}`,sampleSize:0,marketCount:MARKET_SYMBOLS.length,detail:'All markets were scanned throughout the selected window. A new window is starting; no forced signal.'})}
+            cycleBest=null
+            cycleStartedAtRef.current=now
+            setProgress(0)
+          }else setProgress(Math.min(99,(elapsed/cycleMs)*100))
           if(now-lastScanAt<500||scanInFlightRef.current)return
           lastScanAt=now
           scanInFlightRef.current=true
-          try {
+          try{
             const config={tradeType,subTradeType,option,predictedDigit:Number(predictedDigit),duration:durationValue,timeframeUnit}
             const reports=await Promise.all(MARKET_SYMBOLS.map(async symbol=>{
               const fresh=now-(lastTickAtRef.current[symbol]||0)<5000
@@ -112,53 +156,16 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
             }))
             const ready=reports.filter(item=>item.report?.ready)
             const candidates=ready.filter(item=>item.report.candidate).sort((a,b)=>b.report.candidate.score-a.report.candidate.score)
-            const top=candidates.slice(0,4)
-            if(!ready.length){
-              addLog('Thamira: collecting fresh observations across all ${MARKET_SYMBOLS.length} markets; next scan continues immediately.')
-              setFinalSignal({researchOnly:true,market:'Building live market picture',option:config.option,contractDuration:`${durationValue} ${timeframeUnit}`,sampleSize:reports.reduce((n,item)=>n+(item.report?.sampleSize||0),0),marketCount:0,detail:'Live feed remains active. Short recheck cycle; no forced entry.'})
-            } else if(!top.length){
-              addLog(`Thamira: monitoring ${ready.length}/${MARKET_SYMBOLS.length} fresh markets — no setup currently clears the relative-strength threshold. Rechecking in 0.5s.`)
-              setFinalSignal({researchOnly:true,market:'Thamira monitoring all markets',option:config.option,contractDuration:`${durationValue} ${timeframeUnit}`,sampleSize:ready.reduce((n,item)=>n+item.report.sampleSize,0),marketCount:ready.length,detail:'No qualifying candidate at this instant. Continuous scanning remains active.'})
-            } else {
-              const best=top[0],label=VOLATILITY_MARKETS.find(([,sym])=>sym===best.symbol)?.[0]||best.symbol
-              const candidate=best.report.candidate
-              const nowSignal=Date.now()
-              const series=pricesRef.current[best.symbol]||[]
-              const deltas=series.slice(1).map((value,index)=>Math.abs(value-series[index])).filter(Number.isFinite)
-              const atr=deltas.slice(-30).reduce((sum,value)=>sum+value,0)/Math.max(1,Math.min(30,deltas.length))
-              let signalBarrier=tradeType==='Digits'?String(Number(predictedDigit)):''
-              if(tradeType==='Touch & No Touch'||subTradeType==='Higher/Lower'){
-                const down=['Fall','Lower','Down','Put','No Touch'].includes(candidate.option)
-                const distance=Math.max(atr*(tradeType==='Touch & No Touch'?3:2),Math.abs(series.at(-1)||1)*0.0001)
-                signalBarrier=(down?'-':'+')+distance.toFixed(4)
-              }
-              const signalKey=[best.symbol,tradeType,subTradeType,candidate.option,predictedDigit,signalBarrier].join('|')
-              if(candidate.option!=='Both' && nowSignal-(lastEmittedSignalRef.current[signalKey]||0)>=2000){
-                const signal={id:`analysis-${best.symbol}-${nowSignal}`,source:'analysis-tool-live',symbol:best.symbol,market:label,tradeType,subTradeType,option:candidate.option,predictedDigit:Number(predictedDigit),barrier:signalBarrier,duration:durationValue,timeframeUnit,createdAt:nowSignal,expiryEpoch:timeframeUnit==='Ticks'?undefined:Math.floor(nowSignal/1000)+Math.max(60,durationValue*(timeframeUnit==='Hours'?3600:timeframeUnit==='Days'?86400:timeframeUnit==='Minutes'?60:1)),setupScore:candidate.score,confidence:candidate.score,researchOnly:true}
-                if(onSignalGenerated) onSignalGenerated(signal)
-                lastEmittedSignalRef.current[signalKey]=nowSignal
-                if (tradeType==='Digits' && timeframeUnit==='Ticks' && !paperQuoteInFlightRef.current.has(signalKey) && getPaperForwardSummary({...signal,currency}).pending===0) {
-                  try {
-                    const proposal=buildProposal({...signal,currency},1,currency)
-                    const req_id=++proposalReqIdRef.current
-                    paperQuoteRequestsRef.current.set(req_id,{signal:{...signal,currency},signalKey,label})
-                    paperQuoteInFlightRef.current.add(signalKey)
-                    ws.send(JSON.stringify({...proposal,req_id}))
-                    setTimeout(()=>{const pendingRequest=paperQuoteRequestsRef.current.get(req_id);if(pendingRequest){paperQuoteRequestsRef.current.delete(req_id);paperQuoteInFlightRef.current.delete(pendingRequest.signalKey);addLog(`Paper proposal timed out for ${pendingRequest.label}; no sample recorded.`)}},12000)
-                    addLog(`Requesting quote-matched paper sample: ${label} | ${candidate.option} | stake basis ${currency} 1.00; no purchase.`)
-                  } catch(error) { paperQuoteInFlightRef.current.delete(signalKey); addLog(`Paper quote skipped: ${error.message}`) }
-                }
-                addLog(`Thamira signal handed to Denny Bots: ${label} | ${candidate.option} | score ${candidate.score}/94. Execution remains independently gated.`)
-              }
-              addLog(`Thamira: strongest candidate ${label} | setup score ${candidate.score}/94 | ${candidate.option}`)
-              top.forEach(item=>{
-                const market=VOLATILITY_MARKETS.find(([,sym])=>sym===item.symbol)?.[0]||item.symbol
-                addLog(`${market}: ${item.report.candidate.score}/94 relative score; ${item.report.candidate.supportingFamilies.join(', ')}`)
-              })
-              setFinalSignal({researchOnly:true,market:label,option:best.report.candidate.option,contractDuration:`${durationValue} ${timeframeUnit}`,sampleSize:best.report.sampleSize,marketCount:candidates.length,score:best.report.candidate.score,detail:'Top-ranked live setup. Relative research score only, not a verified win probability; automated entry still requires independent calibration and payout validation.'})
+            const best=candidates[0]
+            if(best&&(!cycleBest||best.report.candidate.score>cycleBest.report.candidate.score))cycleBest=best
+            if(!ready.length)addLog(`Thamira: loading historical/live observations across ${MARKET_SYMBOLS.length} markets; scanning continues in background.`)
+            else if(!best)addLog(`Thamira: monitoring ${ready.length}/${MARKET_SYMBOLS.length} fresh markets; no candidate clears the current threshold.`)
+            else{
+              addLog(`Thamira scan: ${VOLATILITY_MARKETS.find(([,sym])=>sym===best.symbol)?.[0]||best.symbol} currently leads at ${best.report.candidate.score}/94; holding selection until the ${analysisDuration}s window closes.`)
+              candidates.slice(0,4).forEach(item=>addLog(`${VOLATILITY_MARKETS.find(([,sym])=>sym===item.symbol)?.[0]||item.symbol}: ${item.report.candidate.score}/94 relative score; ${item.report.candidate.supportingFamilies.join(', ')}`))
             }
-          } catch(error) { addLog(`Strategy research error: ${error.message}`) }
-          finally { scanInFlightRef.current=false;setProgress(100) }
+          }catch(error){addLog(`Strategy research error: ${error.message}`)}
+          finally{scanInFlightRef.current=false;setProgress(Math.min(99,((Date.now()-cycleStartedAtRef.current)/cycleMs)*100))}
         },250)
       }
       ws.onmessage=event=>{
@@ -198,7 +205,7 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
       <div className="grid grid-cols-2 gap-3"><div><label className="text-[10px] text-mwathe-gray uppercase font-bold">Trade Type</label><select value={tradeType} onChange={e=>setTradeType(e.target.value)} disabled={isAnalyzing} className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1">{TRADE_TYPES.map(t=><option key={t}>{t}</option>)}</select></div>{SUB_TRADE_TYPES[tradeType]?.length>0&&<div><label className="text-[10px] text-mwathe-gray uppercase font-bold">Sub Type</label><select value={subTradeType} onChange={e=>setSubTradeType(e.target.value)} disabled={isAnalyzing} className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1">{SUB_TRADE_TYPES[tradeType].map(t=><option key={t}>{t}</option>)}</select></div>}</div>
       {subTradeType&&OPTIONS[subTradeType]&&<div><label className="text-[10px] text-mwathe-gray uppercase font-bold mb-1 block">Option</label><div className="grid grid-cols-3 gap-2">{OPTIONS[subTradeType].map(opt=><button key={opt} onClick={()=>setOption(opt)} disabled={isAnalyzing} className={`py-1.5 rounded-lg text-xs font-bold border ${option===opt?'bg-mwathe-green/20 border-mwathe-green text-mwathe-green':'bg-mwathe-black border-gray-700 text-mwathe-gray'}`}>{opt}</button>)}</div></div>}
       <div className="grid grid-cols-2 gap-3"><div><label className="text-[10px] text-mwathe-gray uppercase font-bold">Contract Time Frame</label>{rules.fixed?<input value={rules.label} disabled className="w-full bg-mwathe-black/50 border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1"/>:<select value={timeframeUnit} onChange={e=>{setTimeframeUnit(e.target.value);setDurationValue(rules.min)}} disabled={isAnalyzing} className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1">{rules.units.map(u=><option key={u}>{u}</option>)}</select>}</div><div><label className="text-[10px] text-mwathe-gray uppercase font-bold">Duration</label><input type="number" value={durationValue} onChange={e=>setDurationValue(Number(e.target.value)||0)} disabled={isAnalyzing||rules.fixed} className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1"/></div></div>
-      <div className="grid grid-cols-2 gap-3"><div><label className="text-[10px] text-mwathe-gray uppercase font-bold">Analysis Window: {analysisDuration}s</label><input type="range" min="5" max="60" value={analysisDuration} onChange={e=>setAnalysisDuration(Number(e.target.value))} disabled={isAnalyzing} className="w-full accent-mwathe-green mt-1"/></div>{tradeType==='Digits'&&<div><label className="text-[10px] text-mwathe-gray uppercase font-bold">History Ticks (50-500)</label><input type="number" min="50" max="500" value={lastDigits} onChange={e=>setLastDigits(Math.max(50,Math.min(500,Number(e.target.value))))} disabled={isAnalyzing} className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1"/></div>}</div>
+      <div className="grid grid-cols-2 gap-3"><div><label className="text-[10px] text-mwathe-gray uppercase font-bold">Analysis Window: {analysisDuration}s</label><input type="range" min="10" max="59" value={analysisDuration} onChange={e=>setAnalysisDuration(Number(e.target.value))} disabled={isAnalyzing} className="w-full accent-mwathe-green mt-1"/></div>{tradeType==='Digits'&&<div><label className="text-[10px] text-mwathe-gray uppercase font-bold">History Ticks (200-500)</label><input type="number" min="200" max="500" value={lastDigits} onChange={e=>setLastDigits(Math.max(200,Math.min(500,Number(e.target.value))))} disabled={isAnalyzing} className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1"/></div>}</div>
       {tradeType==='Digits'&&<div><label className="text-[10px] text-mwathe-gray uppercase font-bold">Target Digit (0-9)</label><input type="number" min="0" max="9" value={predictedDigit} onChange={e=>setPredictedDigit(e.target.value)} disabled={isAnalyzing} className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1"/></div>}
     </div>
     {(isAnalyzing||progress>=100)&&<div className="rounded-xl p-3 border bg-mwathe-darkgray/50 border-mwathe-skyblue/30"><div className="flex items-center justify-between mb-2"><h3 className="text-xs font-bold flex items-center gap-1 text-mwathe-skyblue">{progress>=100?<><CheckCircle2 size={12}/> Scan complete</>:<><Activity size={12} className="animate-pulse"/> Scanning live markets...</>}</h3><span className="text-[10px] font-bold">{Math.round(progress)}%</span></div><div className="w-full bg-gray-800 h-2 rounded-full overflow-hidden"><motion.div className="h-full bg-gradient-to-r from-mwathe-orange to-mwathe-green" initial={{width:0}} animate={{width:`${progress}%`}}/></div></div>}

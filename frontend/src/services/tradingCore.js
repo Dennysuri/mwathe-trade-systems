@@ -1,9 +1,9 @@
 // Shared, deterministic Deriv contract and risk helpers. No order is sent from this module.
 export const VOLATILITY_MARKETS = [
-  ['Volatility 10 (1s) Index','R_10'],['Volatility 10 Index','R_10'],['Volatility 15 (1s) Index','R_15'],
-  ['Volatility 25 (1s) Index','R_25'],['Volatility 25 Index','R_25'],['Volatility 30 (1s) Index','R_30'],
-  ['Volatility 50 (1s) Index','R_50'],['Volatility 50 Index','R_50'],['Volatility 75 (1s) Index','R_75'],
-  ['Volatility 75 Index','R_75'],['Volatility 90 (1s) Index','R_90'],['Volatility 100 (1s) Index','R_100'],
+  ['Volatility 10 (1s) Index','1HZ10V'],['Volatility 10 Index','R_10'],['Volatility 15 (1s) Index','1HZ15V'],
+  ['Volatility 25 (1s) Index','1HZ25V'],['Volatility 25 Index','R_25'],['Volatility 30 (1s) Index','1HZ30V'],
+  ['Volatility 50 (1s) Index','1HZ50V'],['Volatility 50 Index','R_50'],['Volatility 75 (1s) Index','1HZ75V'],
+  ['Volatility 75 Index','R_75'],['Volatility 90 (1s) Index','1HZ90V'],['Volatility 100 (1s) Index','1HZ100V'],
   ['Volatility 100 Index','R_100']
 ];
 export const MARKET_SYMBOLS = [...new Set(VOLATILITY_MARKETS.map(([,symbol])=>symbol))];
