@@ -12,6 +12,16 @@ test('historical seed initializes the rolling window but is not live-ready by it
   assert.equal(isLiveReady(window, { now: 1000 }), false);
 });
 
+test('history arriving after an early tick resets live readiness until a post-seed tick arrives', () => {
+  const window = createMarketWindow(4);
+  appendLiveTick(window, 99, 900);
+  seedMarketWindow(window, [1, 2, 3, 4]);
+  assert.equal(isLiveReady(window, { now: 1000 }), false);
+  assert.equal(window.liveTicks, 0);
+  appendLiveTick(window, 5, 1100);
+  assert.equal(isLiveReady(window, { now: 1100 }), true);
+});
+
 test('live ticks advance the same window and evict the oldest observations', () => {
   const window = createMarketWindow(4);
   seedMarketWindow(window, [1, 2, 3, 4]);
