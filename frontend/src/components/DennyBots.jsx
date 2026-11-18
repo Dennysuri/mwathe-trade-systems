@@ -371,7 +371,7 @@ export default function DennyBots({ token, accountId, currency = 'USD', onBalanc
   }
 
   const stopBot = () => { isRunningRef.current = false; setIsRunning(false); addLog(`⏹️ Stopped new entries; any open contract remains monitored until settlement.`) }
-  const resetBot = () => { stopBot(); setLogs(['System reset.']); setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setValidationError(''); setConfidenceScore(0); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake) }
+  const resetBot = () => { setLogs([]); setValidationError('') }
   useEffect(() => {
     if (!connectedMode) return
     if (analysisRunning && !isRunningRef.current) startBot()
