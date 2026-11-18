@@ -96,16 +96,56 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
         MARKET_SYMBOLS.forEach((symbol,index)=>ws.send(JSON.stringify({ticks_history:symbol,count:Math.max(200,lastDigits),end:'latest',style:'ticks',subscribe:1,req_id:910000+index})))
         addLog('Historical windows requested; live tick subscriptions started across volatility markets.')
         let lastScanAt=0
+        let cycleBest=null
+        const publishCandidate=best=>{
+          const label=VOLATILITY_MARKETS.find(([,sym])=>sym===best.symbol)?.[0]||best.symbol
+          const candidate=best.report.candidate
+          const nowSignal=Date.now()
+          const series=pricesRef.current[best.symbol]||[]
+          const deltas=series.slice(1).map((value,index)=>Math.abs(value-series[index])).filter(Number.isFinite)
+          const atr=deltas.slice(-30).reduce((sum,value)=>sum+value,0)/Math.max(1,Math.min(30,deltas.length))
+          let signalBarrier=tradeType==='Digits'?String(Number(predictedDigit)):''
+          if(tradeType==='Touch & No Touch'||subTradeType==='Higher/Lower'){
+            const down=['Fall','Lower','Down','Put','No Touch'].includes(candidate.option)
+            const distance=Math.max(atr*(tradeType==='Touch & No Touch'?3:2),Math.abs(series.at(-1)||1)*0.0001)
+            signalBarrier=(down?'-':'+')+distance.toFixed(4)
+          }
+          const signalKey=[best.symbol,tradeType,subTradeType,candidate.option,predictedDigit,signalBarrier].join('|')
+          if(candidate.option!=='Both' && nowSignal-(lastEmittedSignalRef.current[signalKey]||0)>=2000){
+            const signal={id:`analysis-${best.symbol}-${nowSignal}`,source:'analysis-tool-live',symbol:best.symbol,market:label,tradeType,subTradeType,option:candidate.option,predictedDigit:Number(predictedDigit),barrier:signalBarrier,duration:durationValue,timeframeUnit,createdAt:nowSignal,expiryEpoch:timeframeUnit==='Ticks'?undefined:Math.floor(nowSignal/1000)+Math.max(60,durationValue*(timeframeUnit==='Hours'?3600:timeframeUnit==='Days'?86400:timeframeUnit==='Minutes'?60:1)),setupScore:candidate.score,confidence:candidate.score,researchOnly:true}
+            if(onSignalGenerated) onSignalGenerated(signal)
+            lastEmittedSignalRef.current[signalKey]=nowSignal
+            if(tradeType==='Digits'&&timeframeUnit==='Ticks'&&!paperQuoteInFlightRef.current.has(signalKey)&&getPaperForwardSummary({...signal,currency}).pending===0){
+              try{
+                const proposal=buildProposal({...signal,currency},1,currency)
+                const req_id=++proposalReqIdRef.current
+                paperQuoteRequestsRef.current.set(req_id,{signal:{...signal,currency},signalKey,label})
+                paperQuoteInFlightRef.current.add(signalKey)
+                ws.send(JSON.stringify({...proposal,req_id}))
+                setTimeout(()=>{const pendingRequest=paperQuoteRequestsRef.current.get(req_id);if(pendingRequest){paperQuoteRequestsRef.current.delete(req_id);paperQuoteInFlightRef.current.delete(pendingRequest.signalKey);addLog(`Paper proposal timed out for ${pendingRequest.label}; no sample recorded.`)}},12000)
+                addLog(`Requesting quote-matched paper sample: ${label} | ${candidate.option} | stake basis ${currency} 1.00; no purchase.`)
+              }catch(error){paperQuoteInFlightRef.current.delete(signalKey);addLog(`Paper quote skipped: ${error.message}`)}
+            }
+            addLog(`Thamira signal handed to Denny Bots: ${label} | ${candidate.option} | score ${candidate.score}/94. Execution remains independently gated.`)
+          }
+          addLog(`Analysis window result: strongest candidate ${label} | score ${candidate.score}/94 | ${candidate.option}`)
+          setFinalSignal({researchOnly:true,market:label,option:candidate.option,contractDuration:`${durationValue} ${timeframeUnit}`,sampleSize:best.report.sampleSize,marketCount:1,score:candidate.score,detail:'Best candidate retained across the complete selected analysis window. Relative research score only, not a verified win probability.'})
+        }
         timerRef.current=setInterval(async()=>{
           const now=Date.now()
           const cycleMs=analysisDuration*1000
           const elapsed=now-cycleStartedAtRef.current
-          if(elapsed>=cycleMs){cycleStartedAtRef.current=now;setProgress(0);addLog(`Analysis window completed (${analysisDuration}s); beginning the next rolling scan with refreshed market data.`)}
-          else setProgress(Math.min(99,(elapsed/cycleMs)*100))
+          if(elapsed>=cycleMs){
+            if(cycleBest)publishCandidate(cycleBest)
+            else {addLog(`Analysis window completed (${analysisDuration}s): no qualifying setup found across the live market set.`);setFinalSignal({researchOnly:true,market:'No qualifying setup this window',option,contractDuration:`${durationValue} ${timeframeUnit}`,sampleSize:0,marketCount:MARKET_SYMBOLS.length,detail:'All markets were scanned throughout the selected window. A new window is starting; no forced signal.'})}
+            cycleBest=null
+            cycleStartedAtRef.current=now
+            setProgress(0)
+          }else setProgress(Math.min(99,(elapsed/cycleMs)*100))
           if(now-lastScanAt<500||scanInFlightRef.current)return
           lastScanAt=now
           scanInFlightRef.current=true
-          try {
+          try{
             const config={tradeType,subTradeType,option,predictedDigit:Number(predictedDigit),duration:durationValue,timeframeUnit}
             const reports=await Promise.all(MARKET_SYMBOLS.map(async symbol=>{
               const fresh=now-(lastTickAtRef.current[symbol]||0)<5000
@@ -115,55 +155,17 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
             }))
             const ready=reports.filter(item=>item.report?.ready)
             const candidates=ready.filter(item=>item.report.candidate).sort((a,b)=>b.report.candidate.score-a.report.candidate.score)
-            const top=candidates.slice(0,4)
-            if(!ready.length){
-              addLog('Thamira: collecting fresh observations across all ${MARKET_SYMBOLS.length} markets; next scan continues immediately.')
-              setFinalSignal({researchOnly:true,market:'Building live market picture',option:config.option,contractDuration:`${durationValue} ${timeframeUnit}`,sampleSize:reports.reduce((n,item)=>n+(item.report?.sampleSize||0),0),marketCount:0,detail:'Live feed remains active. Short recheck cycle; no forced entry.'})
-            } else if(!top.length){
-              addLog(`Thamira: monitoring ${ready.length}/${MARKET_SYMBOLS.length} fresh markets — no setup currently clears the relative-strength threshold. Rechecking in 0.5s.`)
-              setFinalSignal({researchOnly:true,market:'Thamira monitoring all markets',option:config.option,contractDuration:`${durationValue} ${timeframeUnit}`,sampleSize:ready.reduce((n,item)=>n+item.report.sampleSize,0),marketCount:ready.length,detail:'No qualifying candidate at this instant. Continuous scanning remains active.'})
-            } else {
-              const best=top[0],label=VOLATILITY_MARKETS.find(([,sym])=>sym===best.symbol)?.[0]||best.symbol
-              const candidate=best.report.candidate
-              const nowSignal=Date.now()
-              const series=pricesRef.current[best.symbol]||[]
-              const deltas=series.slice(1).map((value,index)=>Math.abs(value-series[index])).filter(Number.isFinite)
-              const atr=deltas.slice(-30).reduce((sum,value)=>sum+value,0)/Math.max(1,Math.min(30,deltas.length))
-              let signalBarrier=tradeType==='Digits'?String(Number(predictedDigit)):''
-              if(tradeType==='Touch & No Touch'||subTradeType==='Higher/Lower'){
-                const down=['Fall','Lower','Down','Put','No Touch'].includes(candidate.option)
-                const distance=Math.max(atr*(tradeType==='Touch & No Touch'?3:2),Math.abs(series.at(-1)||1)*0.0001)
-                signalBarrier=(down?'-':'+')+distance.toFixed(4)
-              }
-              const signalKey=[best.symbol,tradeType,subTradeType,candidate.option,predictedDigit,signalBarrier].join('|')
-              if(candidate.option!=='Both' && nowSignal-(lastEmittedSignalRef.current[signalKey]||0)>=2000){
-                const signal={id:`analysis-${best.symbol}-${nowSignal}`,source:'analysis-tool-live',symbol:best.symbol,market:label,tradeType,subTradeType,option:candidate.option,predictedDigit:Number(predictedDigit),barrier:signalBarrier,duration:durationValue,timeframeUnit,createdAt:nowSignal,expiryEpoch:timeframeUnit==='Ticks'?undefined:Math.floor(nowSignal/1000)+Math.max(60,durationValue*(timeframeUnit==='Hours'?3600:timeframeUnit==='Days'?86400:timeframeUnit==='Minutes'?60:1)),setupScore:candidate.score,confidence:candidate.score,researchOnly:true}
-                if(onSignalGenerated) onSignalGenerated(signal)
-                lastEmittedSignalRef.current[signalKey]=nowSignal
-                if (tradeType==='Digits' && timeframeUnit==='Ticks' && !paperQuoteInFlightRef.current.has(signalKey) && getPaperForwardSummary({...signal,currency}).pending===0) {
-                  try {
-                    const proposal=buildProposal({...signal,currency},1,currency)
-                    const req_id=++proposalReqIdRef.current
-                    paperQuoteRequestsRef.current.set(req_id,{signal:{...signal,currency},signalKey,label})
-                    paperQuoteInFlightRef.current.add(signalKey)
-                    ws.send(JSON.stringify({...proposal,req_id}))
-                    setTimeout(()=>{const pendingRequest=paperQuoteRequestsRef.current.get(req_id);if(pendingRequest){paperQuoteRequestsRef.current.delete(req_id);paperQuoteInFlightRef.current.delete(pendingRequest.signalKey);addLog(`Paper proposal timed out for ${pendingRequest.label}; no sample recorded.`)}},12000)
-                    addLog(`Requesting quote-matched paper sample: ${label} | ${candidate.option} | stake basis ${currency} 1.00; no purchase.`)
-                  } catch(error) { paperQuoteInFlightRef.current.delete(signalKey); addLog(`Paper quote skipped: ${error.message}`) }
-                }
-                addLog(`Thamira signal handed to Denny Bots: ${label} | ${candidate.option} | score ${candidate.score}/94. Execution remains independently gated.`)
-              }
-              addLog(`Thamira: strongest candidate ${label} | setup score ${candidate.score}/94 | ${candidate.option}`)
-              top.forEach(item=>{
-                const market=VOLATILITY_MARKETS.find(([,sym])=>sym===item.symbol)?.[0]||item.symbol
-                addLog(`${market}: ${item.report.candidate.score}/94 relative score; ${item.report.candidate.supportingFamilies.join(', ')}`)
-              })
-              setFinalSignal({researchOnly:true,market:label,option:best.report.candidate.option,contractDuration:`${durationValue} ${timeframeUnit}`,sampleSize:best.report.sampleSize,marketCount:candidates.length,score:best.report.candidate.score,detail:'Top-ranked live setup. Relative research score only, not a verified win probability; automated entry still requires independent calibration and payout validation.'})
+            const best=candidates[0]
+            if(best&&(!cycleBest||best.report.candidate.score>cycleBest.report.candidate.score))cycleBest=best
+            if(!ready.length)addLog(`Thamira: loading historical/live observations across ${MARKET_SYMBOLS.length} markets; scanning continues in background.`)
+            else if(!best)addLog(`Thamira: monitoring ${ready.length}/${MARKET_SYMBOLS.length} fresh markets; no candidate clears the current threshold.`)
+            else{
+              addLog(`Thamira scan: ${VOLATILITY_MARKETS.find(([,sym])=>sym===best.symbol)?.[0]||best.symbol} currently leads at ${best.report.candidate.score}/94; holding selection until the ${analysisDuration}s window closes.`)
+              candidates.slice(0,4).forEach(item=>addLog(`${VOLATILITY_MARKETS.find(([,sym])=>sym===item.symbol)?.[0]||item.symbol}: ${item.report.candidate.score}/94 relative score; ${item.report.candidate.supportingFamilies.join(', ')}`))
             }
-          } catch(error) { addLog(`Strategy research error: ${error.message}`) }
-          finally { scanInFlightRef.current=false;setProgress(Math.min(99,((Date.now()-cycleStartedAtRef.current)/(analysisDuration*1000))*100)) }
+          }catch(error){addLog(`Strategy research error: ${error.message}`)}
+          finally{scanInFlightRef.current=false;setProgress(Math.min(99,((Date.now()-cycleStartedAtRef.current)/cycleMs)*100))}
         },250)
-      }
       ws.onmessage=event=>{
         const msg=JSON.parse(event.data)
         const responseReqId=msg.echo_req?.req_id ?? msg.req_id
