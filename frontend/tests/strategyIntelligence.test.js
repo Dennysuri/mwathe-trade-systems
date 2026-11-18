@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { evaluateStrategyEnsemble, evaluateExpectedValue, validateEntryWindow } from '../src/services/strategyIntelligence.js';
+import { boundedNextStake } from '../src/services/tradingCore.js';
+import { contractProfile, getContractPerformance } from '../src/services/contractOutcomeIntelligence.js';
 
 test('digit ensemble waits for sufficient observations', async () => {
   const result = await evaluateStrategyEnsemble(Array.from({length:120},(_,i)=>100.01+i/100), {tradeType:'Digits',subTradeType:'Matches/Differs',option:'Both',predictedDigit:3});
@@ -40,4 +42,19 @@ test('Thamira ranks a candidate without presenting its score as probability or a
     assert.ok(result.candidate.score <= 94);
     assert.match(result.candidate.note,/not a calibrated probability/i);
   }
+});
+
+test('bounded recovery permits a third attempt while enforcing the 3x cap and a five-loss ceiling', () => {
+  assert.equal(boundedNextStake(1, 2.25, 1.5, 3), 3);
+  assert.equal(boundedNextStake(1, 3, 1.5, 4), 3);
+  assert.equal(boundedNextStake(1, 3, 1.5, 5), 1);
+});
+
+test('contract intelligence separates barrier and predicted-digit configurations', () => {
+  const over4 = {symbol:'R_100',tradeType:'Digits',subTradeType:'Over/Under',option:'Over',predictedDigit:4,barrier:'4',duration:1,timeframeUnit:'Ticks'};
+  const over5 = {...over4,predictedDigit:5,barrier:'5'};
+  assert.notEqual(contractProfile(over4), contractProfile(over5));
+  const performance = getContractPerformance(over4);
+  assert.equal(performance.trades, 0);
+  assert.equal(performance.sampleSufficient, false);
 });

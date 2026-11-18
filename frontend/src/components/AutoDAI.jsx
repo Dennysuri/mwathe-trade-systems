@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Activity, Lock } from 'lucide-react'
 import { boundedNextStake, buildProposal, MARKET_SYMBOLS } from '../services/tradingCore'
 import { evaluateStrategyEnsemble, validateEntryWindow } from '../services/strategyIntelligence'
+import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
 
 const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
 const SYMBOL_MAP = { 'Volatility 10 (1s) Index': 'R_10', 'Volatility 10 Index': 'R_10', 'Volatility 15 (1s) Index': 'R_15', 'Volatility 25 (1s) Index': 'R_25', 'Volatility 25 Index': 'R_25', 'Volatility 30 (1s) Index': 'R_30', 'Volatility 50 (1s) Index': 'R_50', 'Volatility 50 Index': 'R_50', 'Volatility 75 (1s) Index': 'R_75', 'Volatility 75 Index': 'R_75', 'Volatility 90 (1s) Index': 'R_90', 'Volatility 100 (1s) Index': 'R_100', 'Volatility 100 Index': 'R_100' }
@@ -21,6 +22,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   const [tradeType, setTradeType] = useState('Digits')
   const [subTradeType, setSubTradeType] = useState('Over/Under')
   const [option, setOption] = useState('Over')
+  const [predictedDigit, setPredictedDigit] = useState('5')
   const [timeframeUnit, setTimeframeUnit] = useState('Ticks')
   const [durationValue, setDurationValue] = useState(1)
   const [stake, setStake] = useState('0.35')
@@ -48,7 +50,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   const pendingEntryRef = useRef(null)
   const sessionRef = useRef({totalTrades:0,wins:0,losses:0,lossStreak:0,stake:0.35,pl:0})
   const configRef = useRef({stake,targetProfit,stopLoss})
-  configRef.current = {stake,targetProfit,stopLoss,selectedMarket,tradeType,subTradeType,option,timeframeUnit,durationValue}
+  configRef.current = {stake,targetProfit,stopLoss,selectedMarket,tradeType,subTradeType,option,predictedDigit,timeframeUnit,durationValue}
 
 
   const addLog = (msg) => setLogs(prev => [...prev.slice(-20), `[${new Date().toLocaleTimeString()}] ${msg}`])
@@ -110,7 +112,9 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     if (!candidates.length) { addLog('⏳ Scanning live markets; no eligible setup yet.'); nextTradeTimer.current=setTimeout(()=>executeTrade(),500); return }
     const best = candidates[0]
     const ticks = best.ticks, atr = best.atr, drift = best.drift, symbol = best.symbol
-    setSelectedMarket(MARKET_LABEL_BY_SYMBOL[symbol] || symbol)
+    const marketLabel = MARKET_LABEL_BY_SYMBOL[symbol] || symbol
+    setSelectedMarket(marketLabel)
+    addLog(`Market selected automatically: ${marketLabel} (${symbol}); scan score ${best.score.toFixed(2)}.`)
     const direction = drift > 0 ? 'up' : 'down'
     let selectedOption = config.option
     if (selectedOption === 'Both') {
@@ -122,13 +126,13 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
         : config.subTradeType === 'Even/Odd' ? 'Even' : config.subTradeType === 'Matches/Differs' ? 'Differs'
         : direction==='up'?'Rise':'Fall'
     }
+    const target = config.subTradeType === 'Over/Under' ? Math.max(1, Math.min(8, Number(config.predictedDigit) || 5)) : Math.max(0, Math.min(9, Number(config.predictedDigit) || 0))
     if (config.tradeType === 'Digits') {
       const digits = ticks.slice(-120).map(getQuoteDigit), previous = digits.at(-1)
       const transitions = digits.slice(0,-1).reduce((out,d,i)=>{if(d===previous)out.push(digits[i+1]);return out},[])
       if (transitions.length < 10) { addLog('Insufficient conditional digit history; no trade.'); nextTradeTimer.current=setTimeout(()=>executeTrade(),500); return }
       const rate = predicate => (transitions.filter(predicate).length+1)/(transitions.length+2)
-      const target = 3
-      const candidates = config.subTradeType==='Over/Under'?[{name:'Over',p:rate(d=>d>2),base:0.7},{name:'Under',p:rate(d=>d<8),base:0.8}]
+      const candidates = config.subTradeType==='Over/Under'?[{name:'Over',p:rate(d=>d>target),base:(9-target)/10},{name:'Under',p:rate(d=>d<target),base:target/10}]
         :config.subTradeType==='Matches/Differs'?[{name:'Matches',p:rate(d=>d===target),base:0.1},{name:'Differs',p:rate(d=>d!==target),base:0.9}]
         :[{name:'Even',p:rate(d=>d%2===0),base:0.5},{name:'Odd',p:rate(d=>d%2===1),base:0.5}]
       const chosen=config.option==='Both'?candidates.sort((a,b)=>(b.p-b.base)-(a.p-a.base))[0]:candidates.find(item=>item.name===selectedOption)
@@ -142,10 +146,10 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
       return
     }
 
-    const barrier = config.tradeType === 'Digits' ? (config.subTradeType==='Over/Under'?(selectedOption==='Over'?'2':'8'):config.subTradeType==='Matches/Differs'?'3':'')
+    const barrier = config.tradeType === 'Digits' ? (config.subTradeType==='Over/Under'||config.subTradeType==='Matches/Differs'?String(target):'')
       : (config.tradeType==='Touch & No Touch'||config.subTradeType==='Higher/Lower') ? ((config.tradeType==='Touch & No Touch'?direction==='down':isDown)?'-':'+')+Math.max(atr*(config.tradeType==='Touch & No Touch'?3:2),Math.abs(ticks.at(-1))*0.0001).toFixed(4) : ''
     try {
-      const signal = {symbol,tradeType:config.tradeType,subTradeType:config.subTradeType,option:selectedOption,predictedDigit:selectedOption==='Over'?2:selectedOption==='Under'?8:3,barrier,duration:config.durationValue,timeframeUnit:config.timeframeUnit,createdAt:Date.now(),expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,config.durationValue*(config.timeframeUnit==='Hours'?3600:config.timeframeUnit==='Days'?86400:config.timeframeUnit==='Minutes'?60:1)),growthRate:0.01,multiplier:100,takeProfit:1,contractStopLoss:1}
+      const signal = {symbol,tradeType:config.tradeType,subTradeType:config.subTradeType,option:selectedOption,predictedDigit:target,barrier,duration:config.durationValue,timeframeUnit:config.timeframeUnit,createdAt:Date.now(),expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,config.durationValue*(config.timeframeUnit==='Hours'?3600:config.timeframeUnit==='Days'?86400:config.timeframeUnit==='Minutes'?60:1)),growthRate:0.01,multiplier:100,takeProfit:1,contractStopLoss:1}
       const researchReport = await evaluateStrategyEnsemble(ticks, signal)
       if (!researchReport.ready || !researchReport.tradable) { const candidate=researchReport.candidate; if(candidate) addLog(`Thamira candidate: ${candidate.option} | relative score ${candidate.score}/94. Execution remains gated pending independent calibration and payout validation.`); nextTradeTimer.current = setTimeout(() => executeTrade(), 500); return }
       const proposal = buildProposal(signal,sessionRef.current.stake)
@@ -160,6 +164,9 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     const session = sessionRef.current
     const config = configRef.current
     session.totalTrades += 1
+    const performance = recordContractOutcome(pendingEntryRef.current || {}, { profit, stake: session.stake, contractId: currentContract?.id, bot: 'AutoD AI' })
+    if (performance) addLog(`Thamira history: ${performance.trades} settled for this exact setup; win rate ${performance.winRate === null ? 'n/a' : (performance.winRate * 100).toFixed(1) + '%'}.`)
+    pendingEntryRef.current = null
     if (profit > 0) {
       session.wins += 1; session.lossStreak = 0; session.stake = parseFloat(config.stake) || 0.35
       addLog(`✅ AI WON +$${profit.toFixed(2)}`)
@@ -172,7 +179,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     setTotalTrades(session.totalTrades);setWins(session.wins);setLosses(session.losses);setConsecutiveLosses(session.lossStreak);setCurrentStake(session.stake);setCurrentPL(session.pl)
     if (session.pl >= parseFloat(config.targetProfit)) { addLog(`🎯 Target hit! $${session.pl.toFixed(2)}`); setIsRunning(false); isRunningRef.current=false; return }
     if (session.pl <= -parseFloat(config.stopLoss)) { addLog(`🛑 Stop loss $${session.pl.toFixed(2)}`); setIsRunning(false); isRunningRef.current=false; return }
-    if (session.lossStreak >= 2) { addLog('🛑 Recovery cap reached after two consecutive losses. Stopping AI.'); setIsRunning(false); isRunningRef.current=false; return }
+    if (session.lossStreak >= 2) addLog('⚠️ Loss streak: entering bounded recovery assessment. Continuing within the 3x stake cap and session stop-loss.')
     if (isRunningRef.current) { addLog(`P/L: $${session.pl.toFixed(2)} | Trades: ${session.totalTrades}`); nextTradeTimer.current=setTimeout(()=>executeTrade(),500) }
   }
 
@@ -201,8 +208,9 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
       {validationError && <div className="bg-red-900/20 border border-red-500/50 rounded-lg p-2 mb-2 flex items-center gap-2 flex-shrink-0"><AlertCircle size={12} className="text-red-500" /><p className="text-red-400 text-[10px] font-medium">{validationError}</p></div>}
       <div className="bg-gray-900 rounded-lg p-2 border border-gray-800 mb-2 flex-shrink-0 overflow-y-auto" style={{maxHeight: '28vh'}}>
         <h3 className="text-white font-bold text-xs flex items-center gap-1 mb-2"><Target size={12} className="text-orange-500" /> Parameters</h3>
-        <div className="mb-2"><label className="text-[10px] text-gray-400 uppercase font-bold">Market (Auto-selected)</label><select value={selectedMarket} onChange={e => setSelectedMarket(e.target.value)} disabled className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white">{VOLATILITY_INDICES.map(m => <option key={m} className="text-white">{m}</option>)}</select></div>
+  
         <div className="grid grid-cols-2 gap-2 mb-2"><div><label className="text-[10px] text-gray-400 uppercase font-bold">Type</label><select value={tradeType} onChange={e => setTradeType(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white">{TRADE_TYPES.map(t => <option key={t} className="text-white">{t}</option>)}</select></div>{SUB_TRADE_TYPES[tradeType]?.length > 0 && <div><label className="text-[10px] text-gray-400 uppercase font-bold">Sub Type</label><select value={subTradeType} onChange={e => setSubTradeType(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white">{SUB_TRADE_TYPES[tradeType].map(t => <option key={t} className="text-white">{t}</option>)}</select></div>}</div>
+        {tradeType === 'Digits' && <div className="mb-2"><label className="text-[10px] text-gray-400 uppercase font-bold">Predicted Digit / Barrier (0–9)</label><input type="number" min={subTradeType === 'Over/Under' ? 1 : 0} max={subTradeType === 'Over/Under' ? 8 : 9} step="1" value={predictedDigit} onChange={e => setPredictedDigit(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div>}
         {subTradeType && OPTIONS[subTradeType] && <div className="mb-2"><label className="text-[10px] text-gray-400 uppercase font-bold mb-1 block">Option</label><div className="grid grid-cols-3 gap-1">{OPTIONS[subTradeType].map(opt => <button key={opt} onClick={() => setOption(opt)} disabled={isRunning} className={`py-1.5 rounded text-xs font-bold border ${option === opt ? 'bg-green-500/20 border-green-500 text-green-400' : 'bg-black border-gray-700 text-gray-400'}`}>{opt}</button>)}</div></div>}
         <div className="grid grid-cols-2 gap-2 mb-2"><div><label className="text-[10px] text-gray-400 uppercase font-bold">Time</label>{rules.fixed ? <input type="text" value={rules.label} disabled className="w-full bg-black/50 border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-gray-500" /> : <select value={timeframeUnit} onChange={e => { setTimeframeUnit(e.target.value); setDurationValue(rules.min) }} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white">{rules.units.map(u => <option key={u} className="text-white">{u}</option>)}</select>}</div><div><label className="text-[10px] text-gray-400 uppercase font-bold">Duration</label><input type="number" value={durationValue} onChange={e => setDurationValue(parseInt(e.target.value) || 0)} disabled={isRunning || rules.fixed} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div></div>
         <div className="grid grid-cols-2 gap-2 mb-2"><div><label className="text-[10px] text-gray-400 uppercase font-bold">Stake</label><input type="number" step="0.01" value={stake} onChange={e => setStake(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div><div><label className="text-[10px] text-gray-400 uppercase font-bold">Martingale</label><input type="text" value="1.5 (Fixed)" disabled className="w-full bg-black/50 border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-orange-400" /></div></div>

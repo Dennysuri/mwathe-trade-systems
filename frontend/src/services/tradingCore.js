@@ -59,7 +59,7 @@ export function isFreshSignal(signal, now=Date.now()) {
 
 export function boundedNextStake(baseStake,currentStake,martingaleFactor,lossesInRow=0,maxMultiplier=3) {
   const base=Math.max(0,Number(baseStake)||0);
-  if (!base || lossesInRow>=2) return base;
+  if (!base || lossesInRow>=5) return base;
   const factor=Math.min(3,Math.max(1,Number(martingaleFactor)||1));
   return Math.min(base*maxMultiplier,Math.max(base,Number(currentStake)||base)*factor);
 }
