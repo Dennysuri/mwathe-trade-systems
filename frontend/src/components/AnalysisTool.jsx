@@ -87,7 +87,7 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
     if(candidate.option!=='Both'&&nowSignal-(lastEmittedSignalRef.current[signalKey]||0)>=2000){
       const entryPoint=Number(windowsRef.current[best.symbol]?.values?.at(-1))
       if(!Number.isFinite(entryPoint)){addLog('Entry point unavailable; candidate not published.');return}
-      const signal={id:`analysis-${best.symbol}-${nowSignal}`,source:'analysis-tool-live',symbol:best.symbol,market:label,tradeType:config.tradeType,subTradeType:config.subTradeType,option:candidate.option,predictedDigit:config.predictedDigit,barrier:config.tradeType==='Digits'?String(config.predictedDigit):candidate.barrier||'',entryPoint,entryDigit:config.tradeType==='Digits'?lastDigit(entryPoint):undefined,duration:config.duration,timeframeUnit:config.timeframeUnit,contractTimeframe:`${config.duration} ${config.timeframeUnit}`,createdAt:nowSignal,setupScore:candidate.score,confidence:candidate.score,researchOnly:true}
+      const signal={...best.signal,id:`analysis-${best.symbol}-${nowSignal}`,source:'analysis-tool-live',market:label,entryPoint,createdAt:nowSignal,setupScore:candidate.score,confidence:candidate.score,researchOnly:true}
       if(onSignalGenerated)onSignalGenerated(signal)
       lastEmittedSignalRef.current[signalKey]=nowSignal
       if(config.tradeType==='Digits'&&config.timeframeUnit==='Ticks'&&!paperQuoteInFlightRef.current.has(signalKey)&&getPaperForwardSummary({...signal,currency:config.currency}).pending===0){
@@ -193,7 +193,7 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
           setProgress(Math.min(99,elapsed/cycleMs*100))
           if(elapsed>=cycleMs){cycleStartedAtRef.current=now;setProgress(0)}
 
-        }else if(!ready.length&&now%15000<1000)addLog('Background research active: waiting for fresh live ticks across the market set.')
+        }else if(!ranked.length&&now%15000<1000)addLog('Background research active: waiting for fresh live ticks across the market set.')
       }catch(error){addLog(`Strategy research error: ${error.message}`)}
       finally{scanInFlightRef.current=false}
     },1000)
