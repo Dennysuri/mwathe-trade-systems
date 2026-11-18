@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { Brain, Activity, Zap, Play, Square, Cpu, CheckCircle2 } from 'lucide-react'
 import { MARKET_SYMBOLS, VOLATILITY_MARKETS, buildProposal } from '../services/tradingCore'
-import { evaluateStrategyEnsemble } from '../services/strategyIntelligence'
+import { rankLiveMarketOpportunities } from '../services/liveOpportunityEngine'
 import { beginPaperTrial, advancePaperTrials, getPaperForwardSummary } from '../services/paperForwardCalibration'
 import { createMarketWindow, seedMarketWindow, appendLiveTick, isLiveReady } from '../services/liveMarketWindow'
 
@@ -177,28 +177,22 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
       if(scanInFlightRef.current)return
       scanInFlightRef.current=true
       try{
-        const reports=await Promise.all(MARKET_SYMBOLS.map(async symbol=>{
-          const window=windowsRef.current[symbol]
-          if(!isLiveReady(window,{now,maxAgeMs:5000,minLiveTicks:1}))return {symbol,report:null}
-          const report=await evaluateStrategyEnsemble(window.values,{...config,symbol,barrier:config.tradeType==='Digits'?String(config.predictedDigit):undefined})
-          return {symbol,report}
-        }))
-        const ready=reports.filter(x=>x.report?.ready)
-        const candidates=ready.filter(x=>x.report?.candidate).sort((a,b)=>b.report.candidate.score-a.report.candidate.score)
-        const best=candidates[0]
+        const ranked=await rankLiveMarketOpportunities(MARKET_SYMBOLS.map(symbol=>({
+          symbol, name:VOLATILITY_MARKETS.find(([,marketSymbol])=>marketSymbol===symbol)?.[0]||symbol,
+          prices:windowsRef.current[symbol]?.values||[],
+          lastLiveAt:windowsRef.current[symbol]?.lastLiveAt||0,
+          liveTicks:windowsRef.current[symbol]?.liveTicks||0
+        })),config,{now,maxAgeMs:5000,minLiveTicks:1})
+        const best=ranked[0]
         if(best){
-          if(!cycleBestRef.current||best.report.candidate.score>cycleBestRef.current.report.candidate.score)cycleBestRef.current=best
-          const label=VOLATILITY_MARKETS.find(([,sym])=>sym===best.symbol)?.[0]||best.symbol
-          setFinalSignal({researchOnly:true,market:label,option:best.report.candidate.option,entryPoint:windowSpot(best.symbol),contractDuration:`${config.duration} ${config.timeframeUnit}`,sampleSize:best.report.sampleSize,marketCount:ready.length,score:best.report.candidate.score,detail:'Continuously refreshed from the latest live rolling window. Entry point is the latest live quote; score is relative setup strength, not a verified win probability.'})
+          setFinalSignal({researchOnly:true,market:best.marketName,option:best.signal.option,entryPoint:best.signal.entryPoint,contractDuration:best.signal.contractTimeframe,sampleSize:best.report.sampleSize,marketCount:ranked.length,score:best.score,detail:'Market, contract direction, entry point and timeframe are ranked together from the same fresh live window. Score is relative setup strength, not a verified win probability.'})
+          if(activeRef.current)publishCandidate(best,config)
         }
         if(activeRef.current){
           const elapsed=now-cycleStartedAtRef.current,cycleMs=config.analysisDuration*1000
           setProgress(Math.min(99,elapsed/cycleMs*100))
-          if(elapsed>=cycleMs){
-            if(cycleBestRef.current)publishCandidate(cycleBestRef.current,config)
-            else addLog('Selected validation window ended without a qualifying live setup; no signal forced.')
-            cycleBestRef.current=null;cycleStartedAtRef.current=now;setProgress(0)
-          }
+          if(elapsed>=cycleMs){cycleStartedAtRef.current=now;setProgress(0)}
+
         }else if(!ready.length&&now%15000<1000)addLog('Background research active: waiting for fresh live ticks across the market set.')
       }catch(error){addLog(`Strategy research error: ${error.message}`)}
       finally{scanInFlightRef.current=false}
@@ -216,11 +210,11 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
     if(!token||!accountId){setValidationError('Connect a Deriv account before starting selected-strategy validation.');return}
     if(tradeType==='Digits'&&(!Number.isInteger(Number(predictedDigit))||predictedDigit===''||Number(predictedDigit)<0||Number(predictedDigit)>9)){setValidationError('Enter a whole-number target digit from 0 to 9.');return}
     if(!wsRef.current||wsRef.current.readyState!==WebSocket.OPEN){setValidationError('The continuous Deriv feed is not connected yet. Wait for live market data.');return}
-    cycleStartedAtRef.current=Date.now();cycleBestRef.current=null;setProgress(0);setFinalSignal(null);activeRef.current=true;setIsAnalyzing(true)
+    cycleStartedAtRef.current=Date.now();setProgress(0);setFinalSignal(null);activeRef.current=true;setIsAnalyzing(true)
     addLog('Selected-parameter validation started. Background market research was already running.')
   }
-  const handleStop=()=>{stopScanner();cycleBestRef.current=null;addLog('Selected validation and signal publication stopped. Continuous market research remains active.')}
-  const handleReset=()=>{if(activeRef.current)return;cycleBestRef.current=null;cycleStartedAtRef.current=Date.now();setProgress(0);setFinalSignal(null);setValidationError('');setAiLogs([])}
+  const handleStop=()=>{stopScanner();addLog('Selected validation and signal publication stopped. Continuous market research remains active.')}
+  const handleReset=()=>{if(activeRef.current)return;cycleStartedAtRef.current=Date.now();setProgress(0);setFinalSignal(null);setValidationError('');setAiLogs([])}
   const windowSpot=symbol=>{const values=windowsRef.current[symbol]?.values;return values?.length?Number(values[values.length-1]):null}
   const rules=TIMEFRAME_RULES[tradeType]
   return <div className="h-full overflow-y-auto bg-mwathe-black text-mwathe-white p-4 space-y-4">
