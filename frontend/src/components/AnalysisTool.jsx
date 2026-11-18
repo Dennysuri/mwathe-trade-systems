@@ -167,6 +167,7 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
           }catch(error){addLog(`Strategy research error: ${error.message}`)}
           finally{scanInFlightRef.current=false;setProgress(Math.min(99,((Date.now()-cycleStartedAtRef.current)/cycleMs)*100))}
         },250)
+      }
       ws.onmessage=event=>{
         const msg=JSON.parse(event.data)
         const responseReqId=msg.echo_req?.req_id ?? msg.req_id
