@@ -3,7 +3,8 @@ import { motion } from 'framer-motion'
 import { Brain, Activity, Zap, Play, Square, Cpu, CheckCircle2 } from 'lucide-react'
 import { MARKET_SYMBOLS, VOLATILITY_MARKETS, buildProposal } from '../services/tradingCore'
 import { evaluateStrategyEnsemble } from '../services/strategyIntelligence'
-import { beginPaperTrial, advancePaperTrials, getPaperForwardSummary, resetPaperTrials } from '../services/paperForwardCalibration'
+import { beginPaperTrial, advancePaperTrials, getPaperForwardSummary } from '../services/paperForwardCalibration'
+import { createMarketWindow, seedMarketWindow, appendLiveTick, isLiveReady } from '../services/liveMarketWindow'
 
 const SUB_TRADE_TYPES = {
   Accumulators: [], Vanillas: ['Call/Put'], Turbos: ['Turbos'], Multipliers: ['Multipliers'],
@@ -79,6 +80,7 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
   useEffect(()=>{const r=TIMEFRAME_RULES[tradeType];setTimeframeUnit(r.defaultUnit);setDurationValue(r.min)},[tradeType])
   const stopScanner=()=>{activeRef.current=false;setIsAnalyzing(false);setProgress(0)}
   const publishCandidate=(best,config)=>{
+    if(!isLiveReady(windowsRef.current[best.symbol],{now:Date.now(),maxAgeMs:5000,minLiveTicks:1})){addLog('Candidate expired before publication; waiting for a fresh live setup.');return}
     const label=VOLATILITY_MARKETS.find(([,sym])=>sym===best.symbol)?.[0]||best.symbol
     const candidate=best.report.candidate,nowSignal=Date.now()
     const signalKey=[best.symbol,config.tradeType,config.subTradeType,candidate.option,config.predictedDigit].join('|')
