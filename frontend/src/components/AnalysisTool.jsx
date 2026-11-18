@@ -104,7 +104,8 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
   useEffect(()=>{
     if(!token||!accountId)return undefined
     let disposed=false
-    let socket=null
+    let socket=null,retryTimer=null,retryDelay=1000
+    const scheduleReconnect=()=>{if(disposed||retryTimer)return;retryTimer=setTimeout(()=>{retryTimer=null;connect()},retryDelay);retryDelay=Math.min(30000,retryDelay*2)}
     const connect=async()=>{
       try{
         addLog('Connecting continuous Deriv market feed; research runs independently of Start/Stop.')
@@ -116,6 +117,7 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
         socket=new WebSocket(url);wsRef.current=socket
         socket.onopen=()=>{
           if(disposed)return
+          retryDelay=1000
           socket.send(JSON.stringify({balance:1,req_id:900001}))
           MARKET_SYMBOLS.forEach((symbol,index)=>socket.send(JSON.stringify({ticks_history:symbol,count:Math.max(200,configRef.current.lastDigits),end:'latest',style:'ticks',subscribe:1,req_id:910000+index})))
           addLog(`Continuous history seed and live subscriptions requested for all ${MARKET_SYMBOLS.length} markets.`)
@@ -163,9 +165,9 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
             }
           }
         }
-        socket.onerror=()=>{if(!disposed)addLog('Deriv market feed error; background research is paused until reconnection.')}
-        socket.onclose=()=>{if(!disposed)addLog('Deriv market feed disconnected; no stale market can qualify.')}
-      }catch(error){if(!disposed)setValidationError(error.message)}
+        socket.onerror=()=>{if(!disposed){addLog('Deriv market feed error; reconnecting automatically.');socket.close()}}
+        socket.onclose=()=>{if(!disposed){addLog('Deriv market feed disconnected; stale data is rejected and reconnection will be attempted.');scheduleReconnect()}}
+      }catch(error){if(!disposed){setValidationError(error.message);addLog(`Market connection failed: ${error.message}; retry scheduled.`);scheduleReconnect()}}
     }
     connect()
     timerRef.current=setInterval(async()=>{
@@ -200,7 +202,7 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
       finally{scanInFlightRef.current=false}
     },1000)
     return ()=>{
-      disposed=true;clearInterval(timerRef.current);timerRef.current=null
+      disposed=true;clearTimeout(retryTimer);clearInterval(timerRef.current);timerRef.current=null;activeRef.current=false;setIsAnalyzing(false)
       if(socket){socket.onclose=null;socket.close()}
       if(wsRef.current===socket)wsRef.current=null
       paperQuoteRequestsRef.current.clear();paperQuoteInFlightRef.current.clear()
