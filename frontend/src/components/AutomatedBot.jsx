@@ -1,18 +1,13 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Zap } from 'lucide-react'
-import { boundedNextStake, buildProposal } from '../services/tradingCore'
+import { boundedNextStake, buildProposal, VOLATILITY_MARKETS } from '../services/tradingCore'
 import { validateEntryWindow } from '../services/strategyIntelligence'
 import { rankLiveMarketOpportunities } from '../services/liveOpportunityEngine'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
 import { appendTickBuffer, seedTickBuffer } from '../services/marketTickBuffer'
 
-const SYMBOL_MAP = { 
-  'Volatility 10 (1s) Index': 'R_10', 'Volatility 10 Index': 'R_10', 'Volatility 15 (1s) Index': 'R_15',
-  'Volatility 25 (1s) Index': 'R_25', 'Volatility 25 Index': 'R_25', 'Volatility 30 (1s) Index': 'R_30',
-  'Volatility 50 (1s) Index': 'R_50', 'Volatility 50 Index': 'R_50', 'Volatility 75 (1s) Index': 'R_75',
-  'Volatility 75 Index': 'R_75', 'Volatility 90 (1s) Index': 'R_90', 'Volatility 100 (1s) Index': 'R_100', 'Volatility 100 Index': 'R_100' 
-}
-const UNIQUE_MARKETS = Object.entries(SYMBOL_MAP).filter((entry,index,all)=>all.findIndex(item=>item[1]===entry[1])===index)
+const SYMBOL_MAP = Object.fromEntries(VOLATILITY_MARKETS)
+const UNIQUE_MARKETS = VOLATILITY_MARKETS
 const TRADE_TYPES = ['Digits', 'Ups & Downs', 'Touch & No Touch', 'Multipliers', 'Accumulators', 'Vanillas', 'Turbos']
 const SUB_TRADE_TYPES = { 'Digits': ['Over/Under', 'Matches/Differs', 'Even/Odd'], 'Ups & Downs': ['Rise/Fall', 'Higher/Lower'], 'Touch & No Touch': ['Touch/No Touch'], 'Multipliers': ['Multipliers'], 'Accumulators': [], 'Vanillas': ['Call/Put'], 'Turbos': ['Turbos'] }
 const OPTIONS = { 'Over/Under': ['Over', 'Under', 'Both'], 'Matches/Differs': ['Matches', 'Differs', 'Both'], 'Even/Odd': ['Even', 'Odd', 'Both'], 'Rise/Fall': ['Rise', 'Fall', 'Both'], 'Higher/Lower': ['Higher', 'Lower', 'Both'], 'Touch/No Touch': ['Touch', 'No Touch', 'Both'], 'Multipliers': ['Up', 'Down', 'Both'], 'Call/Put': ['Call', 'Put', 'Both'], 'Turbos': ['Up', 'Down', 'Both'] }
