@@ -6,7 +6,6 @@ import { rankLiveMarketOpportunities } from '../services/liveOpportunityEngine'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
 import { appendTickBuffer, seedTickBuffer } from '../services/marketTickBuffer'
 
-const SYMBOL_MAP = Object.fromEntries(VOLATILITY_MARKETS)
 const UNIQUE_MARKETS = VOLATILITY_MARKETS
 const TRADE_TYPES = ['Digits', 'Ups & Downs', 'Touch & No Touch', 'Multipliers', 'Accumulators', 'Vanillas', 'Turbos']
 const SUB_TRADE_TYPES = { 'Digits': ['Over/Under', 'Matches/Differs', 'Even/Odd'], 'Ups & Downs': ['Rise/Fall', 'Higher/Lower'], 'Touch & No Touch': ['Touch/No Touch'], 'Multipliers': ['Multipliers'], 'Accumulators': [], 'Vanillas': ['Call/Put'], 'Turbos': ['Turbos'] }
@@ -14,12 +13,6 @@ const OPTIONS = { 'Over/Under': ['Over', 'Under', 'Both'], 'Matches/Differs': ['
 const TIMEFRAME_RULES = { 'Digits': { units: ['Ticks'], defaultUnit: 'Ticks', min: 1, max: 10 }, 'Ups & Downs': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1 }, 'Touch & No Touch': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1 }, 'Multipliers': { units: ['Auto'], defaultUnit: 'Auto', min: 1, fixed: true }, 'Accumulators': { units: ['Ticks'], defaultUnit: 'Ticks', min: 1, max: 85 }, 'Vanillas': { units: ['Minutes', 'Hours', 'Days'], defaultUnit: 'Minutes', min: 1 }, 'Turbos': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1 } }
 
 const roundStake = (v) => Math.round(v * 100) / 100
-const getLastDigit = value => { const text=String(value); const decimals=text.includes('.')?text.split('.')[1]:''; return Number((decimals||text).slice(-1)) }
-const calcEntropy = (arr) => { const unique = new Set(arr.slice(-20)).size; return unique <= 3 ? 1.5 : 3.2 }
-const calcRSI = (ticks, p=14) => { if(ticks.length<p+1) return 50; let g=0,l=0; for(let i=ticks.length-p;i<ticks.length;i++){const c=ticks[i]-ticks[i-1]; if(c>0)g+=c; else l-=c} return 100-(100/(1+(g/(l||1)))) }
-const calcATR = (ticks, p=14) => { if(ticks.length<p+1) return 0; let tr=0; for(let i=ticks.length-p;i<ticks.length;i++) tr+=Math.abs(ticks[i]-ticks[i-1]); return tr/p }
-const calcHurst = (ticks) => { if(ticks.length<20) return 0.5; const n=ticks.length; const mean=ticks.reduce((a,b)=>a+b,0)/n; const dev=ticks.map(t=>t-mean); const cum=dev.reduce((acc,d,i)=>[...acc,(acc[i-1]||0)+d],[]); const range=Math.max(...cum)-Math.min(...cum); const std=Math.sqrt(dev.map(d=>d*d).reduce((a,b)=>a+b,0)/n); return Math.log(range/(std||1))/Math.log(n) }
-const calcKalman = (ticks) => { let x=ticks[0], p=1, q=0.01, r=0.1; for(let i=1;i<ticks.length;i++){ const k=p/(p+r); x=x+k*(ticks[i]-x); p=(1-k)*p+q } return x }
 
 export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const [tradeType, setTradeType] = useState('Digits')
@@ -50,9 +43,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const historyLoadedRef = useRef(false)
   const hasLoggedScanningRef = useRef(false); const reconnectAttemptsRef = useRef(0)
   const pingIntervalRef = useRef(null)
-  const lastFailedDirectionRef = useRef(null)
   const consecutiveLossesRef = useRef(0)
-  const recoveryStartTimeRef = useRef(null)
   const lastResearchNoticeRef = useRef('')
 
   const addLog = (msg) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`])
@@ -230,7 +221,6 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     while (isRunningRef.current) {
       try {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { await new Promise(r => setTimeout(r, 3000)); continue }
-        const isRecovery = currentStakeRef.current > parseFloat(stake)
         
         if (recoveryQueue.length === 0 || recoveryIndex >= recoveryQueue.length) {
           recoveryQueue = await scanMarkets()
@@ -285,14 +275,13 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         
         if (isWin) {
           winsRef.current += 1; currentStakeRef.current = parseFloat(stake); recoveryIndex = 0
-          lastFailedDirectionRef.current = null; consecutiveLossesRef.current = 0; recoveryStartTimeRef.current = null
+          consecutiveLossesRef.current = 0
     lastResearchNoticeRef.current = ''
           setCurrentStake(currentStakeRef.current)
           addLog(`✅ WON +$${profit.toFixed(2)} | Stake reset to base`)
         } else {
           lossesRef.current += 1; consecutiveLossesRef.current++
-          lastFailedDirectionRef.current = tradeDirection; recoveryIndex++
-          if (!recoveryStartTimeRef.current) recoveryStartTimeRef.current = Date.now();
+          recoveryIndex++
           currentStakeRef.current = boundedNextStake(stake, currentStakeRef.current, martingaleFactor, consecutiveLossesRef.current)
           setCurrentStake(currentStakeRef.current)
           if (consecutiveLossesRef.current >= 2) addLog(`⚠️ ${consecutiveLossesRef.current} consecutive losses - continuing bounded recovery and rotating market`)
@@ -312,7 +301,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     setValidationError(''); if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }
     isRunningRef.current = true; setIsRunning(true); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0
     currentStakeRef.current = parseFloat(stake); historyLoadedRef.current = false; hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0
-    lastFailedDirectionRef.current = null; consecutiveLossesRef.current = 0; recoveryStartTimeRef.current = null
+    consecutiveLossesRef.current = 0
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); setLogs([])
     addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets | Hard Gates)'); addLog(`Type: ${tradeType} | Stake: $${stake} | Martingale: ${martingaleFactor}x`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); runTradeCycle()
   }
