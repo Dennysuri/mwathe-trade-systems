@@ -12,6 +12,9 @@ export function seedMarketWindow(window, historicalPrices = []) {
   const values = (historicalPrices || []).map(Number).filter(Number.isFinite).slice(-window.maxSize);
   window.values = values;
   window.source = values.map(() => 'initial');
+  // A tick received before the history response must not make seeded history live-ready.
+  window.lastLiveAt = 0;
+  window.liveTicks = 0;
   window.historyLoaded = true;
   return window;
 }
