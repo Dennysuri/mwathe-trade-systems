@@ -71,132 +71,149 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
   const [tradeType,setTradeType]=useState('Digits'),[subTradeType,setSubTradeType]=useState('Over/Under'),[option,setOption]=useState('Over')
   const [predictedDigit,setPredictedDigit]=useState('5'),[analysisDuration,setAnalysisDuration]=useState(10),[lastDigits,setLastDigits]=useState(300)
   const [timeframeUnit,setTimeframeUnit]=useState('Ticks'),[durationValue,setDurationValue]=useState(5),[validationError,setValidationError]=useState('')
-  const wsRef=useRef(null),pricesRef=useRef({}),lastTickAtRef=useRef({}),timerRef=useRef(null),activeRef=useRef(false),scanInFlightRef=useRef(false),lastEmittedSignalRef=useRef({}),proposalReqIdRef=useRef(920000),paperQuoteRequestsRef=useRef(new Map()),paperQuoteInFlightRef=useRef(new Set()),cycleStartedAtRef=useRef(0)
+  const wsRef=useRef(null),windowsRef=useRef({}),pricesRef=useRef({}),lastTickAtRef=useRef({}),timerRef=useRef(null),activeRef=useRef(false),scanInFlightRef=useRef(false),lastEmittedSignalRef=useRef({}),cycleStartedAtRef=useRef(Date.now()),cycleBestRef=useRef(null),configRef=useRef(null),proposalReqIdRef=useRef(920000),paperQuoteRequestsRef=useRef(new Map()),paperQuoteInFlightRef=useRef(new Set())
   const addLog=msg=>setAiLogs(prev=>[...prev.slice(-8),`[${new Date().toLocaleTimeString()}] ${msg}`])
+  configRef.current={tradeType,subTradeType,option,predictedDigit:Number(predictedDigit),duration:durationValue,timeframeUnit,analysisDuration,lastDigits,currency}
   useEffect(()=>{if(SUB_TRADE_TYPES[tradeType]?.length)setSubTradeType(SUB_TRADE_TYPES[tradeType][0]);else setSubTradeType('')},[tradeType])
   useEffect(()=>{if(subTradeType&&OPTIONS[subTradeType])setOption(OPTIONS[subTradeType][0])},[subTradeType])
   useEffect(()=>{const r=TIMEFRAME_RULES[tradeType];setTimeframeUnit(r.defaultUnit);setDurationValue(r.min)},[tradeType])
-  useEffect(()=>()=>{activeRef.current=false;clearInterval(timerRef.current);if(wsRef.current)wsRef.current.close()},[])
-  const stopScanner=()=>{activeRef.current=false;clearInterval(timerRef.current);if(intervalRef.current)clearInterval(intervalRef.current);if(wsRef.current){wsRef.current.close();wsRef.current=null}setIsAnalyzing(false)}
-  const handleStart=async()=>{
-    setValidationError('')
-    if(!token||!accountId){setValidationError('Connect a Deriv account before starting live market analysis.');return}
-    if(tradeType==='Digits'&&(!Number.isInteger(Number(predictedDigit))||predictedDigit===''||Number(predictedDigit)<0||Number(predictedDigit)>9)){setValidationError('Enter a whole-number target digit from 0 to 9.');return}
-    stopScanner();cycleStartedAtRef.current=Date.now();paperQuoteRequestsRef.current.clear();paperQuoteInFlightRef.current.clear();pricesRef.current={};lastTickAtRef.current={};resetPaperTrials();setIsAnalyzing(true);setProgress(0);setAiLogs([]);setFinalSignal(null);activeRef.current=true
-    addLog('Connecting to authenticated Deriv market data...')
-    try{
-      const response=await fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'}})
-      if(!response.ok)throw new Error(`Market-data authorization failed (${response.status}).`)
-      const payload=await response.json(),url=payload.data?.url
-      if(!url)throw new Error('Deriv did not return a market-data WebSocket URL.')
-      const ws=new WebSocket(url);wsRef.current=ws
-      ws.onopen=()=>{
-        if(!activeRef.current)return
-        cycleStartedAtRef.current=Date.now()
-        ws.send(JSON.stringify({balance:1,req_id:900001}))
-        MARKET_SYMBOLS.forEach((symbol,index)=>ws.send(JSON.stringify({ticks_history:symbol,count:Math.max(200,lastDigits),end:'latest',style:'ticks',subscribe:1,req_id:910000+index})))
-        addLog('Historical windows requested; live tick subscriptions started across volatility markets.')
-        let lastScanAt=0
-        let cycleBest=null
-        const publishCandidate=best=>{
-          const label=VOLATILITY_MARKETS.find(([,sym])=>sym===best.symbol)?.[0]||best.symbol
-          const candidate=best.report.candidate
-          const nowSignal=Date.now()
-          const series=pricesRef.current[best.symbol]||[]
-          const deltas=series.slice(1).map((value,index)=>Math.abs(value-series[index])).filter(Number.isFinite)
-          const atr=deltas.slice(-30).reduce((sum,value)=>sum+value,0)/Math.max(1,Math.min(30,deltas.length))
-          let signalBarrier=tradeType==='Digits'?String(Number(predictedDigit)):''
-          if(tradeType==='Touch & No Touch'||subTradeType==='Higher/Lower'){
-            const down=['Fall','Lower','Down','Put','No Touch'].includes(candidate.option)
-            const distance=Math.max(atr*(tradeType==='Touch & No Touch'?3:2),Math.abs(series.at(-1)||1)*0.0001)
-            signalBarrier=(down?'-':'+')+distance.toFixed(4)
-          }
-          const signalKey=[best.symbol,tradeType,subTradeType,candidate.option,predictedDigit,signalBarrier].join('|')
-          if(candidate.option!=='Both' && nowSignal-(lastEmittedSignalRef.current[signalKey]||0)>=2000){
-            const signal={id:`analysis-${best.symbol}-${nowSignal}`,source:'analysis-tool-live',symbol:best.symbol,market:label,tradeType,subTradeType,option:candidate.option,predictedDigit:Number(predictedDigit),barrier:signalBarrier,duration:durationValue,timeframeUnit,createdAt:nowSignal,expiryEpoch:timeframeUnit==='Ticks'?undefined:Math.floor(nowSignal/1000)+Math.max(60,durationValue*(timeframeUnit==='Hours'?3600:timeframeUnit==='Days'?86400:timeframeUnit==='Minutes'?60:1)),setupScore:candidate.score,confidence:candidate.score,researchOnly:true}
-            if(onSignalGenerated) onSignalGenerated(signal)
-            lastEmittedSignalRef.current[signalKey]=nowSignal
-            if(tradeType==='Digits'&&timeframeUnit==='Ticks'&&!paperQuoteInFlightRef.current.has(signalKey)&&getPaperForwardSummary({...signal,currency}).pending===0){
-              try{
-                const proposal=buildProposal({...signal,currency},1,currency)
-                const req_id=++proposalReqIdRef.current
-                paperQuoteRequestsRef.current.set(req_id,{signal:{...signal,currency},signalKey,label})
-                paperQuoteInFlightRef.current.add(signalKey)
-                ws.send(JSON.stringify({...proposal,req_id}))
-                setTimeout(()=>{const pendingRequest=paperQuoteRequestsRef.current.get(req_id);if(pendingRequest){paperQuoteRequestsRef.current.delete(req_id);paperQuoteInFlightRef.current.delete(pendingRequest.signalKey);addLog(`Paper proposal timed out for ${pendingRequest.label}; no sample recorded.`)}},12000)
-                addLog(`Requesting quote-matched paper sample: ${label} | ${candidate.option} | stake basis ${currency} 1.00; no purchase.`)
-              }catch(error){paperQuoteInFlightRef.current.delete(signalKey);addLog(`Paper quote skipped: ${error.message}`)}
-            }
-            addLog(`Thamira signal handed to Denny Bots: ${label} | ${candidate.option} | score ${candidate.score}/94. Execution remains independently gated.`)
-          }
-          addLog(`Analysis window result: strongest candidate ${label} | score ${candidate.score}/94 | ${candidate.option}`)
-          setFinalSignal({researchOnly:true,market:label,option:candidate.option,contractDuration:`${durationValue} ${timeframeUnit}`,sampleSize:best.report.sampleSize,marketCount:1,score:candidate.score,detail:'Best candidate retained across the complete selected analysis window. Relative research score only, not a verified win probability.'})
-        }
-        timerRef.current=setInterval(async()=>{
-          const now=Date.now()
-          const cycleMs=analysisDuration*1000
-          const elapsed=now-cycleStartedAtRef.current
-          if(elapsed>=cycleMs){
-            if(cycleBest)publishCandidate(cycleBest)
-            else {addLog(`Analysis window completed (${analysisDuration}s): no qualifying setup found across the live market set.`);setFinalSignal({researchOnly:true,market:'No qualifying setup this window',option,contractDuration:`${durationValue} ${timeframeUnit}`,sampleSize:0,marketCount:MARKET_SYMBOLS.length,detail:'All markets were scanned throughout the selected window. A new window is starting; no forced signal.'})}
-            cycleBest=null
-            cycleStartedAtRef.current=now
-            setProgress(0)
-          }else setProgress(Math.min(99,(elapsed/cycleMs)*100))
-          if(now-lastScanAt<500||scanInFlightRef.current)return
-          lastScanAt=now
-          scanInFlightRef.current=true
-          try{
-            const config={tradeType,subTradeType,option,predictedDigit:Number(predictedDigit),duration:durationValue,timeframeUnit}
-            const reports=await Promise.all(MARKET_SYMBOLS.map(async symbol=>{
-              const fresh=now-(lastTickAtRef.current[symbol]||0)<5000
-              if(!fresh)return {symbol,report:null,stale:true}
-              const report=await evaluateStrategyEnsemble(pricesRef.current[symbol]||[],{...config,symbol,barrier:tradeType==='Digits'?String(predictedDigit):undefined})
-              return {symbol,report,stale:false}
-            }))
-            const ready=reports.filter(item=>item.report?.ready)
-            const candidates=ready.filter(item=>item.report.candidate).sort((a,b)=>b.report.candidate.score-a.report.candidate.score)
-            const best=candidates[0]
-            if(best&&(!cycleBest||best.report.candidate.score>cycleBest.report.candidate.score))cycleBest=best
-            if(!ready.length)addLog(`Thamira: loading historical/live observations across ${MARKET_SYMBOLS.length} markets; scanning continues in background.`)
-            else if(!best)addLog(`Thamira: monitoring ${ready.length}/${MARKET_SYMBOLS.length} fresh markets; no candidate clears the current threshold.`)
-            else{
-              addLog(`Thamira scan: ${VOLATILITY_MARKETS.find(([,sym])=>sym===best.symbol)?.[0]||best.symbol} currently leads at ${best.report.candidate.score}/94; holding selection until the ${analysisDuration}s window closes.`)
-              candidates.slice(0,4).forEach(item=>addLog(`${VOLATILITY_MARKETS.find(([,sym])=>sym===item.symbol)?.[0]||item.symbol}: ${item.report.candidate.score}/94 relative score; ${item.report.candidate.supportingFamilies.join(', ')}`))
-            }
-          }catch(error){addLog(`Strategy research error: ${error.message}`)}
-          finally{scanInFlightRef.current=false;setProgress(Math.min(99,((Date.now()-cycleStartedAtRef.current)/cycleMs)*100))}
-        },250)
+  const stopScanner=()=>{activeRef.current=false;setIsAnalyzing(false);setProgress(0)}
+  const publishCandidate=(best,config)=>{
+    const label=VOLATILITY_MARKETS.find(([,sym])=>sym===best.symbol)?.[0]||best.symbol
+    const candidate=best.report.candidate,nowSignal=Date.now()
+    const signalKey=[best.symbol,config.tradeType,config.subTradeType,candidate.option,config.predictedDigit].join('|')
+    if(candidate.option!=='Both'&&nowSignal-(lastEmittedSignalRef.current[signalKey]||0)>=2000){
+      const signal={id:`analysis-${best.symbol}-${nowSignal}`,source:'analysis-tool-live',symbol:best.symbol,market:label,tradeType:config.tradeType,subTradeType:config.subTradeType,option:candidate.option,predictedDigit:config.predictedDigit,barrier:config.tradeType==='Digits'?String(config.predictedDigit):'',duration:config.duration,timeframeUnit:config.timeframeUnit,createdAt:nowSignal,setupScore:candidate.score,confidence:candidate.score,researchOnly:true}
+      if(onSignalGenerated)onSignalGenerated(signal)
+      lastEmittedSignalRef.current[signalKey]=nowSignal
+      if(config.tradeType==='Digits'&&config.timeframeUnit==='Ticks'&&!paperQuoteInFlightRef.current.has(signalKey)&&getPaperForwardSummary({...signal,currency:config.currency}).pending===0){
+        try{
+          const proposal=buildProposal({...signal,currency:config.currency},1,config.currency),req_id=++proposalReqIdRef.current
+          paperQuoteRequestsRef.current.set(req_id,{signal:{...signal,currency:config.currency},signalKey,label})
+          paperQuoteInFlightRef.current.add(signalKey)
+          wsRef.current?.send(JSON.stringify({...proposal,req_id}))
+          setTimeout(()=>{const pending=paperQuoteRequestsRef.current.get(req_id);if(pending){paperQuoteRequestsRef.current.delete(req_id);paperQuoteInFlightRef.current.delete(pending.signalKey);addLog(`Paper proposal timed out for ${pending.label}; no sample recorded.`)}},12000)
+          addLog(`Requesting quote-matched paper sample: ${label}; no purchase.`)
+        }catch(error){paperQuoteInFlightRef.current.delete(signalKey);addLog(`Paper quote skipped: ${error.message}`)}
       }
-      ws.onmessage=event=>{
-        const msg=JSON.parse(event.data)
-        const responseReqId=msg.echo_req?.req_id ?? msg.req_id
-        if(msg.error){
-          const failed=paperQuoteRequestsRef.current.get(responseReqId)
-          if(failed){paperQuoteRequestsRef.current.delete(responseReqId);paperQuoteInFlightRef.current.delete(failed.signalKey);addLog(`Paper proposal unavailable for ${failed.label}: ${msg.error.message}`)}
-          else addLog(`Deriv data error: ${msg.error.message}`)
-          return
-        }
-        if(msg.msg_type==='proposal' && responseReqId!==undefined){
-          const request=paperQuoteRequestsRef.current.get(responseReqId)
-          if(request){
-            paperQuoteRequestsRef.current.delete(responseReqId)
-            const askPrice=Number(msg.proposal?.ask_price),payout=Number(msg.proposal?.payout)
-            const quote={askPrice,payout,currency,quotedAt:Date.now()}
-            if(beginPaperTrial(request.signal,{quote})){
-              addLog(`Quote-matched paper trial started: ${request.label} | ${request.signal.option} | ask ${askPrice} ${currency} | payout ${payout} ${currency} | break-even ${(askPrice/payout*100).toFixed(1)}%; no funds purchased.`)
-            } else addLog(`Paper sample not started: invalid proposal quote or matching trial already pending for ${request.label}.`)
-            paperQuoteInFlightRef.current.delete(request.signalKey)
-          }
-        }
-        if(msg.msg_type==='history'&&msg.history?.prices){const symbol=msg.echo_req?.ticks_history||msg.echo_req?.symbol||msg.history.symbol;pricesRef.current[symbol]=msg.history.prices.map(Number).filter(Number.isFinite);lastTickAtRef.current[symbol]=Date.now()}
-        if(msg.msg_type==='tick'&&msg.tick?.symbol){const arr=pricesRef.current[msg.tick.symbol]||[];arr.push(Number(msg.tick.quote));pricesRef.current[msg.tick.symbol]=arr.slice(-Math.max(300,lastDigits));lastTickAtRef.current[msg.tick.symbol]=Date.now();const settled=advancePaperTrials(msg.tick.symbol,msg.tick.quote);settled.forEach(row=>{const summary=getPaperForwardSummary({symbol:row.symbol,tradeType:row.tradeType,subTradeType:row.subTradeType,option:row.option,predictedDigit:row.predictedDigit,barrier:row.barrier,duration:row.duration,timeframeUnit:row.timeframeUnit,currency:row.currency});addLog(`Paper result: ${row.symbol} | ${row.option} ${row.predictedDigit} | ${row.won?'WIN':'LOSS'} | terminal digit ${row.terminalDigit} | sample ${summary.trades} | Wilson 95% lower bound ${summary.lowerBound===null?'n/a':(summary.lowerBound*100).toFixed(1)+'%'} | worst quote break-even ${summary.maxBreakEvenRate===null?'n/a':(summary.maxBreakEvenRate*100).toFixed(1)+'%'} | calibrated ${summary.calibrated?'YES':'NO'}`)})}
-      }
-      ws.onerror=()=>{paperQuoteRequestsRef.current.clear();paperQuoteInFlightRef.current.clear();setValidationError('Live market-data connection failed.');stopScanner()}
-      ws.onclose=()=>{paperQuoteRequestsRef.current.clear();paperQuoteInFlightRef.current.clear();if(activeRef.current){setValidationError('Live market-data feed disconnected. No signal was generated.');stopScanner()}}
-    }catch(error){setValidationError(error.message);stopScanner()}
+      addLog(`Thamira candidate published: ${label} | ${candidate.option} | relative score ${candidate.score}/94. Execution remains gated.`)
+    }
   }
-  const handleStop=()=>{stopScanner();addLog('Live analysis stopped.')}
+  useEffect(()=>{
+    if(!token||!accountId)return undefined
+    let disposed=false
+    let socket=null
+    const connect=async()=>{
+      try{
+        addLog('Connecting continuous Deriv market feed; research runs independently of Start/Stop.')
+        const response=await fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'}})
+        if(!response.ok)throw new Error(`Market-data authorization failed (${response.status}).`)
+        const payload=await response.json(),url=payload.data?.url
+        if(!url)throw new Error('Deriv did not return a market-data WebSocket URL.')
+        if(disposed)return
+        socket=new WebSocket(url);wsRef.current=socket
+        socket.onopen=()=>{
+          if(disposed)return
+          socket.send(JSON.stringify({balance:1,req_id:900001}))
+          MARKET_SYMBOLS.forEach((symbol,index)=>socket.send(JSON.stringify({ticks_history:symbol,count:Math.max(200,configRef.current.lastDigits),end:'latest',style:'ticks',subscribe:1,req_id:910000+index})))
+          addLog(`Continuous history seed and live subscriptions requested for all ${MARKET_SYMBOLS.length} markets.`)
+        }
+        socket.onmessage=event=>{
+          let msg
+          try{msg=JSON.parse(event.data)}catch{return}
+          const reqId=msg.echo_req?.req_id??msg.req_id
+          if(msg.error){
+            const failed=paperQuoteRequestsRef.current.get(reqId)
+            if(failed){paperQuoteRequestsRef.current.delete(reqId);paperQuoteInFlightRef.current.delete(failed.signalKey);addLog(`Paper proposal unavailable for ${failed.label}: ${msg.error.message}`)}
+            else addLog(`Deriv feed error: ${msg.error.message}`)
+            return
+          }
+          if(msg.msg_type==='proposal'&&reqId!==undefined){
+            const request=paperQuoteRequestsRef.current.get(reqId)
+            if(request){
+              paperQuoteRequestsRef.current.delete(reqId)
+              const askPrice=Number(msg.proposal?.ask_price),payout=Number(msg.proposal?.payout)
+              if(beginPaperTrial(request.signal,{quote:{askPrice,payout,currency:request.signal.currency,quotedAt:Date.now()}}))addLog(`Quote-matched paper trial started for ${request.label}; no funds purchased.`)
+              else addLog(`Paper sample not started for ${request.label}: quote invalid or trial already pending.`)
+              paperQuoteInFlightRef.current.delete(request.signalKey)
+            }
+          }
+          if(msg.msg_type==='history'&&msg.history?.prices){
+            const symbol=msg.echo_req?.ticks_history||msg.echo_req?.symbol||msg.history.symbol
+            if(!symbol)return
+            const window=windowsRef.current[symbol]||createMarketWindow(Math.max(300,configRef.current.lastDigits))
+            seedMarketWindow(window,msg.history.prices)
+            windowsRef.current[symbol]=window
+            pricesRef.current[symbol]=window.values
+            addLog(`Initial rolling window seeded: ${symbol} (${window.values.length} historical observations); awaiting live ticks.`)
+          }
+          if(msg.msg_type==='tick'&&msg.tick?.symbol){
+            const symbol=msg.tick.symbol
+            const window=windowsRef.current[symbol]||createMarketWindow(Math.max(300,configRef.current.lastDigits))
+            if(appendLiveTick(window,msg.tick.quote,Date.now())){
+              windowsRef.current[symbol]=window
+              pricesRef.current[symbol]=window.values
+              lastTickAtRef.current[symbol]=window.lastLiveAt
+              advancePaperTrials(symbol,msg.tick.quote).forEach(row=>{
+                const summary=getPaperForwardSummary({symbol:row.symbol,tradeType:row.tradeType,subTradeType:row.subTradeType,option:row.option,predictedDigit:row.predictedDigit,barrier:row.barrier,duration:row.duration,timeframeUnit:row.timeframeUnit,currency:row.currency})
+                addLog(`Paper result: ${row.symbol} | ${row.option} | ${row.won?'WIN':'LOSS'} | sample ${summary.trades} | calibrated ${summary.calibrated?'YES':'NO'}`)
+              })
+            }
+          }
+        }
+        socket.onerror=()=>{if(!disposed)addLog('Deriv market feed error; background research is paused until reconnection.')}
+        socket.onclose=()=>{if(!disposed)addLog('Deriv market feed disconnected; no stale market can qualify.')}
+      }catch(error){if(!disposed)setValidationError(error.message)}
+    }
+    connect()
+    timerRef.current=setInterval(async()=>{
+      const now=Date.now(),config={...configRef.current}
+      if(scanInFlightRef.current)return
+      scanInFlightRef.current=true
+      try{
+        const reports=await Promise.all(MARKET_SYMBOLS.map(async symbol=>{
+          const window=windowsRef.current[symbol]
+          if(!isLiveReady(window,{now,maxAgeMs:5000,minLiveTicks:1}))return {symbol,report:null}
+          const report=await evaluateStrategyEnsemble(window.values,{...config,symbol,barrier:config.tradeType==='Digits'?String(config.predictedDigit):undefined})
+          return {symbol,report}
+        }))
+        const ready=reports.filter(x=>x.report?.ready)
+        const candidates=ready.filter(x=>x.report?.candidate).sort((a,b)=>b.report.candidate.score-a.report.candidate.score)
+        const best=candidates[0]
+        if(best){
+          if(!cycleBestRef.current||best.report.candidate.score>cycleBestRef.current.report.candidate.score)cycleBestRef.current=best
+          const label=VOLATILITY_MARKETS.find(([,sym])=>sym===best.symbol)?.[0]||best.symbol
+          setFinalSignal({researchOnly:true,market:label,option:best.report.candidate.option,contractDuration:`${config.duration} ${config.timeframeUnit}`,sampleSize:best.report.sampleSize,marketCount:ready.length,score:best.report.candidate.score,detail:'Continuously refreshed from the latest live rolling window. Relative research score only; not a verified win probability.'})
+        }
+        if(activeRef.current){
+          const elapsed=now-cycleStartedAtRef.current,cycleMs=config.analysisDuration*1000
+          setProgress(Math.min(99,elapsed/cycleMs*100))
+          if(elapsed>=cycleMs){
+            if(cycleBestRef.current)publishCandidate(cycleBestRef.current,config)
+            else addLog('Selected validation window ended without a qualifying live setup; no signal forced.')
+            cycleBestRef.current=null;cycleStartedAtRef.current=now;setProgress(0)
+          }
+        }else if(!ready.length&&now%15000<1000)addLog('Background research active: waiting for fresh live ticks across the market set.')
+      }catch(error){addLog(`Strategy research error: ${error.message}`)}
+      finally{scanInFlightRef.current=false}
+    },1000)
+    return ()=>{
+      disposed=true;clearInterval(timerRef.current);timerRef.current=null
+      if(socket){socket.onclose=null;socket.close()}
+      if(wsRef.current===socket)wsRef.current=null
+      paperQuoteRequestsRef.current.clear();paperQuoteInFlightRef.current.clear()
+      windowsRef.current={};pricesRef.current={};lastTickAtRef.current={}
+    }
+  },[token,accountId])
+  const handleStart=()=>{
+    setValidationError('')
+    if(!token||!accountId){setValidationError('Connect a Deriv account before starting selected-strategy validation.');return}
+    if(tradeType==='Digits'&&(!Number.isInteger(Number(predictedDigit))||predictedDigit===''||Number(predictedDigit)<0||Number(predictedDigit)>9)){setValidationError('Enter a whole-number target digit from 0 to 9.');return}
+    if(!wsRef.current||wsRef.current.readyState!==WebSocket.OPEN){setValidationError('The continuous Deriv feed is not connected yet. Wait for live market data.');return}
+    cycleStartedAtRef.current=Date.now();cycleBestRef.current=null;setProgress(0);setFinalSignal(null);activeRef.current=true;setIsAnalyzing(true)
+    addLog('Selected-parameter validation started. Background market research was already running.')
+  }
+  const handleStop=()=>{stopScanner();cycleBestRef.current=null;addLog('Selected validation and signal publication stopped. Continuous market research remains active.')}
   const rules=TIMEFRAME_RULES[tradeType]
   return <div className="h-full overflow-y-auto bg-mwathe-black text-mwathe-white p-4 space-y-4">
     <div className="flex items-center gap-3 pb-2 border-b border-gray-800"><div className="w-10 h-10 bg-gradient-to-br from-mwathe-orange to-mwathe-green rounded-lg flex items-center justify-center"><Brain size={24}/></div><div><h2 className="text-xl font-bold">Analysis Tool</h2><p className="text-xs text-mwathe-gray flex items-center gap-1"><Cpu size={12}/> Live Deriv Market Scanner</p></div></div>
