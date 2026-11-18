@@ -371,7 +371,7 @@ export default function DennyBots({ token, accountId, currency = 'USD', onBalanc
   }
 
   const stopBot = () => { isRunningRef.current = false; setIsRunning(false); addLog(`⏹️ Stopped new entries; any open contract remains monitored until settlement.`) }
-  const resetBot = () => { stopBot(); setLogs(['System reset.']); setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setValidationError(''); setConfidenceScore(0); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0; currentStakeRef.current = parseFloat(stake) }
+  const resetBot = () => { if (isRunningRef.current) return; setLogs([]); setValidationError('') }
   useEffect(() => {
     if (!connectedMode) return
     if (analysisRunning && !isRunningRef.current) startBot()
@@ -403,7 +403,7 @@ export default function DennyBots({ token, accountId, currency = 'USD', onBalanc
       <div className="bg-gray-900 rounded-lg p-2 border border-green-500/30 mb-2 flex-shrink-0"><h3 className="text-white font-bold text-xs mb-1 flex items-center gap-1"><TrendingUp size={12} className="text-green-500" /> Performance</h3><div className="grid grid-cols-4 gap-1 text-center"><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">P/L</p><p className={`font-bold text-xs ${currentPL >= 0 ? 'text-green-500' : 'text-red-500'}`}>{currentPL >= 0 ? '+' : ''}{currentPL.toFixed(2)}</p></div><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Win Rate</p><p className="text-sky-400 font-bold text-xs">{winRate}%</p></div><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Trades</p><p className="text-white font-bold text-xs">{totalTrades}</p></div><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Next</p><p className="text-orange-400 font-bold text-xs">{currentStake.toFixed(2)}</p></div></div></div>
       <div className="grid grid-cols-3 gap-2 flex-shrink-0 mb-2">
         {!connectedMode && <><button onClick={startBot} disabled={isRunning} className="py-2 rounded-lg font-bold text-xs bg-green-500 text-black"><Play size={14}/> Run</button><button onClick={stopBot} disabled={!isRunning} className="py-2 rounded-lg font-bold text-xs bg-red-500 text-white"><Square size={14}/> Stop</button></>}
-        <button onClick={() => { resetBot(); if (connectedMode) onAnalysisStop() }} className="py-2 rounded-lg font-bold text-xs bg-gray-800 border border-gray-700 text-orange-400"><RefreshCw size={14}/> Reset</button>
+        <button onClick={resetBot} disabled={isRunning} className={`py-2 rounded-lg font-bold text-xs ${isRunning?'bg-gray-900 text-gray-600':'bg-gray-800 border border-gray-700 text-orange-400'}`}><RefreshCw size={14}/> Reset</button>
       </div>
       <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col">
         <div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">ANALYSIS LOG</span></div>
