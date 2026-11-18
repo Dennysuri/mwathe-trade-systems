@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { Brain, Activity, Zap, Play, Square, Cpu, CheckCircle2 } from 'lucide-react'
 import { MARKET_SYMBOLS, VOLATILITY_MARKETS } from '../services/tradingCore'
+import { evaluateStrategyEnsemble } from '../services/strategyIntelligence'
 
 const SUB_TRADE_TYPES = {
   Accumulators: [], Vanillas: ['Call/Put'], Turbos: ['Turbos'], Multipliers: ['Multipliers'],
@@ -25,7 +26,6 @@ const TIMEFRAME_RULES = {
   Vanillas:{units:['Minutes','Hours','Days'],defaultUnit:'Minutes',min:1,maxMap:{Minutes:1440,Hours:24,Days:30},fixed:false}
 }
 const TRADE_TYPES=Object.keys(TIMEFRAME_RULES)
-const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))
 const lastDigit=value=>{const s=String(value);const decimals=s.includes('.')?s.split('.')[1]:'';return Number((decimals || s).slice(-1))}
 const mean=values=>values.reduce((a,b)=>a+b,0)/(values.length||1)
 const analyseSeries=(prices,config)=>{
@@ -70,7 +70,7 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
   const [tradeType,setTradeType]=useState('Digits'),[subTradeType,setSubTradeType]=useState('Over/Under'),[option,setOption]=useState('Over')
   const [predictedDigit,setPredictedDigit]=useState('5'),[analysisDuration,setAnalysisDuration]=useState(10),[lastDigits,setLastDigits]=useState(100)
   const [timeframeUnit,setTimeframeUnit]=useState('Ticks'),[durationValue,setDurationValue]=useState(5),[validationError,setValidationError]=useState('')
-  const wsRef=useRef(null),pricesRef=useRef({}),lastTickAtRef=useRef({}),timerRef=useRef(null),activeRef=useRef(false)
+  const wsRef=useRef(null),pricesRef=useRef({}),lastTickAtRef=useRef({}),timerRef=useRef(null),activeRef=useRef(false),scanInFlightRef=useRef(false)
   const addLog=msg=>setAiLogs(prev=>[...prev.slice(-8),`[${new Date().toLocaleTimeString()}] ${msg}`])
   useEffect(()=>{if(SUB_TRADE_TYPES[tradeType]?.length)setSubTradeType(SUB_TRADE_TYPES[tradeType][0]);else setSubTradeType('')},[tradeType])
   useEffect(()=>{if(subTradeType&&OPTIONS[subTradeType])setOption(OPTIONS[subTradeType][0])},[subTradeType])
@@ -94,16 +94,41 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
         ws.send(JSON.stringify({balance:1,req_id:900001}))
         MARKET_SYMBOLS.forEach((symbol,index)=>ws.send(JSON.stringify({ticks_history:symbol,count:Math.max(100,lastDigits),end:'latest',style:'ticks',subscribe:1,req_id:910000+index})))
         addLog('Historical windows requested; live tick subscriptions started across volatility markets.')
-        let started=Date.now();const total=analysisDuration*1000
-        timerRef.current=setInterval(()=>{
-          const elapsed=Date.now()-started;setProgress(Math.min(99,elapsed/total*100))
-          if(elapsed>=total){
-            const candidates=MARKET_SYMBOLS.filter(symbol=>Date.now()-(lastTickAtRef.current[symbol]||0)<5000).map(symbol=>({symbol,analysis:analyseSeries(pricesRef.current[symbol]||[],{tradeType,subTradeType,option,predictedDigit})})).filter(x=>x.analysis&&x.analysis.score>=70).sort((a,b)=>b.analysis.score-a.analysis.score)
-            if(!candidates.length){addLog('No eligible setup met the minimum evidence threshold. No signal sent.');started=Date.now();setProgress(0);return}
-            const best=candidates[0],market=VOLATILITY_MARKETS.find(([,s])=>s===best.symbol)?.[0]||best.symbol
-            const signal={id:`analysis-${best.symbol}-${Date.now()}`,timestamp:Date.now(),createdAt:Date.now(),source:'analysis-tool-live',symbol:best.symbol,market,tradeType,subTradeType,option:best.analysis.option,predictedDigit:Number(predictedDigit),barrier:best.analysis.barrier,confidence:best.analysis.score,setupScore:best.analysis.score,scoreType:'heuristic-not-probability',entry:String(best.analysis.spot),duration:durationValue,timeframeUnit,contractDuration:TIMEFRAME_RULES[tradeType].fixed?TIMEFRAME_RULES[tradeType].label:`${durationValue} ${timeframeUnit}`,detail:best.analysis.detail,marketCondition:best.analysis.score>=80?'Strong setup':'Moderate setup',expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,durationValue*({Minutes:60,Hours:3600,Days:86400}[timeframeUnit]||1))}
-            setFinalSignal(signal);onSignalGenerated?.(signal);addLog(`Live signal: ${market} / ${signal.option}, setup score ${signal.setupScore}/100.`);started=Date.now();setProgress(0)
-          }
+        let lastScanAt=0
+        timerRef.current=setInterval(async()=>{
+          const now=Date.now()
+          setProgress(Math.min(99,Math.max(0,(now-lastScanAt)/500)*100))
+          if(now-lastScanAt<500||scanInFlightRef.current)return
+          lastScanAt=now
+          scanInFlightRef.current=true
+          try {
+            const config={tradeType,subTradeType,option,predictedDigit:Number(predictedDigit),duration:durationValue,timeframeUnit}
+            const reports=await Promise.all(MARKET_SYMBOLS.map(async symbol=>{
+              const fresh=now-(lastTickAtRef.current[symbol]||0)<5000
+              if(!fresh)return {symbol,report:null,stale:true}
+              const report=await evaluateStrategyEnsemble(pricesRef.current[symbol]||[],config)
+              return {symbol,report,stale:false}
+            }))
+            const ready=reports.filter(item=>item.report?.ready)
+            const candidates=ready.filter(item=>item.report.candidate).sort((a,b)=>b.report.candidate.score-a.report.candidate.score)
+            const top=candidates.slice(0,4)
+            if(!ready.length){
+              addLog('Thamira: collecting fresh observations across all 13 markets; next scan continues immediately.')
+              setFinalSignal({researchOnly:true,market:'Building live market picture',option:config.option,contractDuration:`${durationValue} ${timeframeUnit}`,sampleSize:reports.reduce((n,item)=>n+(item.report?.sampleSize||0),0),marketCount:0,detail:'Live feed remains active. Short recheck cycle; no forced entry.'})
+            } else if(!top.length){
+              addLog(`Thamira: monitoring ${ready.length}/13 fresh markets — no setup currently clears the relative-strength threshold. Rechecking in 0.5s.`)
+              setFinalSignal({researchOnly:true,market:'Thamira monitoring all markets',option:config.option,contractDuration:`${durationValue} ${timeframeUnit}`,sampleSize:ready.reduce((n,item)=>n+item.report.sampleSize,0),marketCount:ready.length,detail:'No qualifying candidate at this instant. Continuous scanning remains active.'})
+            } else {
+              const best=top[0],label=VOLATILITY_MARKETS.find(([,sym])=>sym===best.symbol)?.[0]||best.symbol
+              addLog(`Thamira: strongest candidate ${label} | setup score ${best.report.candidate.score}/94 | ${best.report.candidate.option}`)
+              top.forEach(item=>{
+                const market=VOLATILITY_MARKETS.find(([,sym])=>sym===item.symbol)?.[0]||item.symbol
+                addLog(`${market}: ${item.report.candidate.score}/94 relative score; ${item.report.candidate.supportingFamilies.join(', ')}`)
+              })
+              setFinalSignal({researchOnly:true,market:label,option:best.report.candidate.option,contractDuration:`${durationValue} ${timeframeUnit}`,sampleSize:best.report.sampleSize,marketCount:candidates.length,score:best.report.candidate.score,detail:'Top-ranked live setup. Relative research score only, not a verified win probability; automated entry still requires independent calibration and payout validation.'})
+            }
+          } catch(error) { addLog(`Strategy research error: ${error.message}`) }
+          finally { scanInFlightRef.current=false;setProgress(100) }
         },250)
       }
       ws.onmessage=event=>{
@@ -129,7 +154,7 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
       {tradeType==='Digits'&&<div><label className="text-[10px] text-mwathe-gray uppercase font-bold">Target Digit (0-9)</label><input type="number" min="0" max="9" value={predictedDigit} onChange={e=>setPredictedDigit(e.target.value)} disabled={isAnalyzing} className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1"/></div>}
     </div>
     {(isAnalyzing||progress>=100)&&<div className="rounded-xl p-3 border bg-mwathe-darkgray/50 border-mwathe-skyblue/30"><div className="flex items-center justify-between mb-2"><h3 className="text-xs font-bold flex items-center gap-1 text-mwathe-skyblue">{progress>=100?<><CheckCircle2 size={12}/> Scan complete</>:<><Activity size={12} className="animate-pulse"/> Scanning live markets...</>}</h3><span className="text-[10px] font-bold">{Math.round(progress)}%</span></div><div className="w-full bg-gray-800 h-2 rounded-full overflow-hidden"><motion.div className="h-full bg-gradient-to-r from-mwathe-orange to-mwathe-green" initial={{width:0}} animate={{width:`${progress}%`}}/></div></div>}
-    {finalSignal&&<div className="rounded-xl p-3 border border-mwathe-green/40 bg-mwathe-green/10"><p className="font-bold text-sm">{finalSignal.market} · {finalSignal.option}</p><p className="text-xs text-mwathe-gray">Setup score {finalSignal.setupScore}/100 · {finalSignal.contractDuration}</p><p className="text-[10px] text-mwathe-gray mt-1">Heuristic score, not a statistically calibrated probability or accuracy claim.</p></div>}
+    {finalSignal&&<div className="rounded-xl p-3 border border-amber-500/40 bg-amber-500/10"><p className="font-bold text-sm">{finalSignal.market}</p><p className="text-xs text-mwathe-gray">{finalSignal.marketCount} candidate markets · {finalSignal.sampleSize} observations · {finalSignal.contractDuration}{finalSignal.score ? ` · Thamira score ${finalSignal.score}/94` : ''}</p><p className="text-[10px] text-amber-300 mt-1">{finalSignal.detail}</p></div>}
     <div className="bg-black rounded-xl border border-gray-800 overflow-hidden h-32 flex flex-col"><div className="bg-mwathe-darkgray px-3 py-1.5 flex items-center gap-2 border-b border-gray-800"><Zap size={12} className="text-mwathe-orange"/><span className="text-[10px] text-mwathe-orange font-bold">SYSTEM LOG</span></div><div className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5">{aiLogs.length===0?<p className="text-gray-600">Waiting for live analysis...</p>:aiLogs.map((log,i)=><p key={i} className="text-mwathe-skyblue">{log}</p>)}</div></div>
     <div className="grid grid-cols-2 gap-3 pt-2"><button onClick={handleStart} disabled={isAnalyzing} className={`py-3 rounded-xl font-bold flex items-center justify-center gap-2 ${isAnalyzing?'bg-gray-800 text-gray-500':'bg-mwathe-green text-black'}`}><Play size={16}/> Start</button><button onClick={handleStop} disabled={!isAnalyzing} className={`py-3 rounded-xl font-bold flex items-center justify-center gap-2 ${!isAnalyzing?'bg-gray-800 text-gray-500':'bg-red-500 text-white'}`}><Square size={16}/> Stop</button></div>
   </div>

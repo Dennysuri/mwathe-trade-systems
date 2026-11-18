@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Zap } from 'lucide-react'
 import { boundedNextStake, buildProposal } from '../services/tradingCore'
+import { evaluateStrategyEnsemble, validateEntryWindow } from '../services/strategyIntelligence'
 
 const SYMBOL_MAP = { 
   'Volatility 10 (1s) Index': 'R_10', 'Volatility 10 Index': 'R_10', 'Volatility 15 (1s) Index': 'R_15',
@@ -345,14 +346,17 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const signal = {
           symbol: currentTarget.symbol, tradeType, subTradeType, option: tradeDirection,
           predictedDigit: currentTarget.selectedDigit ?? predictedDigit, barrier,
-          duration: durationValue, timeframeUnit,
+          duration: durationValue, timeframeUnit, createdAt: Date.now(),
           expiryEpoch: Math.floor(Date.now()/1000) + Math.max(60, durationValue * (timeframeUnit === 'Hours' ? 3600 : timeframeUnit === 'Days' ? 86400 : timeframeUnit === 'Minutes' ? 60 : 1)),
           growthRate: 0.01, multiplier: 100, takeProfit: 1, contractStopLoss: 1
         }
+        const researchReport = await evaluateStrategyEnsemble(tickDataRef.current[currentTarget.symbol] || [], signal)
+        if (!researchReport.ready || !researchReport.tradable) { const candidate=researchReport.candidate; if(candidate) addLog(`Thamira candidate: ${candidate.option} | relative score ${candidate.score}/94. Execution remains gated pending independent calibration and payout validation.`); await new Promise(r => setTimeout(r, 500)); continue }
         const proposalReq = buildProposal(signal, roundStake(currentStakeRef.current))
         const available = await wsRequest({ contracts_for: currentTarget.symbol, currency: 'USD' })
         if (!JSON.stringify(available.contracts_for || {}).includes(proposalReq.contract_type)) throw new Error(`Deriv does not offer ${proposalReq.contract_type} for ${currentTarget.name}. No trade was sent.`)
         const proposalRes = await wsRequest(proposalReq); if (!isRunningRef.current) break
+        const entryCheck = validateEntryWindow(signal, { maxSignalAgeMs: 15000, proposalBudgetMs: 300, minimumRemainingMs: 250 }); if (!entryCheck.valid) { addLog(`Entry expired before purchase: ${entryCheck.reason}`); continue }
         const buyRes = await wsRequest({ buy: proposalRes.proposal.id, price: proposalRes.proposal.ask_price }); if (!isRunningRef.current) break
         addLog(`✅ Contract: ${buyRes.buy.contract_id}`)
         

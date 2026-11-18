@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, Activity } from 'lucide-react'
 import { buildProposal, isFreshSignal, boundedNextStake } from '../services/tradingCore'
+import { evaluateStrategyEnsemble, validateEntryWindow } from '../services/strategyIntelligence'
 
 const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
 const SYMBOL_MAP = { 'Volatility 10 (1s) Index': 'R_10', 'Volatility 10 Index': 'R_10', 'Volatility 15 (1s) Index': 'R_15', 'Volatility 25 (1s) Index': 'R_25', 'Volatility 25 Index': 'R_25', 'Volatility 30 (1s) Index': 'R_30', 'Volatility 50 (1s) Index': 'R_50', 'Volatility 50 Index': 'R_50', 'Volatility 75 (1s) Index': 'R_75', 'Volatility 75 Index': 'R_75', 'Volatility 90 (1s) Index': 'R_90', 'Volatility 100 (1s) Index': 'R_100', 'Volatility 100 Index': 'R_100' }
@@ -264,10 +265,12 @@ export default function DennyBots({ token, accountId, currency = 'USD', onBalanc
         }
 
         let proposalReq
+        let executionSignal = null
         if (connectedMode) {
           const signal = [...signalsRef.current].find(item => isFreshSignal(item) && !consumedSignalsRef.current.has(item.id))
           if (!signal) { await new Promise(r => setTimeout(r, 1000)); continue }
           consumedSignalsRef.current.add(signal.id)
+          executionSignal = signal
           const market = VOLATILITY_INDICES.find(name => SYMBOL_MAP[name] === signal.symbol)
           if (!market) { addLog('Rejected signal: unsupported market.'); continue }
           setSelectedMarket(market); setTradeType(signal.tradeType); setSubTradeType(signal.subTradeType || ''); setOption(signal.option); setPredictedDigit(String(signal.predictedDigit ?? predictedDigit)); setDurationValue(Number(signal.duration || durationValue)); setTimeframeUnit(signal.timeframeUnit || timeframeUnit)
@@ -276,9 +279,14 @@ export default function DennyBots({ token, accountId, currency = 'USD', onBalanc
         } else {
           const symbol = SYMBOL_MAP[selectedMarket]
           const tradeStake = roundStake(currentStakeRef.current)
-          const recentTicks = tickHistoryRef.current.slice(-20); const spot = recentTicks.at(-1); const atr = recentTicks.slice(1).reduce((sum,value,index)=>sum+Math.abs(value-recentTicks[index]),0)/Math.max(1,recentTicks.length-1); const down = ['Fall','Lower','Down','Put','No Touch'].includes(independentOption); const distance = Math.max(atr*(tradeType==='Touch & No Touch'?3:2),Math.abs(spot||1)*0.0001); const barrier = tradeType==='Digits'?String(predictedDigit):(['Touch & No Touch'].includes(tradeType)||subTradeType==='Higher/Lower')?(down?'-':'+')+distance.toFixed(4):''; const signal = {symbol,tradeType,subTradeType,option:independentOption,predictedDigit,barrier,duration:durationValue,timeframeUnit,expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,durationValue*60)}
+          const recentTicks = tickHistoryRef.current.slice(-20); const spot = recentTicks.at(-1); const atr = recentTicks.slice(1).reduce((sum,value,index)=>sum+Math.abs(value-recentTicks[index]),0)/Math.max(1,recentTicks.length-1); const down = ['Fall','Lower','Down','Put','No Touch'].includes(independentOption); const distance = Math.max(atr*(tradeType==='Touch & No Touch'?3:2),Math.abs(spot||1)*0.0001); const barrier = tradeType==='Digits'?String(predictedDigit):(['Touch & No Touch'].includes(tradeType)||subTradeType==='Higher/Lower')?(down?'-':'+')+distance.toFixed(4):''; const signal = {symbol,tradeType,subTradeType,option:independentOption,predictedDigit,barrier,duration:durationValue,timeframeUnit,createdAt:Date.now(),expiryEpoch:timeframeUnit==='Ticks'?undefined:Math.floor(Date.now()/1000)+Math.max(60,durationValue*60)}
+          executionSignal = signal
           proposalReq = buildProposal(signal, tradeStake, currency)
         }
+        const researchReport = await evaluateStrategyEnsemble(tickHistoryRef.current, executionSignal)
+        if (!researchReport.ready || !researchReport.tradable) { const candidate=researchReport.candidate; if(candidate) addLog(`Thamira candidate: ${candidate.option} | relative score ${candidate.score}/94. Execution remains gated until independent calibration and payout validation.`); await new Promise(r => setTimeout(r, 500)); continue }
+        const entryCheck = validateEntryWindow(executionSignal, { maxSignalAgeMs: 15000, proposalBudgetMs: 1500, minimumRemainingMs: 500 })
+        if (!entryCheck.valid) { addLog(`Rejected entry: ${entryCheck.reason}`); continue }
         const available = await wsRequest({ contracts_for: proposalReq.underlying_symbol })
         const offeredContracts = available.contracts_for?.available || []
         if (!offeredContracts.some(contract => contract.contract_type === proposalReq.contract_type)) {
@@ -292,6 +300,8 @@ export default function DennyBots({ token, accountId, currency = 'USD', onBalanc
           throw new Error('Deriv returned an incomplete or invalid trade proposal. No order was sent.')
         }
         if (!isRunningRef.current) break
+        const finalEntryCheck = validateEntryWindow(executionSignal, { maxSignalAgeMs: 15000, proposalBudgetMs: 300, minimumRemainingMs: 250 })
+        if (!finalEntryCheck.valid) { addLog(`Entry expired before purchase: ${finalEntryCheck.reason}`); continue }
         addLog('Proposal received. Sending purchase request...')
         const buyRes = await wsRequest({ buy: proposal.id, price: Number(proposal.ask_price) })
         if (!buyRes.buy?.contract_id) throw new Error('Deriv did not confirm the purchase. Check your account statement before retrying.')
