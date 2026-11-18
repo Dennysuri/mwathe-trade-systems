@@ -69,9 +69,9 @@ const analyseSeries=(prices,config)=>{
 
 export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setProgress,aiLogs,setAiLogs,finalSignal,setFinalSignal,intervalRef,onSignalGenerated,token,accountId,currency='USD'}){
   const [tradeType,setTradeType]=useState('Digits'),[subTradeType,setSubTradeType]=useState('Over/Under'),[option,setOption]=useState('Over')
-  const [predictedDigit,setPredictedDigit]=useState('5'),[analysisDuration,setAnalysisDuration]=useState(10),[lastDigits,setLastDigits]=useState(100)
+  const [predictedDigit,setPredictedDigit]=useState('5'),[analysisDuration,setAnalysisDuration]=useState(10),[lastDigits,setLastDigits]=useState(300)
   const [timeframeUnit,setTimeframeUnit]=useState('Ticks'),[durationValue,setDurationValue]=useState(5),[validationError,setValidationError]=useState('')
-  const wsRef=useRef(null),pricesRef=useRef({}),lastTickAtRef=useRef({}),timerRef=useRef(null),activeRef=useRef(false),scanInFlightRef=useRef(false),lastEmittedSignalRef=useRef({}),proposalReqIdRef=useRef(920000),paperQuoteRequestsRef=useRef(new Map()),paperQuoteInFlightRef=useRef(new Set())
+  const wsRef=useRef(null),pricesRef=useRef({}),lastTickAtRef=useRef({}),timerRef=useRef(null),activeRef=useRef(false),scanInFlightRef=useRef(false),lastEmittedSignalRef=useRef({}),proposalReqIdRef=useRef(920000),paperQuoteRequestsRef=useRef(new Map()),paperQuoteInFlightRef=useRef(new Set()),cycleStartedAtRef=useRef(0)
   const addLog=msg=>setAiLogs(prev=>[...prev.slice(-8),`[${new Date().toLocaleTimeString()}] ${msg}`])
   useEffect(()=>{if(SUB_TRADE_TYPES[tradeType]?.length)setSubTradeType(SUB_TRADE_TYPES[tradeType][0]);else setSubTradeType('')},[tradeType])
   useEffect(()=>{if(subTradeType&&OPTIONS[subTradeType])setOption(OPTIONS[subTradeType][0])},[subTradeType])
@@ -82,7 +82,7 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
     setValidationError('')
     if(!token||!accountId){setValidationError('Connect a Deriv account before starting live market analysis.');return}
     if(tradeType==='Digits'&&(!Number.isInteger(Number(predictedDigit))||predictedDigit===''||Number(predictedDigit)<0||Number(predictedDigit)>9)){setValidationError('Enter a whole-number target digit from 0 to 9.');return}
-    stopScanner();paperQuoteRequestsRef.current.clear();paperQuoteInFlightRef.current.clear();pricesRef.current={};lastTickAtRef.current={};resetPaperTrials();setIsAnalyzing(true);setProgress(0);setAiLogs([]);setFinalSignal(null);activeRef.current=true
+    stopScanner();cycleStartedAtRef.current=Date.now();paperQuoteRequestsRef.current.clear();paperQuoteInFlightRef.current.clear();pricesRef.current={};lastTickAtRef.current={};resetPaperTrials();setIsAnalyzing(true);setProgress(0);setAiLogs([]);setFinalSignal(null);activeRef.current=true
     addLog('Connecting to authenticated Deriv market data...')
     try{
       const response=await fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'}})
@@ -93,12 +93,15 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
       ws.onopen=()=>{
         if(!activeRef.current)return
         ws.send(JSON.stringify({balance:1,req_id:900001}))
-        MARKET_SYMBOLS.forEach((symbol,index)=>ws.send(JSON.stringify({ticks_history:symbol,count:Math.max(100,lastDigits),end:'latest',style:'ticks',subscribe:1,req_id:910000+index})))
+        MARKET_SYMBOLS.forEach((symbol,index)=>ws.send(JSON.stringify({ticks_history:symbol,count:Math.max(200,lastDigits),end:'latest',style:'ticks',subscribe:1,req_id:910000+index})))
         addLog('Historical windows requested; live tick subscriptions started across volatility markets.')
         let lastScanAt=0
         timerRef.current=setInterval(async()=>{
           const now=Date.now()
-          setProgress(Math.min(99,Math.max(0,(now-lastScanAt)/500)*100))
+          const cycleMs=analysisDuration*1000
+          const elapsed=now-cycleStartedAtRef.current
+          if(elapsed>=cycleMs){cycleStartedAtRef.current=now;setProgress(0);addLog(`Analysis window completed (${analysisDuration}s); beginning the next rolling scan with refreshed market data.`)}
+          else setProgress(Math.min(99,(elapsed/cycleMs)*100))
           if(now-lastScanAt<500||scanInFlightRef.current)return
           lastScanAt=now
           scanInFlightRef.current=true
@@ -158,7 +161,7 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
               setFinalSignal({researchOnly:true,market:label,option:best.report.candidate.option,contractDuration:`${durationValue} ${timeframeUnit}`,sampleSize:best.report.sampleSize,marketCount:candidates.length,score:best.report.candidate.score,detail:'Top-ranked live setup. Relative research score only, not a verified win probability; automated entry still requires independent calibration and payout validation.'})
             }
           } catch(error) { addLog(`Strategy research error: ${error.message}`) }
-          finally { scanInFlightRef.current=false;setProgress(100) }
+          finally { scanInFlightRef.current=false;setProgress(Math.min(99,((Date.now()-cycleStartedAtRef.current)/(analysisDuration*1000))*100)) }
         },250)
       }
       ws.onmessage=event=>{
@@ -198,7 +201,7 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
       <div className="grid grid-cols-2 gap-3"><div><label className="text-[10px] text-mwathe-gray uppercase font-bold">Trade Type</label><select value={tradeType} onChange={e=>setTradeType(e.target.value)} disabled={isAnalyzing} className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1">{TRADE_TYPES.map(t=><option key={t}>{t}</option>)}</select></div>{SUB_TRADE_TYPES[tradeType]?.length>0&&<div><label className="text-[10px] text-mwathe-gray uppercase font-bold">Sub Type</label><select value={subTradeType} onChange={e=>setSubTradeType(e.target.value)} disabled={isAnalyzing} className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1">{SUB_TRADE_TYPES[tradeType].map(t=><option key={t}>{t}</option>)}</select></div>}</div>
       {subTradeType&&OPTIONS[subTradeType]&&<div><label className="text-[10px] text-mwathe-gray uppercase font-bold mb-1 block">Option</label><div className="grid grid-cols-3 gap-2">{OPTIONS[subTradeType].map(opt=><button key={opt} onClick={()=>setOption(opt)} disabled={isAnalyzing} className={`py-1.5 rounded-lg text-xs font-bold border ${option===opt?'bg-mwathe-green/20 border-mwathe-green text-mwathe-green':'bg-mwathe-black border-gray-700 text-mwathe-gray'}`}>{opt}</button>)}</div></div>}
       <div className="grid grid-cols-2 gap-3"><div><label className="text-[10px] text-mwathe-gray uppercase font-bold">Contract Time Frame</label>{rules.fixed?<input value={rules.label} disabled className="w-full bg-mwathe-black/50 border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1"/>:<select value={timeframeUnit} onChange={e=>{setTimeframeUnit(e.target.value);setDurationValue(rules.min)}} disabled={isAnalyzing} className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1">{rules.units.map(u=><option key={u}>{u}</option>)}</select>}</div><div><label className="text-[10px] text-mwathe-gray uppercase font-bold">Duration</label><input type="number" value={durationValue} onChange={e=>setDurationValue(Number(e.target.value)||0)} disabled={isAnalyzing||rules.fixed} className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1"/></div></div>
-      <div className="grid grid-cols-2 gap-3"><div><label className="text-[10px] text-mwathe-gray uppercase font-bold">Analysis Window: {analysisDuration}s</label><input type="range" min="5" max="60" value={analysisDuration} onChange={e=>setAnalysisDuration(Number(e.target.value))} disabled={isAnalyzing} className="w-full accent-mwathe-green mt-1"/></div>{tradeType==='Digits'&&<div><label className="text-[10px] text-mwathe-gray uppercase font-bold">History Ticks (50-500)</label><input type="number" min="50" max="500" value={lastDigits} onChange={e=>setLastDigits(Math.max(50,Math.min(500,Number(e.target.value))))} disabled={isAnalyzing} className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1"/></div>}</div>
+      <div className="grid grid-cols-2 gap-3"><div><label className="text-[10px] text-mwathe-gray uppercase font-bold">Analysis Window: {analysisDuration}s</label><input type="range" min="10" max="59" value={analysisDuration} onChange={e=>setAnalysisDuration(Number(e.target.value))} disabled={isAnalyzing} className="w-full accent-mwathe-green mt-1"/></div>{tradeType==='Digits'&&<div><label className="text-[10px] text-mwathe-gray uppercase font-bold">History Ticks (200-500)</label><input type="number" min="200" max="500" value={lastDigits} onChange={e=>setLastDigits(Math.max(200,Math.min(500,Number(e.target.value))))} disabled={isAnalyzing} className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1"/></div>}</div>
       {tradeType==='Digits'&&<div><label className="text-[10px] text-mwathe-gray uppercase font-bold">Target Digit (0-9)</label><input type="number" min="0" max="9" value={predictedDigit} onChange={e=>setPredictedDigit(e.target.value)} disabled={isAnalyzing} className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1"/></div>}
     </div>
     {(isAnalyzing||progress>=100)&&<div className="rounded-xl p-3 border bg-mwathe-darkgray/50 border-mwathe-skyblue/30"><div className="flex items-center justify-between mb-2"><h3 className="text-xs font-bold flex items-center gap-1 text-mwathe-skyblue">{progress>=100?<><CheckCircle2 size={12}/> Scan complete</>:<><Activity size={12} className="animate-pulse"/> Scanning live markets...</>}</h3><span className="text-[10px] font-bold">{Math.round(progress)}%</span></div><div className="w-full bg-gray-800 h-2 rounded-full overflow-hidden"><motion.div className="h-full bg-gradient-to-r from-mwathe-orange to-mwathe-green" initial={{width:0}} animate={{width:`${progress}%`}}/></div></div>}
