@@ -35,6 +35,13 @@ export async function rankLiveMarketOpportunities(markets, config = {}, {
         : timeframeUnit === 'Minutes' ? duration * 60 : duration;
     const createdAt = now;
     const marketName = market.name || market.symbol;
+    const deltas = prices.slice(1).map((value, index) => value - prices[index]);
+    const averageMove = deltas.length ? deltas.reduce((sum, value) => sum + Math.abs(value), 0) / deltas.length : 0;
+    const isDown = ['Fall', 'Lower', 'Down', 'Put', 'No Touch'].includes(candidate.option);
+    const needsBarrier = config.tradeType === 'Touch & No Touch' || (config.tradeType === 'Ups & Downs' && config.subTradeType === 'Higher/Lower');
+    const derivedBarrier = needsBarrier
+      ? (isDown ? '-' : '+') + Math.max(averageMove * (config.tradeType === 'Touch & No Touch' ? 3 : 2), Math.abs(entryPoint) * 0.0001).toFixed(4)
+      : '';
     const signal = {
       id: `live-${market.symbol}-${createdAt}`,
       source: 'unified-live-opportunity-engine',
@@ -45,7 +52,7 @@ export async function rankLiveMarketOpportunities(markets, config = {}, {
       subTradeType: config.subTradeType,
       option: candidate.option,
       predictedDigit: Number(config.predictedDigit),
-      barrier: config.tradeType === 'Digits' ? String(config.predictedDigit) : (candidate.barrier || config.barrier || ''),
+      barrier: config.tradeType === 'Digits' ? String(config.predictedDigit) : (candidate.barrier || config.barrier || derivedBarrier),
       entryPoint,
       entryDigit: config.tradeType === 'Digits' ? Number(String(entryPoint).split('.').at(-1).slice(-1)) : undefined,
       duration,
