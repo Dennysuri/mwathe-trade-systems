@@ -68,3 +68,44 @@ export async function rankLiveMarketOpportunities(markets, config = {}, {
 
   return evaluated.filter(Boolean).sort((a, b) => b.score - a.score);
 }
+
+
+/**
+ * Last-moment entry guard. It rejects a candidate if its signal or market feed
+ * has aged, or if price has moved materially since the ranked entry snapshot.
+ * This is a freshness/slippage guard, not a win-probability estimator.
+ */
+export function validateLiveOpportunity(signal, market, {
+  now = Date.now(),
+  maxSignalAgeMs = 1500,
+  maxMarketAgeMs = 1500,
+  maxDriftMultiples = 2.5
+} = {}) {
+  const createdAt = Number(signal?.createdAt || 0);
+  const signalAgeMs = now - createdAt;
+  if (!createdAt || signalAgeMs < 0 || signalAgeMs > maxSignalAgeMs) {
+    return { valid: false, reason: 'Signal expired before execution.', signalAgeMs };
+  }
+  const lastLiveAt = Number(market?.lastLiveAt || 0);
+  const marketAgeMs = now - lastLiveAt;
+  if (!lastLiveAt || marketAgeMs < 0 || marketAgeMs > maxMarketAgeMs) {
+    return { valid: false, reason: 'Latest market tick is stale.', marketAgeMs };
+  }
+  const prices = (market?.prices || []).map(Number).filter(Number.isFinite);
+  if (prices.length < 3) return { valid: false, reason: 'Insufficient live price context.' };
+  const entryPoint = Number(signal?.entryPoint);
+  const latestPrice = prices.at(-1);
+  if (!Number.isFinite(entryPoint) || !Number.isFinite(latestPrice)) {
+    return { valid: false, reason: 'Entry or latest price is invalid.' };
+  }
+  const recent = prices.slice(-21);
+  const moves = recent.slice(1).map((price, index) => Math.abs(price - recent[index])).filter(Number.isFinite);
+  const averageMove = moves.length ? moves.reduce((sum, move) => sum + move, 0) / moves.length : 0;
+  const minimumTolerance = Math.max(Math.abs(entryPoint) * 1e-8, Number.EPSILON);
+  const allowedDrift = Math.max(minimumTolerance, averageMove * maxDriftMultiples);
+  const drift = Math.abs(latestPrice - entryPoint);
+  if (drift > allowedDrift) {
+    return { valid: false, reason: 'Market moved outside the acceptable entry range.', marketAgeMs, latestPrice, drift, allowedDrift };
+  }
+  return { valid: true, signalAgeMs, marketAgeMs, latestPrice, drift, allowedDrift };
+}
