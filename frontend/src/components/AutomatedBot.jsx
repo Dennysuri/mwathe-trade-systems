@@ -56,6 +56,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const lastFailedDirectionRef = useRef(null)
   const consecutiveLossesRef = useRef(0)
   const recoveryStartTimeRef = useRef(null)
+  const lastResearchNoticeRef = useRef('')
 
   const addLog = (msg) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`])
   useEffect(() => { if (logRef.current) requestAnimationFrame(() => { logRef.current.scrollTop = logRef.current.scrollHeight }) }, [logs])
@@ -331,9 +332,6 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
 
         const currentTarget = recoveryQueue[recoveryIndex]
         const tradeDirection = currentTarget.selectedOption || option
-        setBestMarket(currentTarget.name); setConfluenceScore(currentTarget.score)
-        addLog(`🎯 LOCKED: ${currentTarget.name} | Score: ${currentTarget.score}% | Direction: ${tradeDirection}`)
-        addLog('🚀 EXECUTING...')
         
         const spot = tickDataRef.current[currentTarget.symbol]?.at(-1)
         const recentTicks = (tickDataRef.current[currentTarget.symbol] || []).slice(-15)
@@ -352,7 +350,20 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           growthRate: 0.01, multiplier: 100, takeProfit: 1, contractStopLoss: 1
         }
         const researchReport = await evaluateStrategyEnsemble(tickDataRef.current[currentTarget.symbol] || [], signal)
-        if (!researchReport.ready || !researchReport.tradable) { const candidate=researchReport.candidate; if(candidate) addLog(`Thamira candidate: ${candidate.option} | relative score ${candidate.score}/94. Execution remains gated pending independent calibration and payout validation.`); await new Promise(r => setTimeout(r, 500)); continue }
+        if (!researchReport.ready || !researchReport.tradable) {
+          const candidate = researchReport.candidate || researchReport.watchCandidate
+          const noticeKey = [currentTarget.symbol, tradeType, subTradeType, candidate?.option || tradeDirection, candidate?.score ?? currentTarget.score, researchReport.decision].join('|')
+          if (noticeKey !== lastResearchNoticeRef.current) {
+            lastResearchNoticeRef.current = noticeKey
+            addLog(`🔬 CANDIDATE ONLY: ${currentTarget.name} | ${candidate?.option || tradeDirection} | Relative score ${candidate?.score ?? currentTarget.score}/94. No order sent: execution is gated pending independent calibration and payout validation.`)
+          }
+          await new Promise(r => setTimeout(r, 2000))
+          continue
+        }
+        lastResearchNoticeRef.current = ''
+        setBestMarket(currentTarget.name); setConfluenceScore(currentTarget.score)
+        addLog(`🎯 LOCKED: ${currentTarget.name} | Score: ${currentTarget.score}% | Direction: ${tradeDirection}`)
+        addLog('🚀 EXECUTING...')
         const proposalReq = buildProposal(signal, roundStake(currentStakeRef.current))
         const available = await wsRequest({ contracts_for: currentTarget.symbol, currency: 'USD' })
         if (!JSON.stringify(available.contracts_for || {}).includes(proposalReq.contract_type)) throw new Error(`Deriv does not offer ${proposalReq.contract_type} for ${currentTarget.name}. No trade was sent.`)
@@ -370,6 +381,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         if (isWin) {
           winsRef.current += 1; currentStakeRef.current = parseFloat(stake); recoveryIndex = 0
           lastFailedDirectionRef.current = null; consecutiveLossesRef.current = 0; recoveryStartTimeRef.current = null
+    lastResearchNoticeRef.current = ''
           setCurrentStake(currentStakeRef.current)
           addLog(`✅ WON +$${profit.toFixed(2)} | Stake reset to base`)
         } else {
