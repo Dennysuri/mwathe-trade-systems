@@ -143,10 +143,13 @@ function rankOpportunity(strategies, config) {
   const digit = strategies.find(s => s.family === 'digit-distribution');
   if (digit) {
     const options = digit.metrics.options || [];
-    const best = options.reduce((a, b) => !a || b.edge > a.edge ? b : a, null);
+    const best = config.option && config.option !== 'Both'
+      ? options.find(item => item.option === config.option) || null
+      : options.reduce((a, b) => !a || b.edge > a.edge ? b : a, null);
     const transition = strategies.find(s => s.family === 'digit-transition');
     const conditional = transition?.metrics.options?.find(x => x.option === best?.option);
-    const edge = Math.max(0, best?.edge || 0);
+    if (!best) return null;
+    const edge = Math.max(0, best.edge || 0);
     const conditionalEdge = Math.max(0, (conditional?.observed || 0) - (conditional?.baseline || 0));
     const score = clamp(50 + edge * 240 + conditionalEdge * 100, 0, 94);
     return { option: best?.option || config.option, score: Math.round(score),
