@@ -220,7 +220,7 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
     addLog('Selected-parameter validation started. Background market research was already running.')
   }
   const handleStop=()=>{stopScanner();cycleBestRef.current=null;addLog('Selected validation and signal publication stopped. Continuous market research remains active.')}
-  const handleReset=()=>{stopScanner();cycleBestRef.current=null;cycleStartedAtRef.current=Date.now();lastEmittedSignalRef.current={};setProgress(0);setFinalSignal(null);setValidationError('');setAiLogs([]);setTradeType('Digits');setSubTradeType('Over/Under');setOption('Over');setPredictedDigit('5');setAnalysisDuration(10);setLastDigits(300);setTimeframeUnit('Ticks');setDurationValue(5)}
+  const handleReset=()=>{cycleBestRef.current=null;if(activeRef.current){cycleStartedAtRef.current=Date.now();setProgress(0)}setFinalSignal(null);setValidationError('');setAiLogs([])}
   const windowSpot=symbol=>{const values=windowsRef.current[symbol]?.values;return values?.length?Number(values[values.length-1]):null}
   const rules=TIMEFRAME_RULES[tradeType]
   return <div className="h-full overflow-y-auto bg-mwathe-black text-mwathe-white p-4 space-y-4">
