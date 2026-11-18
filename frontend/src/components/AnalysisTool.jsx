@@ -92,6 +92,7 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
       const ws=new WebSocket(url);wsRef.current=ws
       ws.onopen=()=>{
         if(!activeRef.current)return
+        cycleStartedAtRef.current=Date.now()
         ws.send(JSON.stringify({balance:1,req_id:900001}))
         MARKET_SYMBOLS.forEach((symbol,index)=>ws.send(JSON.stringify({ticks_history:symbol,count:Math.max(200,lastDigits),end:'latest',style:'ticks',subscribe:1,req_id:910000+index})))
         addLog('Historical windows requested; live tick subscriptions started across volatility markets.')
