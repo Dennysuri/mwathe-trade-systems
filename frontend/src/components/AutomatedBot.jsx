@@ -3,6 +3,7 @@ import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, Shi
 import { boundedNextStake, buildProposal } from '../services/tradingCore'
 import { evaluateStrategyEnsemble, validateEntryWindow } from '../services/strategyIntelligence'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
+import { appendTickBuffer, seedTickBuffer } from '../services/marketTickBuffer'
 
 const SYMBOL_MAP = { 
   'Volatility 10 (1s) Index': 'R_10', 'Volatility 10 Index': 'R_10', 'Volatility 15 (1s) Index': 'R_15',
@@ -48,7 +49,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const [confluenceScore, setConfluenceScore] = useState(0)
   
   const logRef = useRef(null); const wsRef = useRef(null); const isRunningRef = useRef(false); const reqIdRef = useRef(1)
-  const tickDataRef = useRef({}); const currentStakeRef = useRef(1.00); const sessionPLRef = useRef(0.00)
+  const tickDataRef = useRef({}); const historySeededRef = useRef({}); const pendingLiveTicksRef = useRef({}); const currentStakeRef = useRef(1.00); const sessionPLRef = useRef(0.00)
   const totalTradesRef = useRef(0); const winsRef = useRef(0); const lossesRef = useRef(0)
   const historyLoadedRef = useRef(false)
   const hasLoggedScanningRef = useRef(false); const reconnectAttemptsRef = useRef(0)
@@ -96,10 +97,21 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         ws.onmessage = (event) => {
           try {
             const msg = JSON.parse(event.data)
-            if (msg.msg_type === 'history' && msg.history.prices) tickDataRef.current[msg.history.symbol] = msg.history.prices.map(p => parseFloat(p))
-            if (msg.msg_type === 'tick') {
-              if (!tickDataRef.current[msg.tick.symbol]) tickDataRef.current[msg.tick.symbol] = []
-              tickDataRef.current[msg.tick.symbol] = [...tickDataRef.current[msg.tick.symbol], msg.tick.quote].slice(-100)
+            if (msg.msg_type === 'history' && msg.history?.prices) {
+              const symbol = msg.history.symbol || msg.echo_req?.ticks_history
+              if (symbol) {
+                tickDataRef.current[symbol] = seedTickBuffer(msg.history.prices, pendingLiveTicksRef.current[symbol] || [])
+                historySeededRef.current[symbol] = true
+                delete pendingLiveTicksRef.current[symbol]
+              }
+            }
+            if (msg.msg_type === 'tick' && msg.tick?.symbol) {
+              const symbol = msg.tick.symbol
+              if (historySeededRef.current[symbol]) {
+                tickDataRef.current[symbol] = appendTickBuffer(tickDataRef.current[symbol], msg.tick.quote)
+              } else {
+                pendingLiveTicksRef.current[symbol] = appendTickBuffer(pendingLiveTicksRef.current[symbol], msg.tick.quote)
+              }
             }
             if (msg.msg_type === 'balance' && onBalanceUpdate) onBalanceUpdate(parseFloat(msg.balance.balance))
           } catch (e) {}
@@ -139,13 +151,12 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
             const msg = JSON.parse(event.data)
             if (msg.req_id === reqId && msg.msg_type === 'history') {
               wsRef.current.removeEventListener('message', onMessage)
-              if (msg.history.prices) tickDataRef.current[sym] = msg.history.prices.map(p => parseFloat(p))
               checkDone()
             }
           } catch (e) {}
         }
         wsRef.current.addEventListener('message', onMessage)
-        wsRef.current.send(JSON.stringify({ ticks_history: sym, count: 50, end: 'latest', style: 'ticks', subscribe: 1, req_id: reqId }))
+        wsRef.current.send(JSON.stringify({ ticks_history: sym, count: 250, end: 'latest', style: 'ticks', subscribe: 1, req_id: reqId }))
       })
       setTimeout(() => { historyLoadedRef.current = true; resolve() }, 4000)
     })
