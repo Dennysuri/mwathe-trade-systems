@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Zap } from 'lucide-react'
 import { boundedNextStake, buildProposal } from '../services/tradingCore'
-import { evaluateStrategyEnsemble, validateEntryWindow } from '../services/strategyIntelligence'
+import { validateEntryWindow } from '../services/strategyIntelligence'
+import { rankLiveMarketOpportunities } from '../services/liveOpportunityEngine'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
 import { appendTickBuffer, seedTickBuffer } from '../services/marketTickBuffer'
 
@@ -49,7 +50,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const [confluenceScore, setConfluenceScore] = useState(0)
   
   const logRef = useRef(null); const wsRef = useRef(null); const isRunningRef = useRef(false); const reqIdRef = useRef(1)
-  const tickDataRef = useRef({}); const historySeededRef = useRef({}); const pendingLiveTicksRef = useRef({}); const currentStakeRef = useRef(1.00); const sessionPLRef = useRef(0.00)
+  const tickDataRef = useRef({}); const historySeededRef = useRef({}); const pendingLiveTicksRef = useRef({}); const lastLiveAtRef = useRef({}); const liveTickCountRef = useRef({}); const currentStakeRef = useRef(1.00); const sessionPLRef = useRef(0.00)
   const totalTradesRef = useRef(0); const winsRef = useRef(0); const lossesRef = useRef(0)
   const historyLoadedRef = useRef(false)
   const hasLoggedScanningRef = useRef(false); const reconnectAttemptsRef = useRef(0)
@@ -102,6 +103,8 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
               if (symbol) {
                 tickDataRef.current[symbol] = seedTickBuffer(msg.history.prices, pendingLiveTicksRef.current[symbol] || [])
                 historySeededRef.current[symbol] = true
+                lastLiveAtRef.current[symbol] = 0
+                liveTickCountRef.current[symbol] = 0
                 delete pendingLiveTicksRef.current[symbol]
               }
             }
@@ -109,6 +112,8 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
               const symbol = msg.tick.symbol
               if (historySeededRef.current[symbol]) {
                 tickDataRef.current[symbol] = appendTickBuffer(tickDataRef.current[symbol], msg.tick.quote)
+                lastLiveAtRef.current[symbol] = Date.now()
+                liveTickCountRef.current[symbol] = (liveTickCountRef.current[symbol] || 0) + 1
               } else {
                 pendingLiveTicksRef.current[symbol] = appendTickBuffer(pendingLiveTicksRef.current[symbol], msg.tick.quote)
               }
@@ -209,110 +214,17 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     })
   }
 
-  // HARD GATES & SCORING ENGINE
-  const calculateConfluence = (symbol, isRecovery) => {
-    const ticks = tickDataRef.current[symbol]
-    if (!ticks || ticks.length < 30) return { score: 0, selectedDigit: null, selectedOption: null }
-    
-    let score = 0
-    const digits = ticks.map(getLastDigit)
-    let selectedDigit = null
-    let selectedOption = option
-    
-    // Sub-Type Intelligence
-    if (tradeType === 'Digits' && subTradeType === 'Matches/Differs') {
-      if (isRecovery && (option === 'Matches' || option === 'Both')) selectedOption = 'Differs'
-      else if (option === 'Both') selectedOption = 'Differs'
-      else selectedOption = option
-    }
-    
-    // Calculate Global Indicators for Gates
-    const hurst = calcHurst(ticks)
-    const atr = calcATR(ticks, 14)
-    const kalman = calcKalman(ticks)
-    const currentPrice = ticks[ticks.length - 1]
-    const last5 = ticks.slice(-5)
-    const last20 = ticks.slice(-20)
-    const slope5 = last5[last5.length-1] - last5[0]
-    const slope20 = last20[last20.length-1] - last20[0]
-
-    if (tradeType === 'Digits') {
-      const td = Math.max(0,Math.min(9,parseInt(predictedDigit,10)||0))
-      const previous = digits[digits.length-1]
-      const transitions = digits.slice(0,-1).reduce((acc,d,i)=>{if(d===previous)acc.push(digits[i+1]);return acc},[])
-      if (transitions.length < 8) return { score: 0, selectedDigit: null, selectedOption: null }
-      const eventRate = predicate => (transitions.filter(predicate).length + 1) / (transitions.length + 2)
-      const candidates = subTradeType === 'Over/Under'
-        ? [{name:'Over',p:eventRate(d=>d>td),base:(9-td)/10},{name:'Under',p:eventRate(d=>d<td),base:td/10}]
-        : subTradeType === 'Matches/Differs'
-          ? [{name:'Matches',p:eventRate(d=>d===td),base:0.1},{name:'Differs',p:eventRate(d=>d!==td),base:0.9}]
-          : [{name:'Even',p:eventRate(d=>d%2===0),base:0.5},{name:'Odd',p:eventRate(d=>d%2===1),base:0.5}]
-      const selected = option === 'Both' ? candidates.sort((x,y)=>(y.p-y.base)-(x.p-x.base))[0] : candidates.find(x=>x.name===option)
-      if (!selected) return { score: 0, selectedDigit: null, selectedOption: null }
-      const edge=selected.p-selected.base
-      score=edge>0.04?Math.min(90,Math.round(50+edge*400)):0
-      selectedOption=selected.name
-      selectedDigit=td
-    } else if (tradeType === 'Ups & Downs' || tradeType === 'Multipliers' || tradeType === 'Turbos' || tradeType === 'Vanillas') {
-      // HARD GATE 1: Market Regime (Must be trending)
-      if (hurst < 0.55) return { score: 0, selectedDigit: null, selectedOption: null }
-      // HARD GATE 2: Volatility (Must have movement)
-      if (atr < 0.0005) return { score: 0, selectedDigit: null, selectedOption: null }
-      // HARD GATE 3: Multi-Timeframe Alignment
-      if ((slope5 > 0 && slope20 < 0) || (slope5 < 0 && slope20 > 0)) return { score: 0, selectedDigit: null, selectedOption: null }
-
-      if (option === 'Both') selectedOption = currentPrice > kalman ? (tradeType === 'Vanillas' ? 'Call' : 'Rise') : (tradeType === 'Vanillas' ? 'Put' : 'Fall')
-      if (isRecovery && lastFailedDirectionRef.current) {
-         if (tradeType === 'Vanillas') selectedOption = lastFailedDirectionRef.current === 'Call' ? 'Put' : 'Call'
-         else selectedOption = lastFailedDirectionRef.current === 'Rise' ? 'Fall' : 'Rise'
-      }
-      
-      const isUp = selectedOption === 'Rise' || selectedOption === 'Higher' || selectedOption === 'Up' || selectedOption === 'Call'
-      if (isUp) { 
-        if (hurst > 0.7) score += 50; else if (hurst > 0.6) score += 30
-        if (currentPrice > kalman) score += 30
-        if (ticks[ticks.length-1] > ticks[ticks.length-2]) score += 20 
-      } else { 
-        if (hurst > 0.7) score += 50; else if (hurst > 0.6) score += 30
-        if (currentPrice < kalman) score += 30
-        if (ticks[ticks.length-1] < ticks[ticks.length-2]) score += 20 
-      }
-    } else if (tradeType === 'Touch & No Touch') {
-      if (atr < 0.0002) return { score: 0, selectedDigit: null, selectedOption: null }
-      const barrier = parseFloat(predictedDigit || 0); const distance = Math.abs(currentPrice - barrier)
-      if (option === 'Both') selectedOption = atr > 0.005 ? 'Touch' : 'No Touch'
-      if (isRecovery && lastFailedDirectionRef.current) selectedOption = lastFailedDirectionRef.current === 'Touch' ? 'No Touch' : 'Touch'
-      if (selectedOption === 'Touch') { if (atr > 0.008) score += 40; if (distance < 0.005) score += 40 } 
-      else { if (atr < 0.001) score += 40; if (distance > 0.01) score += 40 }
-    } else if (tradeType === 'Accumulators') {
-      if (hurst > 0.65) return { score: 0, selectedDigit: null, selectedOption: null }
-      const entropy = calcEntropy(digits)
-      if (entropy < 2.0) score += 40; else if (entropy < 2.5) score += 25
-      if (atr < 0.001) score += 40; else if (atr < 0.002) score += 25
-    }
-    return { score: Math.min(score, 99), selectedDigit, selectedOption }
-  }
-
-  const scanMarkets = (isRecovery) => {
-    const allMarkets = [];
-    const threshold = isRecovery ? 75 : 70;
-    
-    UNIQUE_MARKETS.forEach(([name,sym]) => {
-      const res = calculateConfluence(sym, isRecovery)
-      allMarkets.push({ symbol: sym, score: res.score, name, selectedDigit: res.selectedDigit, selectedOption: res.selectedOption })
-    });
-
-    const validMarkets = allMarkets.filter(m => m.score >= threshold);
-    
-    // Relative Best Logic for Recovery
-    if (isRecovery && recoveryStartTimeRef.current) {
-      const waitTime = Date.now() - recoveryStartTimeRef.current;
-      if (waitTime > 45000 && validMarkets.length === 0) {
-        return []; // Do not lower the quality threshold after a timeout
-      }
-    }
-
-    return validMarkets.sort((a, b) => b.score - a.score);
+  // Shared market + contract ranking. A market is considered only after fresh live ticks.
+  const scanMarkets = async () => {
+    const markets = UNIQUE_MARKETS.map(([name, symbol]) => ({
+      name, symbol, prices: tickDataRef.current[symbol] || [],
+      lastLiveAt: lastLiveAtRef.current[symbol] || 0,
+      liveTicks: liveTickCountRef.current[symbol] || 0
+    }))
+    return rankLiveMarketOpportunities(markets, {
+      tradeType, subTradeType, option, predictedDigit: Number(predictedDigit),
+      duration: durationValue, timeframeUnit
+    }, { now: Date.now(), maxAgeMs: 5000, minLiveTicks: 1 })
   }
 
   const runTradeCycle = async () => {
@@ -326,7 +238,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const isRecovery = currentStakeRef.current > parseFloat(stake)
         
         if (recoveryQueue.length === 0 || recoveryIndex >= recoveryQueue.length) {
-          recoveryQueue = scanMarkets(isRecovery)
+          recoveryQueue = await scanMarkets()
           recoveryIndex = 0
           
           // STRICT NO REPEAT LOGGING
@@ -342,38 +254,25 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         }
 
         const currentTarget = recoveryQueue[recoveryIndex]
-        const tradeDirection = currentTarget.selectedOption || option
-        
-        const spot = tickDataRef.current[currentTarget.symbol]?.at(-1)
-        const recentTicks = (tickDataRef.current[currentTarget.symbol] || []).slice(-15)
-        const atrNow = calcATR(recentTicks, Math.min(14, Math.max(2, recentTicks.length - 1))) || Math.abs(spot || 1) * 0.0001
-        let barrier = null
-        if (tradeType === 'Digits' && ['Over/Under','Matches/Differs'].includes(subTradeType)) barrier = String(currentTarget.selectedDigit ?? predictedDigit)
-        if (tradeType === 'Touch & No Touch' || (tradeType === 'Ups & Downs' && subTradeType === 'Higher/Lower')) {
-          const isDown = ['Fall','Lower','Down','Put','No Touch'].includes(tradeDirection)
-          barrier = (isDown ? '-' : '+') + Math.max(atrNow * (tradeType === 'Touch & No Touch' ? 3 : 2), Math.abs(spot || 1) * 0.0001).toFixed(4)
-        }
         const signal = {
-          symbol: currentTarget.symbol, tradeType, subTradeType, option: tradeDirection,
-          predictedDigit: currentTarget.selectedDigit ?? predictedDigit, barrier,
-          duration: durationValue, timeframeUnit, createdAt: Date.now(),
-          expiryEpoch: Math.floor(Date.now()/1000) + Math.max(60, durationValue * (timeframeUnit === 'Hours' ? 3600 : timeframeUnit === 'Days' ? 86400 : timeframeUnit === 'Minutes' ? 60 : 1)),
+          ...currentTarget.signal,
           growthRate: 0.01, multiplier: 100, takeProfit: 1, contractStopLoss: 1
         }
-        const researchReport = await evaluateStrategyEnsemble(tickDataRef.current[currentTarget.symbol] || [], signal)
+        const tradeDirection = signal.option
+        const researchReport = currentTarget.report
         if (!researchReport.ready || !researchReport.tradable) {
-          const candidate = researchReport.candidate || researchReport.watchCandidate
+          const candidate = researchReport.candidate
           const noticeKey = [currentTarget.symbol, tradeType, subTradeType, candidate?.option || tradeDirection, candidate?.score ?? currentTarget.score, researchReport.decision].join('|')
           if (noticeKey !== lastResearchNoticeRef.current) {
             lastResearchNoticeRef.current = noticeKey
-            addLog(`🔬 CANDIDATE ONLY: ${currentTarget.name} | ${candidate?.option || tradeDirection} | Relative score ${candidate?.score ?? currentTarget.score}/94. No order sent: execution is gated pending independent calibration and payout validation.`)
+            addLog(`🔬 CANDIDATE ONLY: ${currentTarget.marketName} | ${candidate?.option || tradeDirection} | Relative score ${candidate?.score ?? currentTarget.score}/94. No order sent: execution remains gated pending independent calibration and payout validation.`)
           }
-          await new Promise(r => setTimeout(r, 2000))
+          await new Promise(r => setTimeout(r, 1000))
           continue
         }
         lastResearchNoticeRef.current = ''
-        setBestMarket(currentTarget.name); setConfluenceScore(currentTarget.score)
-        addLog(`🎯 LOCKED: ${currentTarget.name} | Score: ${currentTarget.score}% | Direction: ${tradeDirection}`)
+        setBestMarket(currentTarget.marketName); setConfluenceScore(currentTarget.score)
+        addLog(`🎯 LOCKED: ${currentTarget.marketName} | Score: ${currentTarget.score}% | Direction: ${tradeDirection}`)
         addLog('🚀 EXECUTING...')
         const proposalReq = buildProposal(signal, roundStake(currentStakeRef.current))
         const available = await wsRequest({ contracts_for: currentTarget.symbol, currency: 'USD' })
