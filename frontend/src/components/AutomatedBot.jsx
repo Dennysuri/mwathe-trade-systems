@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Zap } from 'lucide-react'
 import { boundedNextStake, buildProposal } from '../services/tradingCore'
 import { evaluateStrategyEnsemble, validateEntryWindow } from '../services/strategyIntelligence'
+import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
 
 const SYMBOL_MAP = { 
   'Volatility 10 (1s) Index': 'R_10', 'Volatility 10 Index': 'R_10', 'Volatility 15 (1s) Index': 'R_15',
@@ -362,6 +363,8 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         
         const contractResult = await monitorContract(buyRes.buy.contract_id); if (!contractResult) break
         const profit = parseFloat(contractResult.profit || 0); const isWin = profit > 0
+        const performance = recordContractOutcome(signal, { profit, stake: currentStakeRef.current, contractId: contractResult.contract_id, bot: 'Automated Bot' })
+        if (performance) addLog(`Thamira history: ${performance.trades} settled for this exact setup; win rate ${performance.winRate === null ? 'n/a' : (performance.winRate * 100).toFixed(1) + '%'}.`)
         totalTradesRef.current += 1; sessionPLRef.current += profit
         
         if (isWin) {
@@ -375,7 +378,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           if (!recoveryStartTimeRef.current) recoveryStartTimeRef.current = Date.now();
           currentStakeRef.current = boundedNextStake(stake, currentStakeRef.current, martingaleFactor, consecutiveLossesRef.current)
           setCurrentStake(currentStakeRef.current)
-          if (consecutiveLossesRef.current >= 2) { addLog('🛑 Recovery cap reached after two consecutive losses. Stopping bot.'); isRunningRef.current = false; setIsRunning(false) } else addLog(`⚠️ ${consecutiveLossesRef.current} consecutive loss - Pausing recovery and rotating market`)
+          if (consecutiveLossesRef.current >= 2) addLog(`⚠️ ${consecutiveLossesRef.current} consecutive losses - continuing bounded recovery and rotating market`)
           addLog(`❌ LOST -$${profit.toFixed(2)} | Rotating to next market → Next: $${currentStakeRef.current.toFixed(2)}`)
         }
         

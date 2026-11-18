@@ -1,3 +1,5 @@
+import { getContractPerformance } from './contractOutcomeIntelligence.js';
+
 /**
  * Mwathe Strategy Intelligence
  * Deterministic research evaluators only: this module never places orders and
@@ -183,15 +185,20 @@ export async function evaluateStrategyEnsemble(prices, config = {}) {
   const strategyGroups = await Promise.all(jobs.map(run => Promise.resolve().then(run)));
   const strategies = strategyGroups.flat();
   const candidate = rankOpportunity(strategies, config);
-  const promising = Boolean(candidate && candidate.score >= 62);
+  const historyConfig = { ...config, option: candidate?.option ?? config.option };
+  const historicalPerformance = config.symbol
+    ? getContractPerformance(historyConfig)
+    : { trades: 0, wins: 0, losses: 0, winRate: null, netProfit: 0, sampleSufficient: false };
+  const historicallyWeak = historicalPerformance.trades >= 30 && historicalPerformance.netProfit <= 0;
+  const promising = Boolean(candidate && candidate.score >= 62 && !historicallyWeak);
   return {
-    ready: true, tradable: false, sampleSize: clean.length, strategies,
+    ready: true, tradable: false, sampleSize: clean.length, strategies, historicalPerformance,
     candidate: promising ? candidate : null,
     watchCandidate: candidate, conviction: candidate?.score ?? null,
-    decision: promising ? 'CANDIDATE' : 'MONITOR',
+    decision: historicallyWeak ? 'HISTORICALLY_WEAK' : promising ? 'CANDIDATE' : 'MONITOR',
     reasons: promising
-      ? ['A comparatively strong live setup was detected; this score is a ranking aid, not a calibrated win probability.', 'Automated execution remains gated pending independent validation and payout-aware expected value.']
-      : ['No setup currently meets the relative-strength threshold; continue scanning without a long pause.']
+      ? ['A comparatively strong live setup was detected; this score is a ranking aid, not a calibrated win probability.', 'Automated execution remains gated pending independent validation and payout-aware expected value.', historicalPerformance.trades ? `Exact-configuration history: ${historicalPerformance.trades} trades, ${(historicalPerformance.winRate * 100).toFixed(1)}% wins, net ${historicalPerformance.netProfit.toFixed(2)}.` : 'No settled history exists yet for this exact configuration.']
+      : [historicallyWeak ? 'Candidate suppressed: this exact configuration has at least 30 settled trades and non-positive cumulative P/L.' : 'No setup currently meets the relative-strength threshold; continue scanning without a long pause.', historicalPerformance.trades ? `Exact-configuration history: ${historicalPerformance.trades} trades, ${(historicalPerformance.winRate * 100).toFixed(1)}% wins, net ${historicalPerformance.netProfit.toFixed(2)}.` : 'No settled history exists yet for this exact configuration.']
   };
 }
 

@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { Brain, Activity, Zap, Play, Square, Cpu, CheckCircle2 } from 'lucide-react'
-import { MARKET_SYMBOLS, VOLATILITY_MARKETS } from '../services/tradingCore'
+import { MARKET_SYMBOLS, VOLATILITY_MARKETS, buildProposal } from '../services/tradingCore'
 import { evaluateStrategyEnsemble } from '../services/strategyIntelligence'
+import { beginPaperTrial, advancePaperTrials, getPaperForwardSummary, resetPaperTrials } from '../services/paperForwardCalibration'
 
 const SUB_TRADE_TYPES = {
   Accumulators: [], Vanillas: ['Call/Put'], Turbos: ['Turbos'], Multipliers: ['Multipliers'],
@@ -66,11 +67,11 @@ const analyseSeries=(prices,config)=>{
   return {option,barrier,score,spot:prices.at(-1),detail,up,down,flat}
 }
 
-export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setProgress,aiLogs,setAiLogs,finalSignal,setFinalSignal,intervalRef,onSignalGenerated,token,accountId}){
+export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setProgress,aiLogs,setAiLogs,finalSignal,setFinalSignal,intervalRef,onSignalGenerated,token,accountId,currency='USD'}){
   const [tradeType,setTradeType]=useState('Digits'),[subTradeType,setSubTradeType]=useState('Over/Under'),[option,setOption]=useState('Over')
   const [predictedDigit,setPredictedDigit]=useState('5'),[analysisDuration,setAnalysisDuration]=useState(10),[lastDigits,setLastDigits]=useState(100)
   const [timeframeUnit,setTimeframeUnit]=useState('Ticks'),[durationValue,setDurationValue]=useState(5),[validationError,setValidationError]=useState('')
-  const wsRef=useRef(null),pricesRef=useRef({}),lastTickAtRef=useRef({}),timerRef=useRef(null),activeRef=useRef(false),scanInFlightRef=useRef(false)
+  const wsRef=useRef(null),pricesRef=useRef({}),lastTickAtRef=useRef({}),timerRef=useRef(null),activeRef=useRef(false),scanInFlightRef=useRef(false),lastEmittedSignalRef=useRef({}),proposalReqIdRef=useRef(920000),paperQuoteRequestsRef=useRef(new Map()),paperQuoteInFlightRef=useRef(new Set())
   const addLog=msg=>setAiLogs(prev=>[...prev.slice(-8),`[${new Date().toLocaleTimeString()}] ${msg}`])
   useEffect(()=>{if(SUB_TRADE_TYPES[tradeType]?.length)setSubTradeType(SUB_TRADE_TYPES[tradeType][0]);else setSubTradeType('')},[tradeType])
   useEffect(()=>{if(subTradeType&&OPTIONS[subTradeType])setOption(OPTIONS[subTradeType][0])},[subTradeType])
@@ -80,8 +81,8 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
   const handleStart=async()=>{
     setValidationError('')
     if(!token||!accountId){setValidationError('Connect a Deriv account before starting live market analysis.');return}
-    if(tradeType==='Digits'&&(!/^\\d$/.test(predictedDigit))){setValidationError('Enter a digit from 0 to 9.');return}
-    stopScanner();pricesRef.current={};lastTickAtRef.current={};setIsAnalyzing(true);setProgress(0);setAiLogs([]);setFinalSignal(null);activeRef.current=true
+    if(tradeType==='Digits'&&(!Number.isInteger(Number(predictedDigit))||predictedDigit===''||Number(predictedDigit)<0||Number(predictedDigit)>9)){setValidationError('Enter a whole-number target digit from 0 to 9.');return}
+    stopScanner();paperQuoteRequestsRef.current.clear();paperQuoteInFlightRef.current.clear();pricesRef.current={};lastTickAtRef.current={};resetPaperTrials();setIsAnalyzing(true);setProgress(0);setAiLogs([]);setFinalSignal(null);activeRef.current=true
     addLog('Connecting to authenticated Deriv market data...')
     try{
       const response=await fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'}})
@@ -106,21 +107,50 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
             const reports=await Promise.all(MARKET_SYMBOLS.map(async symbol=>{
               const fresh=now-(lastTickAtRef.current[symbol]||0)<5000
               if(!fresh)return {symbol,report:null,stale:true}
-              const report=await evaluateStrategyEnsemble(pricesRef.current[symbol]||[],config)
+              const report=await evaluateStrategyEnsemble(pricesRef.current[symbol]||[],{...config,symbol,barrier:tradeType==='Digits'?String(predictedDigit):undefined})
               return {symbol,report,stale:false}
             }))
             const ready=reports.filter(item=>item.report?.ready)
             const candidates=ready.filter(item=>item.report.candidate).sort((a,b)=>b.report.candidate.score-a.report.candidate.score)
             const top=candidates.slice(0,4)
             if(!ready.length){
-              addLog('Thamira: collecting fresh observations across all 13 markets; next scan continues immediately.')
+              addLog('Thamira: collecting fresh observations across all ${MARKET_SYMBOLS.length} markets; next scan continues immediately.')
               setFinalSignal({researchOnly:true,market:'Building live market picture',option:config.option,contractDuration:`${durationValue} ${timeframeUnit}`,sampleSize:reports.reduce((n,item)=>n+(item.report?.sampleSize||0),0),marketCount:0,detail:'Live feed remains active. Short recheck cycle; no forced entry.'})
             } else if(!top.length){
-              addLog(`Thamira: monitoring ${ready.length}/13 fresh markets — no setup currently clears the relative-strength threshold. Rechecking in 0.5s.`)
+              addLog(`Thamira: monitoring ${ready.length}/${MARKET_SYMBOLS.length} fresh markets — no setup currently clears the relative-strength threshold. Rechecking in 0.5s.`)
               setFinalSignal({researchOnly:true,market:'Thamira monitoring all markets',option:config.option,contractDuration:`${durationValue} ${timeframeUnit}`,sampleSize:ready.reduce((n,item)=>n+item.report.sampleSize,0),marketCount:ready.length,detail:'No qualifying candidate at this instant. Continuous scanning remains active.'})
             } else {
               const best=top[0],label=VOLATILITY_MARKETS.find(([,sym])=>sym===best.symbol)?.[0]||best.symbol
-              addLog(`Thamira: strongest candidate ${label} | setup score ${best.report.candidate.score}/94 | ${best.report.candidate.option}`)
+              const candidate=best.report.candidate
+              const nowSignal=Date.now()
+              const series=pricesRef.current[best.symbol]||[]
+              const deltas=series.slice(1).map((value,index)=>Math.abs(value-series[index])).filter(Number.isFinite)
+              const atr=deltas.slice(-30).reduce((sum,value)=>sum+value,0)/Math.max(1,Math.min(30,deltas.length))
+              let signalBarrier=tradeType==='Digits'?String(Number(predictedDigit)):''
+              if(tradeType==='Touch & No Touch'||subTradeType==='Higher/Lower'){
+                const down=['Fall','Lower','Down','Put','No Touch'].includes(candidate.option)
+                const distance=Math.max(atr*(tradeType==='Touch & No Touch'?3:2),Math.abs(series.at(-1)||1)*0.0001)
+                signalBarrier=(down?'-':'+')+distance.toFixed(4)
+              }
+              const signalKey=[best.symbol,tradeType,subTradeType,candidate.option,predictedDigit,signalBarrier].join('|')
+              if(candidate.option!=='Both' && nowSignal-(lastEmittedSignalRef.current[signalKey]||0)>=2000){
+                const signal={id:`analysis-${best.symbol}-${nowSignal}`,source:'analysis-tool-live',symbol:best.symbol,market:label,tradeType,subTradeType,option:candidate.option,predictedDigit:Number(predictedDigit),barrier:signalBarrier,duration:durationValue,timeframeUnit,createdAt:nowSignal,expiryEpoch:timeframeUnit==='Ticks'?undefined:Math.floor(nowSignal/1000)+Math.max(60,durationValue*(timeframeUnit==='Hours'?3600:timeframeUnit==='Days'?86400:timeframeUnit==='Minutes'?60:1)),setupScore:candidate.score,confidence:candidate.score,researchOnly:true}
+                if(onSignalGenerated) onSignalGenerated(signal)
+                lastEmittedSignalRef.current[signalKey]=nowSignal
+                if (tradeType==='Digits' && timeframeUnit==='Ticks' && !paperQuoteInFlightRef.current.has(signalKey) && getPaperForwardSummary({...signal,currency}).pending===0) {
+                  try {
+                    const proposal=buildProposal({...signal,currency},1,currency)
+                    const req_id=++proposalReqIdRef.current
+                    paperQuoteRequestsRef.current.set(req_id,{signal:{...signal,currency},signalKey,label})
+                    paperQuoteInFlightRef.current.add(signalKey)
+                    ws.send(JSON.stringify({...proposal,req_id}))
+                    setTimeout(()=>{const pendingRequest=paperQuoteRequestsRef.current.get(req_id);if(pendingRequest){paperQuoteRequestsRef.current.delete(req_id);paperQuoteInFlightRef.current.delete(pendingRequest.signalKey);addLog(`Paper proposal timed out for ${pendingRequest.label}; no sample recorded.`)}},12000)
+                    addLog(`Requesting quote-matched paper sample: ${label} | ${candidate.option} | stake basis ${currency} 1.00; no purchase.`)
+                  } catch(error) { paperQuoteInFlightRef.current.delete(signalKey); addLog(`Paper quote skipped: ${error.message}`) }
+                }
+                addLog(`Thamira signal handed to Denny Bots: ${label} | ${candidate.option} | score ${candidate.score}/94. Execution remains independently gated.`)
+              }
+              addLog(`Thamira: strongest candidate ${label} | setup score ${candidate.score}/94 | ${candidate.option}`)
               top.forEach(item=>{
                 const market=VOLATILITY_MARKETS.find(([,sym])=>sym===item.symbol)?.[0]||item.symbol
                 addLog(`${market}: ${item.report.candidate.score}/94 relative score; ${item.report.candidate.supportingFamilies.join(', ')}`)
@@ -133,12 +163,30 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
       }
       ws.onmessage=event=>{
         const msg=JSON.parse(event.data)
-        if(msg.error){addLog(`Deriv data error: ${msg.error.message}`);return}
+        const responseReqId=msg.echo_req?.req_id ?? msg.req_id
+        if(msg.error){
+          const failed=paperQuoteRequestsRef.current.get(responseReqId)
+          if(failed){paperQuoteRequestsRef.current.delete(responseReqId);paperQuoteInFlightRef.current.delete(failed.signalKey);addLog(`Paper proposal unavailable for ${failed.label}: ${msg.error.message}`)}
+          else addLog(`Deriv data error: ${msg.error.message}`)
+          return
+        }
+        if(msg.msg_type==='proposal' && responseReqId!==undefined){
+          const request=paperQuoteRequestsRef.current.get(responseReqId)
+          if(request){
+            paperQuoteRequestsRef.current.delete(responseReqId)
+            const askPrice=Number(msg.proposal?.ask_price),payout=Number(msg.proposal?.payout)
+            const quote={askPrice,payout,currency,quotedAt:Date.now()}
+            if(beginPaperTrial(request.signal,{quote})){
+              addLog(`Quote-matched paper trial started: ${request.label} | ${request.signal.option} | ask ${askPrice} ${currency} | payout ${payout} ${currency} | break-even ${(askPrice/payout*100).toFixed(1)}%; no funds purchased.`)
+            } else addLog(`Paper sample not started: invalid proposal quote or matching trial already pending for ${request.label}.`)
+            paperQuoteInFlightRef.current.delete(request.signalKey)
+          }
+        }
         if(msg.msg_type==='history'&&msg.history?.prices){const symbol=msg.echo_req?.ticks_history||msg.echo_req?.symbol||msg.history.symbol;pricesRef.current[symbol]=msg.history.prices.map(Number).filter(Number.isFinite);lastTickAtRef.current[symbol]=Date.now()}
-        if(msg.msg_type==='tick'&&msg.tick?.symbol){const arr=pricesRef.current[msg.tick.symbol]||[];arr.push(Number(msg.tick.quote));pricesRef.current[msg.tick.symbol]=arr.slice(-Math.max(300,lastDigits));lastTickAtRef.current[msg.tick.symbol]=Date.now()}
+        if(msg.msg_type==='tick'&&msg.tick?.symbol){const arr=pricesRef.current[msg.tick.symbol]||[];arr.push(Number(msg.tick.quote));pricesRef.current[msg.tick.symbol]=arr.slice(-Math.max(300,lastDigits));lastTickAtRef.current[msg.tick.symbol]=Date.now();const settled=advancePaperTrials(msg.tick.symbol,msg.tick.quote);settled.forEach(row=>{const summary=getPaperForwardSummary({symbol:row.symbol,tradeType:row.tradeType,subTradeType:row.subTradeType,option:row.option,predictedDigit:row.predictedDigit,barrier:row.barrier,duration:row.duration,timeframeUnit:row.timeframeUnit,currency:row.currency});addLog(`Paper result: ${row.symbol} | ${row.option} ${row.predictedDigit} | ${row.won?'WIN':'LOSS'} | terminal digit ${row.terminalDigit} | sample ${summary.trades} | Wilson 95% lower bound ${summary.lowerBound===null?'n/a':(summary.lowerBound*100).toFixed(1)+'%'} | worst quote break-even ${summary.maxBreakEvenRate===null?'n/a':(summary.maxBreakEvenRate*100).toFixed(1)+'%'} | calibrated ${summary.calibrated?'YES':'NO'}`)})}
       }
-      ws.onerror=()=>{setValidationError('Live market-data connection failed.');stopScanner()}
-      ws.onclose=()=>{if(activeRef.current){setValidationError('Live market-data feed disconnected. No signal was generated.');stopScanner()}}
+      ws.onerror=()=>{paperQuoteRequestsRef.current.clear();paperQuoteInFlightRef.current.clear();setValidationError('Live market-data connection failed.');stopScanner()}
+      ws.onclose=()=>{paperQuoteRequestsRef.current.clear();paperQuoteInFlightRef.current.clear();if(activeRef.current){setValidationError('Live market-data feed disconnected. No signal was generated.');stopScanner()}}
     }catch(error){setValidationError(error.message);stopScanner()}
   }
   const handleStop=()=>{stopScanner();addLog('Live analysis stopped.')}
