@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Zap } from 'lucide-react'
 import { boundedNextStake, buildProposal, VOLATILITY_MARKETS } from '../services/tradingCore'
 import { validateEntryWindow } from '../services/strategyIntelligence'
-import { rankLiveMarketOpportunities } from '../services/liveOpportunityEngine'
+import { rankLiveMarketOpportunities, validateLiveOpportunity } from '../services/liveOpportunityEngine'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
 import { appendTickBuffer, seedTickBuffer } from '../services/marketTickBuffer'
 
@@ -238,7 +238,17 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           hasLoggedScanningRef.current = false; 
         }
 
-        const currentTarget = recoveryQueue[recoveryIndex]
+        // Refresh the complete market + signal ranking immediately before any quote request.
+        const refreshedQueue = await scanMarkets()
+        const currentTarget = refreshedQueue[0]
+        if (!currentTarget) {
+          recoveryQueue = []
+          recoveryIndex = 0
+          await new Promise(r => setTimeout(r, 250))
+          continue
+        }
+        recoveryQueue = refreshedQueue
+        recoveryIndex = 0
         const signal = {
           ...currentTarget.signal,
           growthRate: 0.01, multiplier: 100, takeProfit: 1, contractStopLoss: 1
@@ -260,11 +270,27 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         addLog(`🎯 LOCKED: ${currentTarget.marketName} | Score: ${currentTarget.score}% | Direction: ${tradeDirection}`)
         addLog('🚀 EXECUTING...')
         const proposalReq = buildProposal(signal, roundStake(currentStakeRef.current))
-        const available = await wsRequest({ contracts_for: currentTarget.symbol, currency: 'USD' })
-        if (!JSON.stringify(available.contracts_for || {}).includes(proposalReq.contract_type)) throw new Error(`Deriv does not offer ${proposalReq.contract_type} for ${currentTarget.name}. No trade was sent.`)
-        const proposalRes = await wsRequest(proposalReq); if (!isRunningRef.current) break
-        const entryCheck = validateEntryWindow(signal, { maxSignalAgeMs: 15000, proposalBudgetMs: 300, minimumRemainingMs: 250 }); if (!entryCheck.valid) { addLog(`Entry expired before purchase: ${entryCheck.reason}`); continue }
-        const buyRes = await wsRequest({ buy: proposalRes.proposal.id, price: proposalRes.proposal.ask_price }); if (!isRunningRef.current) break
+        const executionStartedAt = performance.now()
+        // The proposal request itself validates the exact contract mapping; avoid a
+        // separate contracts_for round trip that would add avoidable entry latency.
+        const proposalRes = await wsRequest(proposalReq)
+        if (!isRunningRef.current) break
+        const marketSnapshot = {
+          prices: tickDataRef.current[currentTarget.symbol] || [],
+          lastLiveAt: lastLiveAtRef.current[currentTarget.symbol] || 0
+        }
+        const liveCheck = validateLiveOpportunity(signal, marketSnapshot, { now: Date.now(), maxSignalAgeMs: 1500 })
+        if (!liveCheck.valid) {
+          addLog(`Entry rejected after quote: ${liveCheck.reason} No purchase sent; returning to live ranking.`)
+          recoveryQueue = []
+          recoveryIndex = 0
+          continue
+        }
+        const entryCheck = validateEntryWindow(signal, { maxSignalAgeMs: 1500, proposalBudgetMs: 300, minimumRemainingMs: 250 })
+        if (!entryCheck.valid) { addLog(`Entry expired before purchase: ${entryCheck.reason}`); recoveryQueue = []; continue }
+        addLog(`Execution checks passed in ${Math.round(performance.now() - executionStartedAt)}ms; live price drift ${liveCheck.drift.toPrecision(4)}.`)
+        const buyRes = await wsRequest({ buy: proposalRes.proposal.id, price: proposalRes.proposal.ask_price })
+        if (!isRunningRef.current) break
         addLog(`✅ Contract: ${buyRes.buy.contract_id}`)
         
         const contractResult = await monitorContract(buyRes.buy.contract_id); if (!contractResult) break
