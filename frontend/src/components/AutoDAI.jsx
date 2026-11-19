@@ -180,7 +180,8 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     const session = sessionRef.current
     const config = configRef.current
     session.totalTrades += 1
-    const outcomeStats = recordContractOutcome(pendingEntryRef.current || {}, { profit, stake: session.stake, contractId: currentContract?.id, bot: 'AutoD AI' })
+    const settledSignal = pendingEntryRef.current || {}
+    const outcomeStats = recordContractOutcome(settledSignal, { profit, stake: session.stake, contractId: currentContract?.id, bot: 'AutoD AI' })
     if (outcomeStats) addLog(`Thamira history: ${outcomeStats.trades} settled for this exact setup; win rate ${outcomeStats.winRate === null ? 'n/a' : (outcomeStats.winRate * 100).toFixed(1) + '%'}.`)
     pendingEntryRef.current = null
     if (profit > 0) {
@@ -189,7 +190,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     } else {
       session.losses += 1; session.lossStreak += 1
       session.stake = parseFloat(config.stake) || 0.35
-      const lostSymbol = pendingEntryRef.current?.symbol
+      const lostSymbol = settledSignal.symbol
       if (lostSymbol) marketCooldownUntilRef.current[lostSymbol] = Date.now() + (session.lossStreak >= 2 ? 120000 : 60000)
       addLog(`❌ AI LOST -${profit.toFixed(2)} | Base stake retained; no martingale escalation.`)
       if (session.lossStreak >= 2) addLog(`🛡️ Loss recovery: next setup requires scan score ${session.lossStreak >= 3 ? 6.5 : 5.0}+ and the losing market is cooling down.`)
