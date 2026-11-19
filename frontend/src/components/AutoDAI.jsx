@@ -4,6 +4,7 @@ import { boundedNextStake, buildProposal, MARKET_SYMBOLS, VOLATILITY_MARKETS } f
 import { evaluateStrategyEnsemble, validateEntryWindow } from '../services/strategyIntelligence'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
 import { evaluateAccountRisk, getAdaptiveStrategyStatus, recordAdaptiveOutcome } from '../services/adaptiveTradingIntelligence'
+import { advancePaperTrials, beginPaperTrial, getPaperForwardSummary } from '../services/paperForwardCalibration'
 
 const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
 const SYMBOL_MAP = Object.fromEntries(VOLATILITY_MARKETS)
@@ -91,7 +92,15 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
             if (msg.msg_type === 'balance' && msg.balance?.balance !== undefined) accountBalanceRef.current = Number(msg.balance.balance)
             if (msg.msg_type === 'balance' && onBalanceUpdate) onBalanceUpdate(parseFloat(msg.balance.balance))
             if (msg.msg_type === 'history' && msg.history?.prices) { const symbol = msg.echo_req?.ticks_history || msg.history.symbol; if (symbol) tickHistoryRef.current[symbol] = msg.history.prices.map(Number).filter(Number.isFinite).slice(-500) }
-            if (msg.msg_type === 'tick' && msg.tick?.quote !== undefined) { const symbol = msg.tick.symbol; const current = tickHistoryRef.current[symbol] || []; tickHistoryRef.current[symbol] = [...current, Number(msg.tick.quote)].slice(-500); lastLiveTickAtRef.current[symbol] = Date.now() }
+            if (msg.msg_type === 'tick' && msg.tick?.quote !== undefined) {
+              const symbol = msg.tick.symbol
+              const current = tickHistoryRef.current[symbol] || []
+              tickHistoryRef.current[symbol] = [...current, Number(msg.tick.quote)].slice(-500)
+              lastLiveTickAtRef.current[symbol] = Date.now()
+              const paperSettled = advancePaperTrials(symbol, { quote: msg.tick.quote, pipSize: msg.tick.pip_size })
+              paperSettled.forEach(row => addLog(`🧪 Forward sample settled: ${row.won ? 'WIN' : 'LOSS'} on ${symbol}; ${row.option} after ${row.duration} ticks.`))
+              if (paperSettled.length && isRunningRef.current) nextTradeTimer.current = setTimeout(() => executeTrade(), 300)
+            }
             if (msg.msg_type === 'contracts_for' && pendingProposalRef.current?.reqId === msg.req_id) {
               const pending = pendingProposalRef.current; pendingProposalRef.current = null
               const offered = Array.isArray(msg.contracts_for?.available) ? msg.contracts_for.available : []
@@ -108,7 +117,37 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
                 websocket.send(JSON.stringify({...pending.proposal,req_id:Date.now()}))
               }
             }
-            if (msg.msg_type === 'proposal') { if (msg.error) { addLog(`❌ Proposal failed: ${msg.error.message || 'Deriv rejected the proposal'}`); if (isRunningRef.current) nextTradeTimer.current=setTimeout(()=>executeTrade(),3000) } else setTimeout(() => { const gate=validateEntryWindow(pendingEntryRef.current,{maxSignalAgeMs:15000,proposalBudgetMs:300,minimumRemainingMs:250}); if(!gate.valid){addLog(`⛔ Entry expired before purchase: ${gate.reason}`);pendingEntryRef.current=null;if(isRunningRef.current)nextTradeTimer.current=setTimeout(()=>executeTrade(),1500);return} websocket.send(JSON.stringify({ buy: msg.proposal.id, price: msg.proposal.ask_price, req_id: Date.now() })) }, 200) }
+            if (msg.msg_type === 'proposal') {
+              if (msg.error) {
+                addLog(`❌ Proposal failed: ${msg.error.message || 'Deriv rejected the proposal'}`)
+                if (isRunningRef.current) nextTradeTimer.current = setTimeout(() => executeTrade(), 3000)
+              } else {
+                const signal = pendingEntryRef.current
+                if (signal?.tradeType === 'Digits' && signal.timeframeUnit === 'Ticks') {
+                  const calibration = getPaperForwardSummary(signal)
+                  if (!calibration.calibrated) {
+                    const started = beginPaperTrial({ ...signal, id: `paper-${signal.symbol}-${Date.now()}` }, {
+                      quote: { askPrice: msg.proposal.ask_price, payout: msg.proposal.payout,
+                        currency: msg.proposal.currency, quotedAt: Date.now() }
+                    })
+                    pendingEntryRef.current = null
+                    if (started) addLog(`🧪 Calibration-only trial started for ${signal.subTradeType}/${signal.option} on ${signal.symbol}; ${calibration.trades}/200 settled samples, no purchase sent.`)
+                    else addLog('🛡️ No valid quote-matched calibration trial could be started; refusing this digit entry.')
+                    return
+                  }
+                }
+                setTimeout(() => {
+                  const gate = validateEntryWindow(pendingEntryRef.current, { maxSignalAgeMs: 15000, proposalBudgetMs: 300, minimumRemainingMs: 250 })
+                  if (!gate.valid) {
+                    addLog(`⛔ Entry expired before purchase: ${gate.reason}`)
+                    pendingEntryRef.current = null
+                    if (isRunningRef.current) nextTradeTimer.current = setTimeout(() => executeTrade(), 1500)
+                    return
+                  }
+                  websocket.send(JSON.stringify({ buy: msg.proposal.id, price: msg.proposal.ask_price, req_id: Date.now() }))
+                }, 200)
+              }
+            }
             if (msg.msg_type === 'buy') { if (msg.error) { addLog(`❌ Buy failed: ${msg.error.message || 'Deriv rejected the purchase'}`); setCurrentContract(null); if (isRunningRef.current) nextTradeTimer.current=setTimeout(()=>executeTrade(),3000) } else { setCurrentContract({ id: msg.buy.contract_id }); addLog(`✅ Contract: ${msg.buy.contract_id}`); websocket.send(JSON.stringify({ proposal_open_contract: 1, contract_id: msg.buy.contract_id, subscribe: 1, req_id: Date.now() })) } }
             if (msg.msg_type === 'proposal_open_contract') { if (!msg.error && msg.proposal_open_contract) { const contract = msg.proposal_open_contract; if (contract.is_sold) { handleContractResult(parseFloat(contract.profit)); setCurrentContract(null) } else setCurrentPL(parseFloat(contract.profit || 0)) } }
           } catch (e) { console.error(e) }
@@ -190,7 +229,15 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     try {
       const signal = {symbol,tradeType:config.tradeType,subTradeType:config.subTradeType,option:selectedOption,predictedDigit:target,barrier,duration:config.durationValue,timeframeUnit:config.timeframeUnit,createdAt:Date.now(),expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,config.durationValue*(config.timeframeUnit==='Hours'?3600:config.timeframeUnit==='Days'?86400:config.timeframeUnit==='Minutes'?60:1)),growthRate:0.01,multiplier:100,takeProfit:1,contractStopLoss:1}
       const accountRisk = evaluateAccountRisk({ balance: accountBalanceRef.current, sessionPL: sessionRef.current.pl, targetProfit: config.targetProfit, stopLoss: config.stopLoss, nextStake: sessionRef.current.stake })
-      if (!accountRisk.allowEntry) { addLog(`🛡️ Account guard: ${accountRisk.message}. New entries stopped.`); isRunningRef.current = false; setIsRunning(false); return }
+      if (!accountRisk.allowEntry) {
+        if (accountRisk.balanceUnavailable) {
+          addLog('⏳ Waiting for Deriv to confirm account balance before entry.')
+          nextTradeTimer.current = setTimeout(() => executeTrade(), 1000)
+          return
+        }
+        addLog(`🛡️ Account guard: ${accountRisk.message}. New entries stopped.`)
+        isRunningRef.current = false; setIsRunning(false); return
+      }
       const adaptiveStatus = getAdaptiveStrategyStatus(signal)
       if (adaptiveStatus.blocked) { addLog(`🧠 Strategy recovery pause: this exact strategy is cooling down across all markets.`); nextTradeTimer.current = setTimeout(() => executeTrade(), Math.max(500, adaptiveStatus.blockedUntil - Date.now())); return }
       const proposal = buildProposal(signal,sessionRef.current.stake,accountCurrencyRef.current)
