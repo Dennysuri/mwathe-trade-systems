@@ -46,6 +46,10 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const consecutiveLossesRef = useRef(0)
   const lastResearchNoticeRef = useRef('')
   const marketCooldownUntilRef = useRef({})
+  const recentOutcomesRef = useRef([])
+  const performanceCooldownUntilRef = useRef(0)
+  const performanceRecoveryUntilRef = useRef(0)
+  const lastPerformancePauseNoticeRef = useRef(0)
   const shouldAutoScrollRef = useRef(true)
 
   const addLog = (msg) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`].slice(-2000))
@@ -216,8 +220,9 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     }, { now: Date.now(), maxAgeMs: 5000, minLiveTicks: 1 })
     // Research all supported profiles, but only the exact user-selected profile
     // is eligible to enter the bot's existing validation/execution path.
-    const requiredScore = consecutiveLossesRef.current >= 3 ? 92 : consecutiveLossesRef.current >= 2 ? 90 : consecutiveLossesRef.current === 1 ? 85 : 0
     const now = Date.now()
+    if (performanceCooldownUntilRef.current > now) return []
+    const requiredScore = performanceRecoveryUntilRef.current > now ? 92 : consecutiveLossesRef.current >= 3 ? 92 : consecutiveLossesRef.current >= 2 ? 90 : consecutiveLossesRef.current === 1 ? 85 : 0
     return universe.filter(item =>
       item.profile.tradeType === tradeType
       && item.profile.subTradeType === (subTradeType || '')
@@ -238,11 +243,20 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const refreshedQueue = await scanMarkets()
         const currentTarget = refreshedQueue[0]
         if (!currentTarget) {
-          if (!hasLoggedScanningRef.current) {
-            addLog('Scanning live markets; waiting for a fresh setup to pass quality and loss-recovery gates.')
-            hasLoggedScanningRef.current = true
+          if (performanceCooldownUntilRef.current > Date.now()) {
+            if (lastPerformancePauseNoticeRef.current !== performanceCooldownUntilRef.current) {
+              const remaining = Math.ceil((performanceCooldownUntilRef.current - Date.now()) / 1000)
+              addLog(`🛡️ Performance circuit breaker: no new entries for ${remaining}s after the last 8 settled trades were net negative.`)
+              lastPerformancePauseNoticeRef.current = performanceCooldownUntilRef.current
+            }
+            await new Promise(r => setTimeout(r, Math.min(5000, Math.max(500, performanceCooldownUntilRef.current - Date.now()))))
+          } else {
+            if (!hasLoggedScanningRef.current) {
+              addLog('Scanning live markets; waiting for a fresh setup to pass quality and loss-recovery gates.')
+              hasLoggedScanningRef.current = true
+            }
+            await new Promise(r => setTimeout(r, 1000))
           }
-          await new Promise(r => setTimeout(r, 1000))
           continue
         }
         hasLoggedScanningRef.current = false
@@ -282,6 +296,12 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const outcomeStats = recordContractOutcome(signal, { profit, stake: currentStakeRef.current, contractId: contractResult.contract_id, bot: 'Automated Bot' })
         if (outcomeStats) addLog(`Thamira history: ${outcomeStats.trades} settled for this exact setup; win rate ${outcomeStats.winRate === null ? 'n/a' : (outcomeStats.winRate * 100).toFixed(1) + '%'}.`)
         totalTradesRef.current += 1; sessionPLRef.current += profit
+        recentOutcomesRef.current = [...recentOutcomesRef.current, profit].slice(-8)
+        if (recentOutcomesRef.current.length === 8 && recentOutcomesRef.current.reduce((sum, value) => sum + value, 0) <= 0) {
+          performanceCooldownUntilRef.current = Date.now() + 180000
+          performanceRecoveryUntilRef.current = Date.now() + 480000
+          addLog('🛡️ Eight-trade performance guard: the latest 8 settled contracts are net negative. Pausing entries for 3 minutes; then require 92/94 setup scores for 5 minutes.')
+        }
         
         if (isWin) {
           winsRef.current += 1; currentStakeRef.current = parseFloat(stake)
@@ -317,7 +337,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     setValidationError(''); if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }
     isRunningRef.current = true; setIsRunning(true); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0
     currentStakeRef.current = parseFloat(stake); historyLoadedRef.current = false; hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0
-    consecutiveLossesRef.current = 0
+    consecutiveLossesRef.current = 0; recentOutcomesRef.current = []; performanceCooldownUntilRef.current = 0; performanceRecoveryUntilRef.current = 0; lastPerformancePauseNoticeRef.current = 0
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); marketCooldownUntilRef.current = {}
     addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets | Loss-Resistant Entry Gates)'); addLog(`Type: ${tradeType} | Stake: ${stake} | Recovery: flat stake, no martingale escalation`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); runTradeCycle()
   }
