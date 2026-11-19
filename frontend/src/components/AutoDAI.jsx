@@ -158,7 +158,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
           predictedDigit: Number(config.predictedDigit), duration: config.durationValue,
           timeframeUnit: config.timeframeUnit, symbol }
         const recovery = getStrategyRecoveryState(profileSignal, { now })
-        if (recovery.paused || (recovery.historicalTrades >= 200 && recovery.historicalWinRate < 0.8)) return null
+        if (recovery.paused || (recovery.historicalTrades >= 200 && !recovery.meets80PercentTarget)) return null
         const prices = ticks.slice(-21)
         const moves = prices.slice(1).map((value, index) => value - prices[index])
         const atr = moves.reduce((sum, value) => sum + Math.abs(value), 0) / Math.max(1, moves.length)
