@@ -5,6 +5,14 @@ const MAX_RECENT = 30;
 const STRATEGY_LOSS_COOLDOWN_MS = 10 * 60 * 1000;
 const MIN_80_SAMPLE = 200;
 
+function wilsonLowerBound(wins, trades, z = 1.96) {
+  if (!trades) return null;
+  const p = wins / trades, z2 = z * z, denominator = 1 + z2 / trades;
+  const center = p + z2 / (2 * trades);
+  const spread = z * Math.sqrt((p * (1 - p) / trades) + z2 / (4 * trades * trades));
+  return Math.max(0, (center - spread) / denominator);
+}
+
 function readOutcomes() {
   try {
     const rows = JSON.parse(localStorage.getItem(OUTCOME_KEY) || '[]');
@@ -40,16 +48,18 @@ export function getStrategyRecoveryState(signal = {}, { now = Date.now() } = {})
   const pausedUntil = consecutiveLosses >= 2 && lastLossAt
     ? Number(lastLossAt) + STRATEGY_LOSS_COOLDOWN_MS : 0;
   const historicalTrades = matching.length;
-  const historicalWinRate = historicalTrades ? matching.filter(row => row.won).length / historicalTrades : null;
+  const historicalWins = matching.filter(row => row.won).length;
+  const historicalWinRate = historicalTrades ? historicalWins / historicalTrades : null;
+  const historicalLowerBound = wilsonLowerBound(historicalWins, historicalTrades);
   return {
     key, trades, wins, losses: trades - wins,
     winRate: trades ? wins / trades : null, netProfit, consecutiveLosses,
-    historicalTrades, historicalWinRate,
-    meets80PercentTarget: historicalTrades >= MIN_80_SAMPLE && historicalWinRate >= 0.8,
+    historicalTrades, historicalWinRate, historicalLowerBound,
+    meets80PercentTarget: historicalTrades >= MIN_80_SAMPLE && historicalLowerBound >= 0.8,
     paused: pausedUntil > now, pausedUntil,
     reason: pausedUntil > now
       ? 'This exact strategy profile has lost twice consecutively across markets; cooling down globally.'
-      : historicalTrades >= MIN_80_SAMPLE && historicalWinRate < 0.8
+      : historicalTrades >= MIN_80_SAMPLE && historicalLowerBound < 0.8
         ? 'This profile is below the 80% historical win-rate target; increase selectivity and review calibration.'
         : 'No strategy-level loss lock is active.'
   };
