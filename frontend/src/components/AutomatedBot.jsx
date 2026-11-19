@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Zap } from 'lucide-react'
-import { buildProposal, VOLATILITY_MARKETS } from '../services/tradingCore'
+import { boundedNextStake, buildProposal, VOLATILITY_MARKETS } from '../services/tradingCore'
 import { validateEntryWindow } from '../services/strategyIntelligence'
 import { validateLiveOpportunity } from '../services/liveOpportunityEngine'
 import { rankLiveStrategyUniverse } from '../services/strategyUniverse'
@@ -25,6 +25,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const [stake, setStake] = useState('1.00')
   const [targetProfit, setTargetProfit] = useState('50.00')
   const [stopLoss, setStopLoss] = useState('20.00')
+  const [martingaleFactor, setMartingaleFactor] = useState('1.5')
   
   const [isRunning, setIsRunning] = useState(false)
   const [validationError, setValidationError] = useState('')
@@ -314,10 +315,10 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           addLog(`✅ WON +$${profit.toFixed(2)} | Stake reset to base`)
         } else {
           lossesRef.current += 1; consecutiveLossesRef.current++
-          currentStakeRef.current = roundStake(parseFloat(stake))
+          currentStakeRef.current = boundedNextStake(stake, currentStakeRef.current, martingaleFactor, consecutiveLossesRef.current)
           marketCooldownUntilRef.current[currentTarget.symbol] = Date.now() + (consecutiveLossesRef.current >= 2 ? 120000 : 60000)
           setCurrentStake(currentStakeRef.current)
-          addLog(`❌ LOST -${profit.toFixed(2)} | Base stake retained; ${currentTarget.symbol} paused for ${consecutiveLossesRef.current >= 2 ? 120 : 60}s. No loss-chasing martingale.`)
+          addLog(`❌ LOST -${profit.toFixed(2)} | Bounded recovery stake ${currentStakeRef.current.toFixed(2)}; ${currentTarget.symbol} paused for ${consecutiveLossesRef.current >= 2 ? 120 : 60}s.`)
           if (consecutiveLossesRef.current >= 2) addLog(`🛡️ ${consecutiveLossesRef.current} consecutive losses: next setup must score at least ${consecutiveLossesRef.current >= 3 ? 92 : 90}/94.`)
         }
         
@@ -371,7 +372,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         </div>
         <div className="grid grid-cols-2 gap-2 mb-2">
           <div><label className="text-[10px] text-gray-400 uppercase font-bold">Stake</label><input type="number" step="0.01" value={stake} onChange={e => setStake(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div>
-          <div><label className="text-[10px] text-gray-400 uppercase font-bold">Loss Recovery</label><input type="text" value="Flat stake · protected" disabled className="w-full bg-black/50 border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-green-400" /></div>
+          <div><label className="text-[10px] text-gray-400 uppercase font-bold">Martingale</label><input type="number" min="1" max="3" step="0.1" value={martingaleFactor} onChange={e => setMartingaleFactor(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div>
         </div>
         <div className="grid grid-cols-2 gap-2">
           <div><label className="text-[10px] text-gray-400 uppercase font-bold">Target</label><input type="number" step="0.01" value={targetProfit} onChange={e => setTargetProfit(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div>
