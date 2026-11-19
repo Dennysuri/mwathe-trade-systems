@@ -239,7 +239,7 @@ export default function DennyBots({ token, accountId, currency = 'USD', onBalanc
           setConfidenceScore(analysis.confidence)
           addLog(`📊 Setup score: ${analysis.confidence}/100 | Signals: ${analysis.reasons.join(', ')}`)
 
-          const minConf = parseFloat(minConfidence) || 70
+          const minConf = Math.max(parseFloat(minConfidence) || 70, consecutiveLossesRef.current >= 2 ? 82 : 0)
           let waitTime = 0
 
           // Wait silently for up to 20 seconds for a better setup
@@ -267,7 +267,7 @@ export default function DennyBots({ token, accountId, currency = 'USD', onBalanc
         let proposalReq
         let executionSignal = null
         if (connectedMode) {
-          const signal = [...signalsRef.current].find(item => isFreshSignal(item) && !consumedSignalsRef.current.has(item.id))
+          const signal = [...signalsRef.current].find(item => isFreshSignal(item) && !consumedSignalsRef.current.has(item.id) && (consecutiveLossesRef.current < 2 || Number(item.setupScore || item.confidence || 0) >= 82))
           if (!signal) { await new Promise(r => setTimeout(r, 1000)); continue }
           consumedSignalsRef.current.add(signal.id)
           executionSignal = signal
@@ -329,8 +329,10 @@ export default function DennyBots({ token, accountId, currency = 'USD', onBalanc
           lossesRef.current += 1
           consecutiveLossesRef.current += 1
           const martingale = parseFloat(martingaleFactor) || 1.5
-          currentStakeRef.current = boundedNextStake(stake, currentStakeRef.current, martingale, consecutiveLossesRef.current)
-          addLog(`❌ LOST -${profit.toFixed(2)} | Bounded next stake: ${currentStakeRef.current.toFixed(2)}`)
+          currentStakeRef.current = consecutiveLossesRef.current >= 2
+            ? roundStake(parseFloat(stake))
+            : boundedNextStake(stake, currentStakeRef.current, Math.min(martingale, 1.25), consecutiveLossesRef.current)
+          addLog(`❌ LOST -${profit.toFixed(2)} | Conservative recovery stake: ${currentStakeRef.current.toFixed(2)}`)
           if (consecutiveLossesRef.current >= 2) addLog('⚠️ Loss streak: entering bounded recovery assessment. New entries remain subject to session stop-loss and 3x stake cap.')
         }
 
@@ -344,8 +346,14 @@ export default function DennyBots({ token, accountId, currency = 'USD', onBalanc
         if (sessionPLRef.current >= parseFloat(targetProfit)) { addLog(`🏆 TARGET HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
         if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog(` STOP LOSS HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
 
-        addLog(`📊 P/L: $${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
-        await new Promise(r => setTimeout(r, 1000))
+        addLog(`📊 P/L: ${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
+        if (consecutiveLossesRef.current >= 4) {
+          addLog('🛑 Four consecutive losses: automatic safety stop. Review the strategy before restarting.')
+          isRunningRef.current = false; setIsRunning(false); break
+        }
+        const cooldownMs = consecutiveLossesRef.current >= 3 ? 90000 : consecutiveLossesRef.current >= 2 ? 45000 : consecutiveLossesRef.current === 1 ? 15000 : 5000
+        addLog(`🧊 Entry cooldown: ${Math.round(cooldownMs / 1000)}s before the next independent setup check.`)
+        await new Promise(r => setTimeout(r, cooldownMs))
       } catch (error) {
         if (!isRunningRef.current) break
         addLog(`❌ Error: ${error.message}`)
