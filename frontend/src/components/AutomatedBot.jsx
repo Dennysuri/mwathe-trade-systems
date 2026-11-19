@@ -6,6 +6,7 @@ import { validateLiveOpportunity } from '../services/liveOpportunityEngine'
 import { rankLiveStrategyUniverse } from '../services/strategyUniverse'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
 import { evaluateAccountRisk, getAdaptiveStrategyStatus, recordAdaptiveOutcome } from '../services/adaptiveTradingIntelligence'
+import { advancePaperTrials, beginPaperTrial, getPaperForwardSummary } from '../services/paperForwardCalibration'
 import { appendTickBuffer, seedTickBuffer } from '../services/marketTickBuffer'
 
 const UNIQUE_MARKETS = VOLATILITY_MARKETS
@@ -110,7 +111,11 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
                 tickDataRef.current[symbol] = appendTickBuffer(tickDataRef.current[symbol], msg.tick.quote)
                 lastLiveAtRef.current[symbol] = Date.now()
                 liveTickCountRef.current[symbol] = (liveTickCountRef.current[symbol] || 0) + 1
-              } else {
+              }
+              const paperSettled = advancePaperTrials(symbol, { quote: msg.tick.quote, pipSize: msg.tick.pip_size })
+              paperSettled.forEach(row => addLog(`🧪 Forward sample settled: ${row.won ? 'WIN' : 'LOSS'} on ${symbol}; ${row.option} after ${row.duration} ticks.`))
+              if (paperSettled.length && isRunningRef.current) addLog('🧪 Forward calibration updated; the next scan will recheck its confidence bound.')
+              if (!historySeededRef.current[symbol]) {
                 pendingLiveTicksRef.current[symbol] = appendTickBuffer(pendingLiveTicksRef.current[symbol], msg.tick.quote)
               }
             }
@@ -287,6 +292,32 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         // separate contracts_for round trip that would add avoidable entry latency.
         const proposalRes = await wsRequest(proposalReq)
         if (!isRunningRef.current) break
+        if (signal.tradeType === 'Digits' && signal.timeframeUnit === 'Ticks') {
+          const calibration = getPaperForwardSummary(signal)
+          if (!calibration.calibrated) {
+            const started = beginPaperTrial({ ...signal, id: `paper-${signal.symbol}-${Date.now()}` }, {
+              quote: { askPrice: proposalRes.proposal.ask_price, payout: proposalRes.proposal.payout,
+                currency: proposalRes.proposal.currency, quotedAt: Date.now() }
+            })
+            if (started) {
+              addLog(`🧪 Calibration-only trial started for ${signal.subTradeType}/${signal.option} on ${signal.symbol}; ${calibration.trades}/200 settled samples, no purchase sent.`)
+            } else if (calibration.pending === 0) {
+              addLog('🛡️ No valid quote-matched calibration trial could be started; refusing this digit entry.')
+              continue
+            }
+            const waitUntil = Date.now() + Math.max(15000, Number(signal.duration) * 5000)
+            while (isRunningRef.current && getPaperForwardSummary(signal).pending > 0 && Date.now() < waitUntil) {
+              await new Promise(resolve => setTimeout(resolve, 250))
+            }
+            const updated = getPaperForwardSummary(signal)
+            if (updated.pending > 0) {
+              addLog(`⏳ Waiting for live ticks to settle the calibration sample (${updated.pending} pending).`)
+            } else {
+              addLog(`🧪 Calibration: ${updated.wins}/${updated.trades} wins; observed break-even ${updated.maxBreakEvenRate === null ? 'n/a' : (updated.maxBreakEvenRate * 100).toFixed(1) + '%'}; conservative lower bound ${updated.lowerBound === null ? 'n/a' : (updated.lowerBound * 100).toFixed(1) + '%'}; ${updated.calibrated ? 'qualified' : 'not yet qualified'}.`)
+            }
+            continue
+          }
+        }
         const marketSnapshot = {
           prices: tickDataRef.current[currentTarget.symbol] || [],
           lastLiveAt: lastLiveAtRef.current[currentTarget.symbol] || 0
