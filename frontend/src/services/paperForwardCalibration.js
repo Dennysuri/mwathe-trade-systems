@@ -7,8 +7,9 @@ const pending = new Map();
 let memoryRows = [];
 
 export function paperProfile(signal = {}) {
+  const targetApplies = ['Over/Under', 'Matches/Differs'].includes(signal.subTradeType);
   return [signal.symbol || 'unknown', signal.tradeType || '', signal.subTradeType || '',
-    signal.option || '', signal.predictedDigit ?? 'na', signal.barrier ?? 'na',
+    signal.option || '', targetApplies ? (signal.predictedDigit ?? 'na') : 'na',
     signal.duration ?? 'na', signal.timeframeUnit || '', signal.currency || ''].join('|');
 }
 function readRows() {
@@ -22,12 +23,16 @@ function writeRows(rows) {
   memoryRows = rows.slice(-MAX_RECORDS);
   try { if (typeof localStorage !== 'undefined') localStorage.setItem(STORAGE_KEY, JSON.stringify(memoryRows)); } catch {}
 }
-function digitOf(quote) {
+function digitOf(input) {
+  const quote = input && typeof input === 'object' ? input.quote : input;
+  const pipSize = input && typeof input === 'object' ? Number(input.pipSize) : NaN;
   const value = Number(quote);
   if (!Number.isFinite(value)) return null;
-  const text = String(quote);
-  const decimals = text.includes('.') ? text.split('.')[1] : '';
-  return Number((decimals || text).slice(-1));
+  const decimals = Number.isInteger(pipSize) && pipSize >= 0 && pipSize <= 10
+    ? value.toFixed(pipSize).split('.')[1] || ''
+    : (String(quote).split('.')[1] || '');
+  const finalDigit = decimals ? decimals.slice(-1) : String(Math.abs(Math.trunc(value))).slice(-1);
+  return Number(finalDigit);
 }
 export function wilsonLowerBound(wins, trades, z = Z_95) {
   const n = Number(trades), w = Number(wins);
@@ -53,8 +58,8 @@ export function beginPaperTrial(signal, { now = Date.now(), quote } = {}) {
   });
   return true;
 }
-export function advancePaperTrials(symbol, quote, { now = Date.now() } = {}) {
-  const digit = digitOf(quote);
+export function advancePaperTrials(symbol, quote, { now = Date.now(), pipSize } = {}) {
+  const digit = digitOf(quote && typeof quote === 'object' ? quote : { quote, pipSize });
   if (digit === null) return [];
   const completed = [];
   for (const [id, trial] of pending) {
@@ -90,6 +95,7 @@ export function getPaperForwardSummary(signal = null) {
   return { trades, wins, losses: trades - wins, winRate: trades ? wins / trades : null,
     lowerBound, maxBreakEvenRate, safetyMargin: SAFETY_MARGIN, minTrades: MIN_CALIBRATION_TRADES,
     calibrated, pending: signal ? [...pending.values()].filter(item => item.key === paperProfile(signal)).length : pending.size,
-    note: 'Quote-matched forward paper outcomes. Calibration is local to this browser and research-only; it does not authorize live trading.' };
+    targetWinRate: 0.8, targetWinRateMet: trades >= 100 && wins / trades >= 0.8,
+    note: 'Quote-matched forward paper outcomes. Calibration is local to this browser; the lower confidence bound must beat the worst observed quote break-even rate plus margin.' };
 }
 export function resetPaperTrials() { pending.clear(); }

@@ -58,7 +58,7 @@ export function recordAdaptiveOutcome(signal, { profit, stake, bot = 'unknown', 
 
 export function getAdaptiveStrategyStatus(signal = {}, now = Date.now()) {
   const key = adaptiveStrategyKey(signal);
-  const matching = readRows().filter(row => row.key === key).slice(-20);
+  const matching = readRows().filter(row => row.key === key).slice(-100);
   let consecutiveLosses = 0;
   for (let i = matching.length - 1; i >= 0 && !matching[i].won; i--) consecutiveLosses++;
   const wins = matching.filter(row => row.won).length;
@@ -70,11 +70,12 @@ export function getAdaptiveStrategyStatus(signal = {}, now = Date.now()) {
     : consecutiveLosses === 2 ? 5 * 60_000
     : consecutiveLosses === 1 ? 45_000 : 0;
   const blockedUntil = last && cooldownMs ? last.settledAt + cooldownMs : 0;
+  const difficulty = getContractDifficulty(signal);
   return { key, trades, wins, losses: trades - wins, winRate, netProfit,
-    consecutiveLosses, blocked: blockedUntil > now, blockedUntil,
+    consecutiveLosses, blocked: blockedUntil > now, blockedUntil, difficulty,
     targetWinRate: 0.8,
-    winRateTargetMet: trades >= 20 && winRate >= 0.8,
-    status: trades < 20 ? 'building-evidence' : winRate >= 0.8 ? 'target-met' : 'below-target' };
+    winRateTargetMet: trades >= 100 && winRate >= 0.8,
+    status: trades < 100 ? 'building-evidence' : winRate >= 0.8 ? 'target-met' : 'below-target' };
 }
 
 export function evaluateAccountRisk({ balance, sessionPL = 0, targetProfit, stopLoss, nextStake = 0 } = {}) {
@@ -83,7 +84,8 @@ export function evaluateAccountRisk({ balance, sessionPL = 0, targetProfit, stop
   const pl = Number(sessionPL) || 0;
   const remainingToTarget = target > 0 ? Math.max(0, target - pl) : null;
   const remainingLossRoom = stop > 0 ? Math.max(0, stop + pl) : null;
-  const balanceValue = Number(balance);
+  const balanceProvided = balance !== null && balance !== undefined && balance !== '';
+  const balanceValue = balanceProvided ? Number(balance) : NaN;
   const validBalance = Number.isFinite(balanceValue) && balanceValue >= 0;
   const stopHit = stop > 0 && pl <= -stop;
   const targetHit = target > 0 && pl >= target;

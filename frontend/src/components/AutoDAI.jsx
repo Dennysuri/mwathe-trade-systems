@@ -3,7 +3,8 @@ import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, Shi
 import { boundedNextStake, buildProposal, MARKET_SYMBOLS, VOLATILITY_MARKETS } from '../services/tradingCore'
 import { evaluateStrategyEnsemble, validateEntryWindow } from '../services/strategyIntelligence'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
-import { evaluateAccountRisk, getAdaptiveStrategyStatus, recordAdaptiveOutcome } from '../services/adaptiveTradingIntelligence'
+import { evaluateAccountRisk, getAdaptiveStrategyStatus, getContractDifficulty, recordAdaptiveOutcome } from '../services/adaptiveTradingIntelligence'
+import { advancePaperTrials, beginPaperTrial, getPaperForwardSummary } from '../services/paperForwardCalibration'
 
 const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
 const SYMBOL_MAP = Object.fromEntries(VOLATILITY_MARKETS)
@@ -33,6 +34,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   const [validationError, setValidationError] = useState('')
   const [logs, setLogs] = useState(() => { try { return JSON.parse(localStorage.getItem('mwathe:autod-ai-logs:v1') || 'null') || ['AI Core initialized.'] } catch { return ['AI Core initialized.'] } })
   const [currentPL, setCurrentPL] = useState(0.00)
+  const [accountBalance, setAccountBalance] = useState(null)
   const [totalTrades, setTotalTrades] = useState(0)
   const [wins, setWins] = useState(0)
   const [losses, setLosses] = useState(0)
@@ -88,12 +90,21 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
           try {
             const msg = JSON.parse(message.data)
             if (msg.msg_type === 'balance' && msg.balance?.currency) accountCurrencyRef.current = msg.balance.currency
-            if (msg.msg_type === 'balance' && msg.balance?.balance !== undefined) accountBalanceRef.current = Number(msg.balance.balance)
+            if (msg.msg_type === 'balance' && msg.balance?.balance !== undefined) { accountBalanceRef.current = Number(msg.balance.balance); setAccountBalance(accountBalanceRef.current) }
             if (msg.msg_type === 'balance' && onBalanceUpdate) onBalanceUpdate(parseFloat(msg.balance.balance))
             if (msg.msg_type === 'history' && msg.history?.prices) { const symbol = msg.echo_req?.ticks_history || msg.history.symbol; if (symbol) tickHistoryRef.current[symbol] = msg.history.prices.map(Number).filter(Number.isFinite).slice(-500) }
-            if (msg.msg_type === 'tick' && msg.tick?.quote !== undefined) { const symbol = msg.tick.symbol; const current = tickHistoryRef.current[symbol] || []; tickHistoryRef.current[symbol] = [...current, Number(msg.tick.quote)].slice(-500); lastLiveTickAtRef.current[symbol] = Date.now() }
+            if (msg.msg_type === 'tick' && msg.tick?.quote !== undefined) {
+              const symbol = msg.tick.symbol
+              const current = tickHistoryRef.current[symbol] || []
+              tickHistoryRef.current[symbol] = [...current, Number(msg.tick.quote)].slice(-500)
+              lastLiveTickAtRef.current[symbol] = Date.now()
+              const paperSettled = advancePaperTrials(symbol, { quote: msg.tick.quote, pipSize: msg.tick.pip_size })
+              paperSettled.forEach(row => addLog(`🧪 Forward sample settled: ${row.won ? 'WIN' : 'LOSS'} on ${symbol}; ${row.option} after ${row.duration} ticks.`))
+              if (paperSettled.length && isRunningRef.current) nextTradeTimer.current = setTimeout(() => executeTrade(), 300)
+            }
             if (msg.msg_type === 'contracts_for' && pendingProposalRef.current?.reqId === msg.req_id) {
               const pending = pendingProposalRef.current; pendingProposalRef.current = null
+              if (!isRunningRef.current) { pendingEntryRef.current = null; return }
               const offered = Array.isArray(msg.contracts_for?.available) ? msg.contracts_for.available : []
               const offeredTypes = offered.map(item => item.contract_type).filter(Boolean)
               const exactContractAvailable = offeredTypes.includes(pending.proposal.contract_type)
@@ -108,7 +119,45 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
                 websocket.send(JSON.stringify({...pending.proposal,req_id:Date.now()}))
               }
             }
-            if (msg.msg_type === 'proposal') { if (msg.error) { addLog(`❌ Proposal failed: ${msg.error.message || 'Deriv rejected the proposal'}`); if (isRunningRef.current) nextTradeTimer.current=setTimeout(()=>executeTrade(),3000) } else setTimeout(() => { const gate=validateEntryWindow(pendingEntryRef.current,{maxSignalAgeMs:15000,proposalBudgetMs:300,minimumRemainingMs:250}); if(!gate.valid){addLog(`⛔ Entry expired before purchase: ${gate.reason}`);pendingEntryRef.current=null;if(isRunningRef.current)nextTradeTimer.current=setTimeout(()=>executeTrade(),1500);return} websocket.send(JSON.stringify({ buy: msg.proposal.id, price: msg.proposal.ask_price, req_id: Date.now() })) }, 200) }
+            if (msg.msg_type === 'proposal') {
+              if (!isRunningRef.current) { pendingEntryRef.current = null; return }
+              if (msg.error) {
+                addLog(`❌ Proposal failed: ${msg.error.message || 'Deriv rejected the proposal'}`)
+                if (isRunningRef.current) nextTradeTimer.current = setTimeout(() => executeTrade(), 3000)
+              } else {
+                const signal = pendingEntryRef.current
+                if (signal?.tradeType === 'Digits' && signal.timeframeUnit === 'Ticks') {
+                  const calibration = getPaperForwardSummary(signal)
+                  if (!calibration.calibrated) {
+                    const started = beginPaperTrial({ ...signal, id: `paper-${signal.symbol}-${Date.now()}` }, {
+                      quote: { askPrice: msg.proposal.ask_price, payout: msg.proposal.payout,
+                        currency: msg.proposal.currency, quotedAt: Date.now() }
+                    })
+                    pendingEntryRef.current = null
+                    if (started) {
+                      const difficulty = getContractDifficulty(signal)
+                      addLog(`🧪 Calibration-only trial started for ${signal.subTradeType}/${signal.option} on ${signal.symbol}; theoretical baseline ${difficulty.theoreticalWinChance === null ? 'n/a' : (difficulty.theoreticalWinChance * 100).toFixed(1) + '%'}; ${calibration.trades}/200 settled samples, no purchase sent.`)
+                    }
+                    else {
+                      addLog('🛡️ No valid quote-matched calibration trial could be started; refusing this digit entry.')
+                      if (calibration.pending === 0 && isRunningRef.current) nextTradeTimer.current = setTimeout(() => executeTrade(), 2000)
+                    }
+                    return
+                  }
+                }
+                setTimeout(() => {
+                  if (!isRunningRef.current) { pendingEntryRef.current = null; return }
+                  const gate = validateEntryWindow(pendingEntryRef.current, { maxSignalAgeMs: 15000, proposalBudgetMs: 300, minimumRemainingMs: 250 })
+                  if (!gate.valid) {
+                    addLog(`⛔ Entry expired before purchase: ${gate.reason}`)
+                    pendingEntryRef.current = null
+                    if (isRunningRef.current) nextTradeTimer.current = setTimeout(() => executeTrade(), 1500)
+                    return
+                  }
+                  websocket.send(JSON.stringify({ buy: msg.proposal.id, price: msg.proposal.ask_price, req_id: Date.now() }))
+                }, 200)
+              }
+            }
             if (msg.msg_type === 'buy') { if (msg.error) { addLog(`❌ Buy failed: ${msg.error.message || 'Deriv rejected the purchase'}`); setCurrentContract(null); if (isRunningRef.current) nextTradeTimer.current=setTimeout(()=>executeTrade(),3000) } else { setCurrentContract({ id: msg.buy.contract_id }); addLog(`✅ Contract: ${msg.buy.contract_id}`); websocket.send(JSON.stringify({ proposal_open_contract: 1, contract_id: msg.buy.contract_id, subscribe: 1, req_id: Date.now() })) } }
             if (msg.msg_type === 'proposal_open_contract') { if (!msg.error && msg.proposal_open_contract) { const contract = msg.proposal_open_contract; if (contract.is_sold) { handleContractResult(parseFloat(contract.profit)); setCurrentContract(null) } else setCurrentPL(parseFloat(contract.profit || 0)) } }
           } catch (e) { console.error(e) }
@@ -190,7 +239,15 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     try {
       const signal = {symbol,tradeType:config.tradeType,subTradeType:config.subTradeType,option:selectedOption,predictedDigit:target,barrier,duration:config.durationValue,timeframeUnit:config.timeframeUnit,createdAt:Date.now(),expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,config.durationValue*(config.timeframeUnit==='Hours'?3600:config.timeframeUnit==='Days'?86400:config.timeframeUnit==='Minutes'?60:1)),growthRate:0.01,multiplier:100,takeProfit:1,contractStopLoss:1}
       const accountRisk = evaluateAccountRisk({ balance: accountBalanceRef.current, sessionPL: sessionRef.current.pl, targetProfit: config.targetProfit, stopLoss: config.stopLoss, nextStake: sessionRef.current.stake })
-      if (!accountRisk.allowEntry) { addLog(`🛡️ Account guard: ${accountRisk.message}. New entries stopped.`); isRunningRef.current = false; setIsRunning(false); return }
+      if (!accountRisk.allowEntry) {
+        if (accountRisk.balanceUnavailable) {
+          addLog('⏳ Waiting for Deriv to confirm account balance before entry.')
+          nextTradeTimer.current = setTimeout(() => executeTrade(), 1000)
+          return
+        }
+        addLog(`🛡️ Account guard: ${accountRisk.message}. New entries stopped.`)
+        isRunningRef.current = false; setIsRunning(false); return
+      }
       const adaptiveStatus = getAdaptiveStrategyStatus(signal)
       if (adaptiveStatus.blocked) { addLog(`🧠 Strategy recovery pause: this exact strategy is cooling down across all markets.`); nextTradeTimer.current = setTimeout(() => executeTrade(), Math.max(500, adaptiveStatus.blockedUntil - Date.now())); return }
       const proposal = buildProposal(signal,sessionRef.current.stake,accountCurrencyRef.current)
@@ -269,9 +326,23 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
         <div className="grid grid-cols-2 gap-2 mb-2"><div><label className="text-[10px] text-gray-400 uppercase font-bold">Stake</label><input type="number" step="0.01" value={stake} onChange={e => setStake(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div><div><label className="text-[10px] text-gray-400 uppercase font-bold">Martingale</label><input type="text" value="1.5x · bounded" disabled className="w-full bg-black/50 border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-orange-400" /></div></div>
         <div className="grid grid-cols-2 gap-2"><div><label className="text-[10px] text-gray-400 uppercase font-bold">Target</label><input type="number" step="0.01" value={targetProfit} onChange={e => setTargetProfit(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div><div><label className="text-[10px] text-gray-400 uppercase font-bold">Stop Loss</label><input type="number" step="0.01" value={stopLoss} onChange={e => setStopLoss(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div></div>
       </div>
-      <div className="bg-gray-900 rounded-lg p-2 border border-green-500/30 mb-2 flex-shrink-0"><h3 className="text-white font-bold text-xs mb-1 flex items-center gap-1"><TrendingUp size={12} className="text-green-500" /> Performance</h3><div className="grid grid-cols-4 gap-1 text-center"><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">P/L</p><p className={`font-bold text-xs ${currentPL >= 0 ? 'text-green-500' : 'text-red-500'}`}>{currentPL >= 0 ? '+' : ''}{currentPL.toFixed(2)}</p></div><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Win Rate</p><p className="text-sky-400 font-bold text-xs">{winRate}%</p></div><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Trades</p><p className="text-white font-bold text-xs">{totalTrades}</p></div><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Next</p><p className="text-orange-400 font-bold text-xs">{currentStake.toFixed(2)}</p></div></div></div>
+      <div className="bg-gray-900 rounded-lg p-2 border border-green-500/30 mb-2 flex-shrink-0">
+  <h3 className="text-white font-bold text-xs mb-1 flex items-center gap-1"><TrendingUp size={12} className="text-green-500" /> Performance</h3>
+  <div className="grid grid-cols-3 gap-1 text-center mb-1">
+    <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Balance</p><p className="text-white font-bold text-xs">{accountBalance === null ? 'Waiting…' : '$' + accountBalance.toFixed(2)}</p></div>
+    <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">To target</p><p className="text-green-400 font-bold text-xs">{'$' + Math.max(0, (parseFloat(targetProfit) || 0) - currentPL).toFixed(2)}</p></div>
+    <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Loss allowance</p><p className="text-orange-400 font-bold text-xs">{'$' + Math.max(0, (parseFloat(stopLoss) || 0) + currentPL).toFixed(2)}</p></div>
+  </div>
+  <div className="grid grid-cols-4 gap-1 text-center">
+    <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">P/L</p><p className={`font-bold text-xs ${currentPL >= 0 ? 'text-green-500' : 'text-red-500'}`}>{currentPL >= 0 ? '+' : ''}{currentPL.toFixed(2)}</p></div>
+    <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Win Rate</p><p className="text-sky-400 font-bold text-xs">{winRate}%</p></div>
+    <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Trades</p><p className="text-white font-bold text-xs">{totalTrades}</p></div>
+    <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Next</p><p className="text-orange-400 font-bold text-xs">{currentStake.toFixed(2)}</p></div>
+  </div>
+</div>
       <div className="grid grid-cols-3 gap-2 flex-shrink-0 mb-2"><button onClick={startBot} disabled={isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${isRunning ? 'bg-gray-800 text-gray-500' : 'bg-green-500 text-black'}`}><Play size={14} /> Run</button><button onClick={stopBot} disabled={!isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${!isRunning ? 'bg-gray-800 text-gray-500' : 'bg-red-500 text-white'}`}><Square size={14} /> Stop</button><button onClick={resetBot} disabled={isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${isRunning?'bg-gray-900 text-gray-600':'bg-gray-800 border border-gray-700 text-orange-400'}`}><RefreshCw size={14} /> Reset</button></div>
       <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col"><div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">AI LOG</span></div><div ref={logRef} onScroll={() => { const el=logRef.current; if(el) shouldAutoScrollRef.current=el.scrollHeight-el.scrollTop-el.clientHeight<60 }} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5">{logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') ? 'text-red-500' : log.includes('🤖') || log.includes('🚀') ? 'text-sky-400' : 'text-gray-400'}>{log}</p>)}</div></div>
     </div>
   )
 }
+ 

@@ -5,7 +5,8 @@ import { validateEntryWindow } from '../services/strategyIntelligence'
 import { validateLiveOpportunity } from '../services/liveOpportunityEngine'
 import { rankLiveStrategyUniverse } from '../services/strategyUniverse'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
-import { evaluateAccountRisk, getAdaptiveStrategyStatus, recordAdaptiveOutcome } from '../services/adaptiveTradingIntelligence'
+import { evaluateAccountRisk, getAdaptiveStrategyStatus, getContractDifficulty, recordAdaptiveOutcome } from '../services/adaptiveTradingIntelligence'
+import { advancePaperTrials, beginPaperTrial, getPaperForwardSummary } from '../services/paperForwardCalibration'
 import { appendTickBuffer, seedTickBuffer } from '../services/marketTickBuffer'
 
 const UNIQUE_MARKETS = VOLATILITY_MARKETS
@@ -32,6 +33,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const [validationError, setValidationError] = useState('')
   const [logs, setLogs] = useState(() => { try { return JSON.parse(localStorage.getItem('mwathe:automated-bot-logs:v1') || 'null') || ['System initialized.'] } catch { return ['System initialized.'] } })
   const [currentPL, setCurrentPL] = useState(0.00)
+  const [accountBalance, setAccountBalance] = useState(null)
   const [totalTrades, setTotalTrades] = useState(0)
   const [wins, setWins] = useState(0)
   const [losses, setLosses] = useState(0)
@@ -110,11 +112,15 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
                 tickDataRef.current[symbol] = appendTickBuffer(tickDataRef.current[symbol], msg.tick.quote)
                 lastLiveAtRef.current[symbol] = Date.now()
                 liveTickCountRef.current[symbol] = (liveTickCountRef.current[symbol] || 0) + 1
-              } else {
+              }
+              const paperSettled = advancePaperTrials(symbol, { quote: msg.tick.quote, pipSize: msg.tick.pip_size })
+              paperSettled.forEach(row => addLog(`🧪 Forward sample settled: ${row.won ? 'WIN' : 'LOSS'} on ${symbol}; ${row.option} after ${row.duration} ticks.`))
+              if (paperSettled.length && isRunningRef.current) addLog('🧪 Forward calibration updated; the next scan will recheck its confidence bound.')
+              if (!historySeededRef.current[symbol]) {
                 pendingLiveTicksRef.current[symbol] = appendTickBuffer(pendingLiveTicksRef.current[symbol], msg.tick.quote)
               }
             }
-            if (msg.msg_type === 'balance' && msg.balance?.balance !== undefined) { accountBalanceRef.current = parseFloat(msg.balance.balance); if (onBalanceUpdate) onBalanceUpdate(accountBalanceRef.current) }
+            if (msg.msg_type === 'balance' && msg.balance?.balance !== undefined) { accountBalanceRef.current = parseFloat(msg.balance.balance); setAccountBalance(accountBalanceRef.current); if (onBalanceUpdate) onBalanceUpdate(accountBalanceRef.current) }
           } catch (e) {}
         }
         ws.onclose = () => {
@@ -273,7 +279,10 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           growthRate: 0.01, multiplier: 100, takeProfit: 1, contractStopLoss: 1
         }
         const accountRisk = evaluateAccountRisk({ balance: accountBalanceRef.current, sessionPL: sessionPLRef.current, targetProfit, stopLoss, nextStake: currentStakeRef.current })
-        if (!accountRisk.allowEntry) { addLog(`🛡️ Account guard: ${accountRisk.message}. New entries stopped.`); isRunningRef.current = false; setIsRunning(false); break }
+        if (!accountRisk.allowEntry) {
+          if (accountRisk.balanceUnavailable) { addLog('⏳ Waiting for Deriv to confirm account balance before entry.'); await new Promise(resolve => setTimeout(resolve, 1000)); continue }
+          addLog(`🛡️ Account guard: ${accountRisk.message}. New entries stopped.`); isRunningRef.current = false; setIsRunning(false); break
+        }
         const adaptiveStatus = getAdaptiveStrategyStatus(signal)
         if (adaptiveStatus.blocked) { addLog(`🧠 Strategy recovery pause: ${signal.tradeType}/${signal.subTradeType}/${signal.option} has ${adaptiveStatus.consecutiveLosses} consecutive losses across markets.`); await new Promise(r => setTimeout(r, Math.max(500, adaptiveStatus.blockedUntil - Date.now()))); continue }
         const tradeDirection = signal.option
@@ -287,6 +296,34 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         // separate contracts_for round trip that would add avoidable entry latency.
         const proposalRes = await wsRequest(proposalReq)
         if (!isRunningRef.current) break
+        if (signal.tradeType === 'Digits' && signal.timeframeUnit === 'Ticks') {
+          const calibration = getPaperForwardSummary(signal)
+          if (!calibration.calibrated) {
+            const started = beginPaperTrial({ ...signal, id: `paper-${signal.symbol}-${Date.now()}` }, {
+              quote: { askPrice: proposalRes.proposal.ask_price, payout: proposalRes.proposal.payout,
+                currency: proposalRes.proposal.currency, quotedAt: Date.now() }
+            })
+            if (started) {
+              const difficulty = getContractDifficulty(signal)
+              addLog(`🧪 Calibration-only trial started for ${signal.subTradeType}/${signal.option} on ${signal.symbol}; theoretical baseline ${difficulty.theoreticalWinChance === null ? 'n/a' : (difficulty.theoreticalWinChance * 100).toFixed(1) + '%'}; ${calibration.trades}/200 settled samples, no purchase sent.`)
+            } else if (calibration.pending === 0) {
+              addLog('🛡️ No valid quote-matched calibration trial could be started; refusing this digit entry and retrying after a fresh quote.')
+              await new Promise(resolve => setTimeout(resolve, 1500))
+              continue
+            }
+            const waitUntil = Date.now() + Math.max(15000, Number(signal.duration) * 5000)
+            while (isRunningRef.current && getPaperForwardSummary(signal).pending > 0 && Date.now() < waitUntil) {
+              await new Promise(resolve => setTimeout(resolve, 250))
+            }
+            const updated = getPaperForwardSummary(signal)
+            if (updated.pending > 0) {
+              addLog(`⏳ Waiting for live ticks to settle the calibration sample (${updated.pending} pending).`)
+            } else {
+              addLog(`🧪 Calibration: ${updated.wins}/${updated.trades} wins; observed break-even ${updated.maxBreakEvenRate === null ? 'n/a' : (updated.maxBreakEvenRate * 100).toFixed(1) + '%'}; conservative lower bound ${updated.lowerBound === null ? 'n/a' : (updated.lowerBound * 100).toFixed(1) + '%'}; ${updated.calibrated ? 'qualified' : 'not yet qualified'}.`)
+            }
+            continue
+          }
+        }
         const marketSnapshot = {
           prices: tickDataRef.current[currentTarget.symbol] || [],
           lastLiveAt: lastLiveAtRef.current[currentTarget.symbol] || 0
@@ -390,20 +427,25 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         </div>
       </div>
       <div className="bg-gray-900 rounded-lg p-2 border border-green-500/30 mb-2 flex-shrink-0">
-        <h3 className="text-white font-bold text-xs mb-1 flex items-center gap-1"><TrendingUp size={12} className="text-green-500" /> Performance</h3>
-        <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Best Market:</span><span className="text-[10px] text-orange-400 font-bold">{bestMarket}</span></div>
-        <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Confluence Score:</span><span className={`text-[10px] font-bold ${confluenceScore >= 70 ? 'text-green-400' : 'text-orange-400'}`}>{confluenceScore.toFixed(0)}%</span></div>
-        <div className="grid grid-cols-4 gap-1 text-center mb-1">
-          <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">P/L</p><p className={`font-bold text-xs ${currentPL >= 0 ? 'text-green-500' : 'text-red-500'}`}>{currentPL >= 0 ? '+' : ''}{currentPL.toFixed(2)}</p></div>
-          <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Win Rate</p><p className="text-sky-400 font-bold text-xs">{winRate}%</p></div>
-          <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Trades</p><p className="text-white font-bold text-xs">{totalTrades}</p></div>
-          <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Next</p><p className="text-orange-400 font-bold text-xs">{currentStake.toFixed(2)}</p></div>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <div className="bg-green-900/20 border border-green-500/30 rounded p-1 text-center"><p className="text-[9px] text-green-400 uppercase font-bold">Trades Won</p><p className="text-green-400 font-bold text-lg">{wins}</p></div>
-          <div className="bg-red-900/20 border border-red-500/30 rounded p-1 text-center"><p className="text-[9px] text-red-400 uppercase font-bold">Trades Lost</p><p className="text-red-400 font-bold text-lg">{losses}</p></div>
-        </div>
-      </div>
+  <h3 className="text-white font-bold text-xs mb-1 flex items-center gap-1"><TrendingUp size={12} className="text-green-500" /> Performance</h3>
+  <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Best Market:</span><span className="text-[10px] text-orange-400 font-bold">{bestMarket}</span></div>
+  <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Confluence Score:</span><span className={`text-[10px] font-bold ${confluenceScore >= 70 ? 'text-green-400' : 'text-orange-400'}`}>{confluenceScore.toFixed(0)}%</span></div>
+  <div className="mb-1 grid grid-cols-3 gap-1 text-center text-[9px]">
+    <div className="bg-black/50 rounded p-1"><span className="text-gray-400">Account balance</span><p className="text-white font-bold">{accountBalance === null ? 'Waiting…' : '$' + accountBalance.toFixed(2)}</p></div>
+    <div className="bg-black/50 rounded p-1"><span className="text-gray-400">To target</span><p className="text-green-400 font-bold">{'$' + Math.max(0, (parseFloat(targetProfit) || 0) - currentPL).toFixed(2)}</p></div>
+    <div className="bg-black/50 rounded p-1"><span className="text-gray-400">Loss allowance</span><p className="text-orange-400 font-bold">{'$' + Math.max(0, (parseFloat(stopLoss) || 0) + currentPL).toFixed(2)}</p></div>
+  </div>
+  <div className="grid grid-cols-4 gap-1 text-center mb-1">
+    <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">P/L</p><p className={`font-bold text-xs ${currentPL >= 0 ? 'text-green-500' : 'text-red-500'}`}>{currentPL >= 0 ? '+' : ''}{currentPL.toFixed(2)}</p></div>
+    <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Win Rate</p><p className="text-sky-400 font-bold text-xs">{winRate}%</p></div>
+    <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Trades</p><p className="text-white font-bold text-xs">{totalTrades}</p></div>
+    <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Next</p><p className="text-orange-400 font-bold text-xs">{currentStake.toFixed(2)}</p></div>
+  </div>
+  <div className="grid grid-cols-2 gap-2">
+    <div className="bg-green-900/20 border border-green-500/30 rounded p-1 text-center"><p className="text-[9px] text-green-400 uppercase font-bold">Trades Won</p><p className="text-green-400 font-bold text-lg">{wins}</p></div>
+    <div className="bg-red-900/20 border border-red-500/30 rounded p-1 text-center"><p className="text-[9px] text-red-400 uppercase font-bold">Trades Lost</p><p className="text-red-400 font-bold text-lg">{losses}</p></div>
+  </div>
+</div>
       <div className="grid grid-cols-3 gap-2 flex-shrink-0 mb-2">
         <button onClick={startBot} disabled={isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${isRunning ? 'bg-gray-800 text-gray-500' : 'bg-green-500 text-black'}`}><Play size={14} /> Run</button>
         <button onClick={stopBot} disabled={!isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${!isRunning ? 'bg-gray-800 text-gray-500' : 'bg-red-500 text-white'}`}><Square size={14} /> Stop</button>
@@ -418,3 +460,4 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     </div>
   )
 }
+ 
