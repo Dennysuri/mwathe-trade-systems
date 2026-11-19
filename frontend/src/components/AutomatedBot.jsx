@@ -85,6 +85,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         wsRef.current = ws
         ws.onopen = () => { 
           reconnectAttemptsRef.current = 0
+          ws.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: reqIdRef.current++ }))
           if(isRunningRef.current) addLog('✅ Connection Restored')
           if (pingIntervalRef.current) clearInterval(pingIntervalRef.current)
           pingIntervalRef.current = setInterval(() => {
