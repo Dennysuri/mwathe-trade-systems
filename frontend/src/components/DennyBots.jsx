@@ -68,7 +68,7 @@ export default function DennyBots({ token, accountId, currency = 'USD', onBalanc
   
   const [isRunning, setIsRunning] = useState(false)
   const [validationError, setValidationError] = useState('')
-  const [logs, setLogs] = useState(['System initialized.'])
+  const [logs, setLogs] = useState(() => { try { return JSON.parse(localStorage.getItem('mwathe:denny-bots-logs:v1') || 'null') || ['System initialized.'] } catch { return ['System initialized.'] } })
   const [currentPL, setCurrentPL] = useState(0.00)
   const [totalTrades, setTotalTrades] = useState(0)
   const [wins, setWins] = useState(0)
@@ -78,6 +78,7 @@ export default function DennyBots({ token, accountId, currency = 'USD', onBalanc
   const [confidenceScore, setConfidenceScore] = useState(0)
   
   const logRef = useRef(null)
+  const shouldAutoScrollRef = useRef(true)
   const wsRef = useRef(null)
   const isRunningRef = useRef(false)
   const reqIdRef = useRef(1)
@@ -95,10 +96,11 @@ export default function DennyBots({ token, accountId, currency = 'USD', onBalanc
 
   const addLog = (msg, silent = false) => {
     if (silent) return
-    setLogs(prev => [...prev.slice(-499), `[${new Date().toLocaleTimeString()}] ${msg}`])
+    setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`].slice(-2000))
   }
 
-  useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight }, [logs])
+  useEffect(() => { try { localStorage.setItem('mwathe:denny-bots-logs:v1', JSON.stringify(logs)) } catch {} }, [logs])
+  useEffect(() => { if (logRef.current && shouldAutoScrollRef.current) requestAnimationFrame(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight }) }, [logs])
   useEffect(() => { if (SUB_TRADE_TYPES[tradeType]?.length > 0) setSubTradeType(SUB_TRADE_TYPES[tradeType][0]); else setSubTradeType('') }, [tradeType])
   useEffect(() => { if (subTradeType && OPTIONS[subTradeType]) setOption(OPTIONS[subTradeType][0]) }, [subTradeType])
   useEffect(() => { const rules = TIMEFRAME_RULES[tradeType]; setTimeframeUnit(rules.defaultUnit); setDurationValue(rules.min) }, [tradeType])
@@ -369,7 +371,7 @@ export default function DennyBots({ token, accountId, currency = 'USD', onBalanc
     setIsRunning(true)
     sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0; consecutiveLossesRef.current = 0
     currentStakeRef.current = parseFloat(stake)
-    setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setConfidenceScore(0); setLogs([])
+    setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setConsecutiveLosses(0); setCurrentStake(parseFloat(stake)); setConfidenceScore(0); shouldAutoScrollRef.current=true
     addLog('🚀 DENNY BOT STARTED')
     addLog(`Market: ${selectedMarket} | Stake: $${stake} | Martingale: ${martingaleFactor}x`)
     addLog(`Target: $${targetProfit} | Stop: $${stopLoss} | Min Conf: ${minConfidence}%`)
@@ -377,7 +379,7 @@ export default function DennyBots({ token, accountId, currency = 'USD', onBalanc
   }
 
   const stopBot = () => { isRunningRef.current = false; setIsRunning(false); addLog(`⏹️ Stopped new entries; any open contract remains monitored until settlement.`) }
-  const resetBot = () => { if (isRunningRef.current) return; setLogs([]); setValidationError('') }
+  const resetBot = () => { if (isRunningRef.current) return; setLogs([]); try { localStorage.removeItem('mwathe:denny-bots-logs:v1') } catch {}; shouldAutoScrollRef.current=true; setValidationError('') }
   useEffect(() => {
     if (!connectedMode) return
     if (analysisRunning && !isRunningRef.current) startBot()
@@ -413,7 +415,7 @@ export default function DennyBots({ token, accountId, currency = 'USD', onBalanc
       </div>
       <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col">
         <div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">ANALYSIS LOG</span></div>
-        <div ref={logRef} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5" style={{scrollBehavior: 'smooth'}}>
+        <div ref={logRef} onScroll={() => { const el=logRef.current; if(el) shouldAutoScrollRef.current=el.scrollHeight-el.scrollTop-el.clientHeight<60 }} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5" style={{scrollBehavior: 'smooth'}}>
           {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('TARGET') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') || log.includes('Error') ? 'text-red-500' : log.includes('🚀') || log.includes('📊') || log.includes('') ? 'text-sky-400' : log.includes('⏹️') || log.includes('⚠️') ? 'text-orange-400' : 'text-gray-400'}>{log}</p>)}
         </div>
       </div>

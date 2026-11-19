@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Zap } from 'lucide-react'
-import { boundedNextStake, buildProposal, VOLATILITY_MARKETS } from '../services/tradingCore'
+import { buildProposal, VOLATILITY_MARKETS } from '../services/tradingCore'
 import { validateEntryWindow } from '../services/strategyIntelligence'
 import { validateLiveOpportunity } from '../services/liveOpportunityEngine'
 import { rankLiveStrategyUniverse } from '../services/strategyUniverse'
@@ -25,11 +25,10 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const [stake, setStake] = useState('1.00')
   const [targetProfit, setTargetProfit] = useState('50.00')
   const [stopLoss, setStopLoss] = useState('20.00')
-  const [martingaleFactor, setMartingaleFactor] = useState('1.5')
   
   const [isRunning, setIsRunning] = useState(false)
   const [validationError, setValidationError] = useState('')
-  const [logs, setLogs] = useState(['System initialized.'])
+  const [logs, setLogs] = useState(() => { try { return JSON.parse(localStorage.getItem('mwathe:automated-bot-logs:v1') || 'null') || ['System initialized.'] } catch { return ['System initialized.'] } })
   const [currentPL, setCurrentPL] = useState(0.00)
   const [totalTrades, setTotalTrades] = useState(0)
   const [wins, setWins] = useState(0)
@@ -46,9 +45,16 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const pingIntervalRef = useRef(null)
   const consecutiveLossesRef = useRef(0)
   const lastResearchNoticeRef = useRef('')
+  const marketCooldownUntilRef = useRef({})
+  const recentOutcomesRef = useRef([])
+  const performanceCooldownUntilRef = useRef(0)
+  const performanceRecoveryUntilRef = useRef(0)
+  const lastPerformancePauseNoticeRef = useRef(0)
+  const shouldAutoScrollRef = useRef(true)
 
-  const addLog = (msg) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`])
-  useEffect(() => { if (logRef.current) requestAnimationFrame(() => { logRef.current.scrollTop = logRef.current.scrollHeight }) }, [logs])
+  const addLog = (msg) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`].slice(-2000))
+  useEffect(() => { try { localStorage.setItem('mwathe:automated-bot-logs:v1', JSON.stringify(logs)) } catch {} }, [logs])
+  useEffect(() => { if (logRef.current && shouldAutoScrollRef.current) requestAnimationFrame(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight }) }, [logs])
   useEffect(() => { if (SUB_TRADE_TYPES[tradeType]?.length > 0) setSubTradeType(SUB_TRADE_TYPES[tradeType][0]); else setSubTradeType('') }, [tradeType])
   useEffect(() => { if (subTradeType && OPTIONS[subTradeType]) setOption(OPTIONS[subTradeType][0]) }, [subTradeType])
   useEffect(() => { const rules = TIMEFRAME_RULES[tradeType]; setTimeframeUnit(rules.defaultUnit); setDurationValue(rules.min) }, [tradeType])
@@ -214,9 +220,14 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     }, { now: Date.now(), maxAgeMs: 5000, minLiveTicks: 1 })
     // Research all supported profiles, but only the exact user-selected profile
     // is eligible to enter the bot's existing validation/execution path.
+    const now = Date.now()
+    if (performanceCooldownUntilRef.current > now) return []
+    const requiredScore = performanceRecoveryUntilRef.current > now ? 92 : consecutiveLossesRef.current >= 3 ? 92 : consecutiveLossesRef.current >= 2 ? 90 : consecutiveLossesRef.current === 1 ? 85 : 0
     return universe.filter(item =>
       item.profile.tradeType === tradeType
       && item.profile.subTradeType === (subTradeType || '')
+      && (marketCooldownUntilRef.current[item.symbol] || 0) <= now
+      && Number(item.score || 0) >= requiredScore
     )
   }
 
@@ -232,11 +243,20 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const refreshedQueue = await scanMarkets()
         const currentTarget = refreshedQueue[0]
         if (!currentTarget) {
-          if (!hasLoggedScanningRef.current) {
-            addLog('Scanning all supported trade families and subtypes across 13 live markets; no qualified selected-profile candidate yet.')
-            hasLoggedScanningRef.current = true
+          if (performanceCooldownUntilRef.current > Date.now()) {
+            if (lastPerformancePauseNoticeRef.current !== performanceCooldownUntilRef.current) {
+              const remaining = Math.ceil((performanceCooldownUntilRef.current - Date.now()) / 1000)
+              addLog(`🛡️ Performance circuit breaker: no new entries for ${remaining}s after the last 8 settled trades were net negative.`)
+              lastPerformancePauseNoticeRef.current = performanceCooldownUntilRef.current
+            }
+            await new Promise(r => setTimeout(r, Math.min(5000, Math.max(500, performanceCooldownUntilRef.current - Date.now()))))
+          } else {
+            if (!hasLoggedScanningRef.current) {
+              addLog('Scanning live markets; waiting for a fresh setup to pass quality and loss-recovery gates.')
+              hasLoggedScanningRef.current = true
+            }
+            await new Promise(r => setTimeout(r, 1000))
           }
-          await new Promise(r => setTimeout(r, 1000))
           continue
         }
         hasLoggedScanningRef.current = false
@@ -276,6 +296,12 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const outcomeStats = recordContractOutcome(signal, { profit, stake: currentStakeRef.current, contractId: contractResult.contract_id, bot: 'Automated Bot' })
         if (outcomeStats) addLog(`Thamira history: ${outcomeStats.trades} settled for this exact setup; win rate ${outcomeStats.winRate === null ? 'n/a' : (outcomeStats.winRate * 100).toFixed(1) + '%'}.`)
         totalTradesRef.current += 1; sessionPLRef.current += profit
+        recentOutcomesRef.current = [...recentOutcomesRef.current, profit].slice(-8)
+        if (recentOutcomesRef.current.length === 8 && recentOutcomesRef.current.reduce((sum, value) => sum + value, 0) <= 0) {
+          performanceCooldownUntilRef.current = Date.now() + 180000
+          performanceRecoveryUntilRef.current = Date.now() + 480000
+          addLog('🛡️ Eight-trade performance guard: the latest 8 settled contracts are net negative. Pausing entries for 3 minutes; then require 92/94 setup scores for 5 minutes.')
+        }
         
         if (isWin) {
           winsRef.current += 1; currentStakeRef.current = parseFloat(stake)
@@ -285,17 +311,24 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           addLog(`✅ WON +$${profit.toFixed(2)} | Stake reset to base`)
         } else {
           lossesRef.current += 1; consecutiveLossesRef.current++
-          currentStakeRef.current = boundedNextStake(stake, currentStakeRef.current, martingaleFactor, consecutiveLossesRef.current)
+          currentStakeRef.current = roundStake(parseFloat(stake))
+          marketCooldownUntilRef.current[currentTarget.symbol] = Date.now() + (consecutiveLossesRef.current >= 2 ? 120000 : 60000)
           setCurrentStake(currentStakeRef.current)
-          if (consecutiveLossesRef.current >= 2) addLog(`⚠️ ${consecutiveLossesRef.current} consecutive losses - continuing bounded recovery and rotating market`)
-          addLog(`❌ LOST -$${profit.toFixed(2)} | Re-ranking fresh opportunities → Next: $${currentStakeRef.current.toFixed(2)}`)
+          addLog(`❌ LOST -${profit.toFixed(2)} | Base stake retained; ${currentTarget.symbol} paused for ${consecutiveLossesRef.current >= 2 ? 120 : 60}s. No loss-chasing martingale.`)
+          if (consecutiveLossesRef.current >= 2) addLog(`🛡️ ${consecutiveLossesRef.current} consecutive losses: next setup must score at least ${consecutiveLossesRef.current >= 3 ? 92 : 90}/94.`)
         }
         
         setTotalTrades(totalTradesRef.current); setWins(winsRef.current); setLosses(lossesRef.current); setCurrentPL(sessionPLRef.current)
         if (sessionPLRef.current >= parseFloat(targetProfit)) { addLog(`🎯 TARGET HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
         if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog('🛑 STOP LOSS HIT!'); setIsRunning(false); isRunningRef.current = false; break }
-        addLog(`📊 P/L: $${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
-        await new Promise(r => setTimeout(r, 1000))
+        addLog(`📊 P/L: ${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
+        if (consecutiveLossesRef.current >= 4) {
+          addLog('🛑 Four consecutive losses: Automated Bot safety stop. Review the session before restarting.')
+          setIsRunning(false); isRunningRef.current = false; break
+        }
+        const cooldownMs = consecutiveLossesRef.current >= 3 ? 90000 : consecutiveLossesRef.current >= 2 ? 45000 : consecutiveLossesRef.current === 1 ? 15000 : 5000
+        addLog(`🧊 Waiting ${Math.round(cooldownMs / 1000)}s before the next independent market scan.`)
+        await new Promise(r => setTimeout(r, cooldownMs))
       } catch (error) { if (!isRunningRef.current) break; addLog(`❌ Error: ${error.message}`); await new Promise(r => setTimeout(r, 2000)) }
     }
   }
@@ -304,13 +337,13 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     setValidationError(''); if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }
     isRunningRef.current = true; setIsRunning(true); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0
     currentStakeRef.current = parseFloat(stake); historyLoadedRef.current = false; hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0
-    consecutiveLossesRef.current = 0
-    setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); setLogs([])
-    addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets | Full Strategy Universe | Hard Gates)'); addLog(`Type: ${tradeType} | Stake: $${stake} | Martingale: ${martingaleFactor}x`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); runTradeCycle()
+    consecutiveLossesRef.current = 0; recentOutcomesRef.current = []; performanceCooldownUntilRef.current = 0; performanceRecoveryUntilRef.current = 0; lastPerformancePauseNoticeRef.current = 0
+    setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); marketCooldownUntilRef.current = {}
+    addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets | Loss-Resistant Entry Gates)'); addLog(`Type: ${tradeType} | Stake: ${stake} | Recovery: flat stake, no martingale escalation`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); runTradeCycle()
   }
 
   const stopBot = () => { isRunningRef.current = false; setIsRunning(false); addLog('⏹️ Stopped new entries; any open contract remains monitored until settlement.') }
-  const resetBot = () => { if (isRunningRef.current) return; setLogs([]); setValidationError('') }
+  const resetBot = () => { if (isRunningRef.current) return; setLogs([]); try { localStorage.removeItem('mwathe:automated-bot-logs:v1') } catch {}; shouldAutoScrollRef.current = true; setValidationError('') }
   const rules = TIMEFRAME_RULES[tradeType]; const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
 
   return (
@@ -335,7 +368,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         </div>
         <div className="grid grid-cols-2 gap-2 mb-2">
           <div><label className="text-[10px] text-gray-400 uppercase font-bold">Stake</label><input type="number" step="0.01" value={stake} onChange={e => setStake(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div>
-          <div><label className="text-[10px] text-gray-400 uppercase font-bold">Martingale</label><input type="number" step="0.1" value={martingaleFactor} onChange={e => setMartingaleFactor(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div>
+          <div><label className="text-[10px] text-gray-400 uppercase font-bold">Loss Recovery</label><input type="text" value="Flat stake · protected" disabled className="w-full bg-black/50 border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-green-400" /></div>
         </div>
         <div className="grid grid-cols-2 gap-2">
           <div><label className="text-[10px] text-gray-400 uppercase font-bold">Target</label><input type="number" step="0.01" value={targetProfit} onChange={e => setTargetProfit(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div>
@@ -364,7 +397,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       </div>
       <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col">
         <div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">EXECUTION LOG</span></div>
-        <div ref={logRef} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5" style={{scrollBehavior: 'auto'}}>
+        <div ref={logRef} onScroll={() => { const el = logRef.current; if (el) shouldAutoScrollRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60 }} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5" style={{scrollBehavior: 'auto'}}>
           {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('TARGET') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') || log.includes('Error') || log.includes('STOP') ? 'text-red-500' : log.includes('🚀') || log.includes('') || log.includes('🔬') || log.includes('⏳') || log.includes('') || log.includes('⚠️') ? 'text-sky-400' : log.includes('━━') ? 'text-gray-600' : 'text-gray-400'}>{log}</p>)}
         </div>
       </div>
