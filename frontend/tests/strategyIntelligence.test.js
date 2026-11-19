@@ -60,7 +60,7 @@ test('contract intelligence separates barrier and predicted-digit configurations
 });
 
 test('research candidates use the correct option vocabulary for each contract family', async () => {
-  const prices = Array.from({length:300},(_,i)=>100+i*0.01+Math.sin(i)*0.001);
+  const prices = Array.from({length:300},(_,i)=>100+i*0.00001+i*i*0.000001);
   const cases = [
     [{tradeType:'Ups & Downs',subTradeType:'Rise/Fall',option:'Both'}, 'Rise'],
     [{tradeType:'Ups & Downs',subTradeType:'Higher/Lower',option:'Both'}, 'Higher'],
