@@ -67,3 +67,23 @@ test('strong quote-matched results can clear the conservative calibration thresh
   assert.equal(summary.calibrated,true);
   assert.ok(summary.lowerBound>summary.maxBreakEvenRate+summary.safetyMargin);
 });
+
+test('parity calibration profile does not fragment on irrelevant predicted digit', () => {
+  const first={symbol:'R_50',tradeType:'Digits',subTradeType:'Even/Odd',option:'Even',
+    predictedDigit:1,duration:1,timeframeUnit:'Ticks',currency:'USD'};
+  const second={...first,predictedDigit:8};
+  assert.equal(beginPaperTrial({...first,id:'parity-a'},{quote:quote()}),true);
+  assert.equal(beginPaperTrial({...second,id:'parity-b'},{quote:quote()}),false);
+  resetPaperTrials();
+});
+
+test('pip size preserves trailing zero precision when deriving the terminal digit', () => {
+  resetPaperTrials();
+  const signal={id:'precision',symbol:'R_50',tradeType:'Digits',subTradeType:'Even/Odd',
+    option:'Even',duration:1,timeframeUnit:'Ticks',currency:'USD'};
+  assert.equal(beginPaperTrial(signal,{quote:quote()}),true);
+  const settled=advancePaperTrials('R_50',{quote:123.4,pipSize:2});
+  assert.equal(settled.length,1);
+  assert.equal(settled[0].terminalDigit,0);
+  assert.equal(settled[0].won,true);
+});
