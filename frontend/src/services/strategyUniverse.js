@@ -22,7 +22,7 @@ export function buildStrategyProfiles(selectedConfig = {}) {
       timeframeUnit: selected && selectedConfig.timeframeUnit ? selectedConfig.timeframeUnit : definition.timeframeUnit,
       duration: selected && Number.isFinite(Number(selectedConfig.duration)) && Number(selectedConfig.duration) > 0
         ? Number(selectedConfig.duration) : definition.duration,
-      option: selected && selectedConfig.option && selectedConfig.option !== 'Both'
+      option: definition.tradeType !== 'Accumulators' && selected && selectedConfig.option && selectedConfig.option !== 'Both'
         ? selectedConfig.option : 'Both',
       predictedDigit: Number.isInteger(Number(selectedConfig.predictedDigit))
         ? Number(selectedConfig.predictedDigit) : 5,
