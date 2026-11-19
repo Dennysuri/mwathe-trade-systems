@@ -190,7 +190,10 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     try {
       const signal = {symbol,tradeType:config.tradeType,subTradeType:config.subTradeType,option:selectedOption,predictedDigit:target,barrier,duration:config.durationValue,timeframeUnit:config.timeframeUnit,createdAt:Date.now(),expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,config.durationValue*(config.timeframeUnit==='Hours'?3600:config.timeframeUnit==='Days'?86400:config.timeframeUnit==='Minutes'?60:1)),growthRate:0.01,multiplier:100,takeProfit:1,contractStopLoss:1}
       const accountRisk = evaluateAccountRisk({ balance: accountBalanceRef.current, sessionPL: sessionRef.current.pl, targetProfit: config.targetProfit, stopLoss: config.stopLoss, nextStake: sessionRef.current.stake })
-      if (!accountRisk.allowEntry) { addLog(`🛡️ Account guard: ${accountRisk.message}. New entries stopped.`); isRunningRef.current = false; setIsRunning(false); return }
+      if (!accountRisk.allowEntry) {
+        if (accountRisk.balanceUnavailable) { addLog('⏳ Waiting for Deriv to confirm account balance before entry.'); nextTradeTimer.current = setTimeout(() => executeTrade(), 1000); return }
+        addLog(`🛡️ Account guard: ${accountRisk.message}. New entries stopped.`); isRunningRef.current = false; setIsRunning(false); return
+      }
       const adaptiveStatus = getAdaptiveStrategyStatus(signal)
       if (adaptiveStatus.blocked) { addLog(`🧠 Strategy recovery pause: this exact strategy is cooling down across all markets.`); nextTradeTimer.current = setTimeout(() => executeTrade(), Math.max(500, adaptiveStatus.blockedUntil - Date.now())); return }
       const proposal = buildProposal(signal,sessionRef.current.stake,accountCurrencyRef.current)
