@@ -3,7 +3,7 @@ import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, Shi
 import { boundedNextStake, buildProposal, MARKET_SYMBOLS, VOLATILITY_MARKETS } from '../services/tradingCore'
 import { evaluateStrategyEnsemble, validateEntryWindow } from '../services/strategyIntelligence'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
-import { evaluateAccountRisk, getAdaptiveStrategyStatus, recordAdaptiveOutcome } from '../services/adaptiveTradingIntelligence'
+import { evaluateAccountRisk, getAdaptiveStrategyStatus, getContractDifficulty, recordAdaptiveOutcome } from '../services/adaptiveTradingIntelligence'
 import { advancePaperTrials, beginPaperTrial, getPaperForwardSummary } from '../services/paperForwardCalibration'
 
 const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
@@ -132,7 +132,10 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
                         currency: msg.proposal.currency, quotedAt: Date.now() }
                     })
                     pendingEntryRef.current = null
-                    if (started) addLog(`🧪 Calibration-only trial started for ${signal.subTradeType}/${signal.option} on ${signal.symbol}; ${calibration.trades}/200 settled samples, no purchase sent.`)
+                    if (started) {
+                      const difficulty = getContractDifficulty(signal)
+                      addLog(`🧪 Calibration-only trial started for ${signal.subTradeType}/${signal.option} on ${signal.symbol}; theoretical baseline ${difficulty.theoreticalWinChance === null ? 'n/a' : (difficulty.theoreticalWinChance * 100).toFixed(1) + '%'}; ${calibration.trades}/200 settled samples, no purchase sent.`)
+                    }
                     else {
                       addLog('🛡️ No valid quote-matched calibration trial could be started; refusing this digit entry.')
                       if (calibration.pending === 0 && isRunningRef.current) nextTradeTimer.current = setTimeout(() => executeTrade(), 2000)
