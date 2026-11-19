@@ -89,9 +89,14 @@ export function evaluateAccountRisk({ balance, sessionPL = 0, targetProfit, stop
   const stopHit = stop > 0 && pl <= -stop;
   const targetHit = target > 0 && pl >= target;
   const insufficientLossRoom = remainingLossRoom !== null && Number(nextStake) > remainingLossRoom;
+  const insufficientBalance = validBalance && Number(nextStake) > balanceValue;
+  const balanceUnavailable = !validBalance;
   return { balance: validBalance ? balanceValue : null, sessionPL: pl,
     remainingToTarget, remainingLossRoom, targetHit, stopHit,
-    insufficientLossRoom, allowEntry: !stopHit && !targetHit && !insufficientLossRoom,
-    message: stopHit ? 'Session stop-loss reached' : targetHit ? 'Target profit reached'
+    insufficientLossRoom, insufficientBalance, balanceUnavailable,
+    allowEntry: !balanceUnavailable && !insufficientBalance && !stopHit && !targetHit && !insufficientLossRoom,
+    message: balanceUnavailable ? 'Waiting for a verified account balance'
+      : stopHit ? 'Session stop-loss reached' : targetHit ? 'Target profit reached'
+      : insufficientBalance ? 'Next stake exceeds available account balance'
       : insufficientLossRoom ? 'Next stake exceeds remaining stop-loss allowance' : 'Within configured session limits' };
 }
