@@ -5,7 +5,7 @@ import { validateEntryWindow } from '../services/strategyIntelligence'
 import { validateLiveOpportunity } from '../services/liveOpportunityEngine'
 import { rankLiveStrategyUniverse } from '../services/strategyUniverse'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
-import { evaluateAccountRisk, getAdaptiveStrategyStatus, recordAdaptiveOutcome } from '../services/adaptiveTradingIntelligence'
+import { evaluateAccountRisk, getAdaptiveStrategyStatus, getContractDifficulty, recordAdaptiveOutcome } from '../services/adaptiveTradingIntelligence'
 import { advancePaperTrials, beginPaperTrial, getPaperForwardSummary } from '../services/paperForwardCalibration'
 import { appendTickBuffer, seedTickBuffer } from '../services/marketTickBuffer'
 
@@ -304,7 +304,8 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
                 currency: proposalRes.proposal.currency, quotedAt: Date.now() }
             })
             if (started) {
-              addLog(`🧪 Calibration-only trial started for ${signal.subTradeType}/${signal.option} on ${signal.symbol}; ${calibration.trades}/200 settled samples, no purchase sent.`)
+              const difficulty = getContractDifficulty(signal)
+              addLog(`🧪 Calibration-only trial started for ${signal.subTradeType}/${signal.option} on ${signal.symbol}; theoretical baseline ${difficulty.theoreticalWinChance === null ? 'n/a' : (difficulty.theoreticalWinChance * 100).toFixed(1) + '%'}; ${calibration.trades}/200 settled samples, no purchase sent.`)
             } else if (calibration.pending === 0) {
               addLog('🛡️ No valid quote-matched calibration trial could be started; refusing this digit entry and retrying after a fresh quote.')
               await new Promise(resolve => setTimeout(resolve, 1500))
