@@ -1,17 +1,17 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Activity, Lock } from 'lucide-react'
-import { buildProposal, MARKET_SYMBOLS, VOLATILITY_MARKETS } from '../services/tradingCore'
-import { validateEntryWindow } from '../services/strategyIntelligence'
+import { boundedNextStake, buildProposal, MARKET_SYMBOLS, VOLATILITY_MARKETS } from '../services/tradingCore'
+import { evaluateStrategyEnsemble, validateEntryWindow } from '../services/strategyIntelligence'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
 
 const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
 const SYMBOL_MAP = Object.fromEntries(VOLATILITY_MARKETS)
+const MARTINGALE_FACTOR = 1.5
 const TRADE_TYPES = ['Multipliers', 'Ups & Downs', 'Touch & No Touch', 'Digits', 'Accumulators', 'Vanillas', 'Turbos']
 const SUB_TRADE_TYPES = { 'Accumulators': [], 'Vanillas': ['Call/Put'], 'Turbos': ['Turbos'], 'Multipliers': ['Multipliers'], 'Ups & Downs': ['Rise/Fall', 'Higher/Lower'], 'Touch & No Touch': ['Touch/No Touch'], 'Digits': ['Over/Under', 'Matches/Differs', 'Even/Odd'] }
 const OPTIONS = { 'Over/Under': ['Over', 'Under', 'Both'], 'Even/Odd': ['Even', 'Odd', 'Both'], 'Matches/Differs': ['Matches', 'Differs', 'Both'], 'Turbos': ['Up', 'Down', 'Both'], 'Rise/Fall': ['Rise', 'Fall', 'Both'], 'Higher/Lower': ['Higher', 'Lower', 'Both'], 'Touch/No Touch': ['Touch', 'No Touch', 'Both'], 'Call/Put': ['Call', 'Put', 'Both'], 'Multipliers': ['Up', 'Down', 'Both'] }
 const TIMEFRAME_RULES = { 'Accumulators': { units: ['Ticks'], defaultUnit: 'Ticks', min: 1, max: 85, fixed: true, label: '1 - 85 ticks' }, 'Multipliers': { units: ['Auto'], defaultUnit: 'Auto', min: 1, max: 1, fixed: true, label: 'Auto' }, 'Digits': { units: ['Ticks'], defaultUnit: 'Ticks', min: 1, max: 10, fixed: false }, 'Turbos': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false }, 'Ups & Downs': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false }, 'Touch & No Touch': { units: ['Ticks', 'Minutes'], defaultUnit: 'Ticks', min: 1, maxMap: { 'Ticks': 10, 'Minutes': 1440 }, fixed: false }, 'Vanillas': { units: ['Minutes', 'Hours', 'Days'], defaultUnit: 'Minutes', min: 1, maxMap: { 'Minutes': 1440, 'Hours': 24, 'Days': 30 }, fixed: false } }
 
-const getQuoteDigit = value => { const text=String(value); const decimals=text.includes('.')?text.split('.')[1]:''; return Number((decimals||text).slice(-1)) }
 const MARKET_LABEL_BY_SYMBOL = Object.fromEntries(Object.entries(SYMBOL_MAP).map(([label,symbol])=>[symbol,label]))
 
 export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
@@ -52,6 +52,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   const isRunningRef = useRef(false)
   const wsRef = useRef(null)
   const tickHistoryRef = useRef({})
+  const lastLiveTickAtRef = useRef({})
   const pendingProposalRef = useRef(null)
   const pendingEntryRef = useRef(null)
   const contractUnavailableUntilRef = useRef({})
@@ -87,7 +88,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
             if (msg.msg_type === 'balance' && msg.balance?.currency) accountCurrencyRef.current = msg.balance.currency
             if (msg.msg_type === 'balance' && onBalanceUpdate) onBalanceUpdate(parseFloat(msg.balance.balance))
             if (msg.msg_type === 'history' && msg.history?.prices) { const symbol = msg.echo_req?.ticks_history || msg.history.symbol; if (symbol) tickHistoryRef.current[symbol] = msg.history.prices.map(Number).filter(Number.isFinite).slice(-500) }
-            if (msg.msg_type === 'tick' && msg.tick?.quote !== undefined) { const symbol = msg.tick.symbol; const current = tickHistoryRef.current[symbol] || []; tickHistoryRef.current[symbol] = [...current, Number(msg.tick.quote)].slice(-500) }
+            if (msg.msg_type === 'tick' && msg.tick?.quote !== undefined) { const symbol = msg.tick.symbol; const current = tickHistoryRef.current[symbol] || []; tickHistoryRef.current[symbol] = [...current, Number(msg.tick.quote)].slice(-500); lastLiveTickAtRef.current[symbol] = Date.now() }
             if (msg.msg_type === 'contracts_for' && pendingProposalRef.current?.reqId === msg.req_id) {
               const pending = pendingProposalRef.current; pendingProposalRef.current = null
               const offered = Array.isArray(msg.contracts_for?.available) ? msg.contracts_for.available : []
@@ -131,44 +132,46 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
       nextTradeTimer.current = setTimeout(() => executeTrade(), Math.min(5000, Math.max(500, performanceCooldownUntilRef.current-now)))
       return
     }
-    const requiredScore = performanceRecoveryUntilRef.current > now ? 6.5 : sessionRef.current.lossStreak >= 3 ? 6.5 : sessionRef.current.lossStreak >= 2 ? 5 : sessionRef.current.lossStreak === 1 ? 4.5 : 3
-    const candidates = MARKET_SYMBOLS.filter(symbol => (contractUnavailableUntilRef.current[symbol] || 0) <= Date.now() && (marketCooldownUntilRef.current[symbol] || 0) <= Date.now()).map(symbol => {
-      const series = tickHistoryRef.current[symbol] || []
-      if (series.length < 40) return null
-      const sample = series.slice(-20), moves = sample.slice(1).map((v,i)=>v-sample[i]), driftValue = series.at(-1)-series.at(-16)
-      const volatility = moves.reduce((sum,v)=>sum+Math.abs(v),0)/(moves.length||1)
-      return volatility>0 ? {symbol,ticks:series,drift:driftValue,atr:volatility,score:config.tradeType==='Accumulators'?Math.abs(series.at(-1))/(volatility||1):Math.abs(driftValue)/volatility} : null
-    }).filter(item=>item && item.score>=(config.tradeType==='Accumulators'?50:requiredScore)).sort((a,b)=>b.score-a.score)
-    if (!candidates.length) { addLog('⏳ Scanning live markets; no eligible setup yet.'); nextTradeTimer.current=setTimeout(()=>executeTrade(),500); return }
-    const best = candidates[0]
+    // Thamira evaluates the same contract-specific strategy ensemble on every
+    // live market. Historical ticks seed the model; current subscribed ticks keep
+    // each market window fresh. Relative scores rank markets, not win probabilities.
+    const candidates = (await Promise.all(MARKET_SYMBOLS
+      .filter(symbol => (contractUnavailableUntilRef.current[symbol] || 0) <= now
+        && (marketCooldownUntilRef.current[symbol] || 0) <= now
+        && now - (lastLiveTickAtRef.current[symbol] || 0) <= 5000)
+      .map(async symbol => {
+        const ticks = tickHistoryRef.current[symbol] || []
+        const report = await evaluateStrategyEnsemble(ticks, {
+          tradeType: config.tradeType, subTradeType: config.subTradeType,
+          option: config.option, predictedDigit: Number(config.predictedDigit),
+          duration: config.durationValue, timeframeUnit: config.timeframeUnit, symbol
+        })
+        const candidate = report.candidate || report.watchCandidate
+        if (!candidate) return null
+        const prices = ticks.slice(-21)
+        const moves = prices.slice(1).map((value, index) => value - prices[index])
+        const atr = moves.reduce((sum, value) => sum + Math.abs(value), 0) / Math.max(1, moves.length)
+        return { symbol, ticks, atr, drift: ticks.at(-1) - ticks.at(-16), score: candidate.score,
+          report, option: candidate.option, qualified: Boolean(report.candidate) }
+      }))).filter(Boolean).sort((a,b) => b.score - a.score)
+
+    const executableCandidates = candidates.filter(item => item.qualified)
+    if (!executableCandidates.length) {
+      const watch = candidates[0]
+      addLog(watch
+        ? `Thamira watchlist leader: ${MARKET_LABEL_BY_SYMBOL[watch.symbol] || watch.symbol}, ${watch.option}, relative score ${watch.score}/94. Not execution-qualified: ${watch.report.reasons?.[0] || 'insufficient validation'}.`
+        : 'Thamira is refreshing all 13 market windows; no evaluable candidate is ready yet.')
+      nextTradeTimer.current=setTimeout(()=>executeTrade(),1000)
+      return
+    }
+    const best = executableCandidates[0]
     const ticks = best.ticks, atr = best.atr, drift = best.drift, symbol = best.symbol
     const marketLabel = MARKET_LABEL_BY_SYMBOL[symbol] || symbol
     setSelectedMarket(marketLabel)
-    addLog(`Market selected automatically: ${marketLabel} (${symbol}); scan score ${best.score.toFixed(2)}.`)
-    const direction = drift > 0 ? 'up' : 'down'
-    let selectedOption = config.option
-    if (selectedOption === 'Both') {
-      selectedOption = config.tradeType === 'Vanillas' ? (direction==='up'?'Call':'Put')
-        : config.tradeType === 'Touch & No Touch' ? 'Touch'
-        : config.tradeType === 'Multipliers' || config.tradeType === 'Turbos' ? (direction==='up'?'Up':'Down')
-        : config.subTradeType === 'Higher/Lower' ? (direction==='up'?'Higher':'Lower')
-        : config.tradeType === 'Digits' ? (config.subTradeType === 'Over/Under' ? (direction==='up'?'Over':'Under') : config.subTradeType === 'Matches/Differs' ? 'Differs' : (getQuoteDigit(ticks.at(-1))%2===0?'Even':'Odd'))
-        : config.subTradeType === 'Even/Odd' ? 'Even' : config.subTradeType === 'Matches/Differs' ? 'Differs'
-        : direction==='up'?'Rise':'Fall'
-    }
+    addLog(`Thamira selected ${marketLabel} (${symbol}); best relative setup score ${best.score}/94; families: ${best.report.candidate.supportingFamilies.join(', ')}.`)
+    const direction = drift > 0 ? 'up' : drift < 0 ? 'down' : 'flat'
+    let selectedOption = config.option === 'Both' ? best.option : config.option
     const target = config.subTradeType === 'Over/Under' ? Math.max(1, Math.min(8, Number(config.predictedDigit) || 5)) : Math.max(0, Math.min(9, Number(config.predictedDigit) || 0))
-    if (config.tradeType === 'Digits') {
-      const digits = ticks.slice(-120).map(getQuoteDigit), previous = digits.at(-1)
-      const transitions = digits.slice(0,-1).reduce((out,d,i)=>{if(d===previous)out.push(digits[i+1]);return out},[])
-      if (transitions.length < 10) { addLog('Insufficient conditional digit history; no trade.'); nextTradeTimer.current=setTimeout(()=>executeTrade(),500); return }
-      const rate = predicate => (transitions.filter(predicate).length+1)/(transitions.length+2)
-      const candidates = config.subTradeType==='Over/Under'?[{name:'Over',p:rate(d=>d>target),base:(9-target)/10},{name:'Under',p:rate(d=>d<target),base:target/10}]
-        :config.subTradeType==='Matches/Differs'?[{name:'Matches',p:rate(d=>d===target),base:0.1},{name:'Differs',p:rate(d=>d!==target),base:0.9}]
-        :[{name:'Even',p:rate(d=>d%2===0),base:0.5},{name:'Odd',p:rate(d=>d%2===1),base:0.5}]
-      const chosen=config.option==='Both'?candidates.sort((a,b)=>(b.p-b.base)-(a.p-a.base))[0]:candidates.find(item=>item.name===selectedOption)
-      if(!chosen || chosen.p-chosen.base<0.04){addLog('Digit edge did not exceed the minimum threshold; no trade.');nextTradeTimer.current=setTimeout(()=>executeTrade(),500);return}
-      selectedOption=chosen.name
-    }
     const isDown = ['Fall','Lower','Down','Put','No Touch','Under','Odd','Differs'].includes(selectedOption)
     if (config.tradeType !== 'Digits' && config.tradeType !== 'Accumulators' && config.tradeType !== 'Touch & No Touch' && ((direction==='up' && isDown) || (direction==='down' && !isDown))) {
       addLog('Selected direction conflicts with current tick trend; no trade sent.')
@@ -201,10 +204,10 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
       addLog(`✅ AI WON +$${profit.toFixed(2)}`)
     } else {
       session.losses += 1; session.lossStreak += 1
-      session.stake = parseFloat(config.stake) || 0.35
+      session.stake = boundedNextStake(config.stake, session.stake, MARTINGALE_FACTOR, session.lossStreak)
       const lostSymbol = settledSignal.symbol
       if (lostSymbol) marketCooldownUntilRef.current[lostSymbol] = Date.now() + (session.lossStreak >= 2 ? 120000 : 60000)
-      addLog(`❌ AI LOST -${profit.toFixed(2)} | Base stake retained; no martingale escalation.`)
+      addLog(`❌ AI LOST -${profit.toFixed(2)} | Bounded martingale recovery stake ${session.stake.toFixed(2)}.`)
       if (session.lossStreak >= 2) addLog(`🛡️ Loss recovery: next setup requires scan score ${session.lossStreak >= 3 ? 6.5 : 5.0}+ and the losing market is cooling down.`)
     }
     session.pl += profit
@@ -221,7 +224,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     if (isRunningRef.current) { const cooldownMs = session.lossStreak >= 3 ? 90000 : session.lossStreak >= 2 ? 45000 : session.lossStreak === 1 ? 15000 : 5000; addLog(`P/L: ${session.pl.toFixed(2)} | Trades: ${session.totalTrades}`); addLog(`🧊 Waiting ${Math.round(cooldownMs/1000)}s before next independent scan.`); nextTradeTimer.current=setTimeout(()=>executeTrade(),cooldownMs) }
   }
 
-  const startBot = () => { setValidationError(''); if (!ws || ws.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }; if (nextTradeTimer.current) clearTimeout(nextTradeTimer.current); setIsRunning(true); isRunningRef.current = true; setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConsecutiveLosses(0); marketCooldownUntilRef.current={}; recentOutcomesRef.current=[]; performanceCooldownUntilRef.current=0; performanceRecoveryUntilRef.current=0; lastPerformancePauseNoticeRef.current=0; sessionRef.current={totalTrades:0,wins:0,losses:0,lossStreak:0,stake:parseFloat(stake),pl:0}; shouldAutoScrollRef.current=true; addLog(` AutoD AI Started`); addLog('Market: autonomous scan across volatility indices'); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); tickHistoryRef.current={}; MARKET_SYMBOLS.forEach((symbol,index)=>ws.send(JSON.stringify({ ticks_history: symbol, count: 200, end: 'latest', style: 'ticks', subscribe: 1, req_id: Date.now()+index }))); nextTradeTimer.current = setTimeout(() => { if (isRunningRef.current) executeTrade() }, 3000) }
+  const startBot = () => { setValidationError(''); if (!ws || ws.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }; if (nextTradeTimer.current) clearTimeout(nextTradeTimer.current); setIsRunning(true); isRunningRef.current = true; setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConsecutiveLosses(0); marketCooldownUntilRef.current={}; recentOutcomesRef.current=[]; performanceCooldownUntilRef.current=0; performanceRecoveryUntilRef.current=0; lastPerformancePauseNoticeRef.current=0; sessionRef.current={totalTrades:0,wins:0,losses:0,lossStreak:0,stake:parseFloat(stake),pl:0}; shouldAutoScrollRef.current=true; addLog(` AutoD AI Started`); addLog('Market: autonomous scan across volatility indices'); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); tickHistoryRef.current={}; lastLiveTickAtRef.current={}; MARKET_SYMBOLS.forEach((symbol,index)=>ws.send(JSON.stringify({ ticks_history: symbol, count: 200, end: 'latest', style: 'ticks', subscribe: 1, req_id: Date.now()+index }))); nextTradeTimer.current = setTimeout(() => { if (isRunningRef.current) executeTrade() }, 3000) }
   const stopBot = () => { setIsRunning(false); isRunningRef.current = false; if (nextTradeTimer.current) { clearTimeout(nextTradeTimer.current); nextTradeTimer.current = null }; addLog(`⏹️ AI stopped new entries; any open contract remains monitored until settlement.`) }
   const resetBot = () => { if (isRunningRef.current) return; setLogs([]); try { localStorage.removeItem('mwathe:autod-ai-logs:v1') } catch {}; shouldAutoScrollRef.current=true; setValidationError('') }
   const rules = TIMEFRAME_RULES[tradeType]; const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
@@ -251,7 +254,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
         {tradeType === 'Digits' && <div className="mb-2"><label className="text-[10px] text-gray-400 uppercase font-bold">Predicted Digit / Barrier (0–9)</label><input type="number" min={subTradeType === 'Over/Under' ? 1 : 0} max={subTradeType === 'Over/Under' ? 8 : 9} step="1" value={predictedDigit} onChange={e => setPredictedDigit(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div>}
         {subTradeType && OPTIONS[subTradeType] && <div className="mb-2"><label className="text-[10px] text-gray-400 uppercase font-bold mb-1 block">Option</label><div className="grid grid-cols-3 gap-1">{OPTIONS[subTradeType].map(opt => <button key={opt} onClick={() => setOption(opt)} disabled={isRunning} className={`py-1.5 rounded text-xs font-bold border ${option === opt ? 'bg-green-500/20 border-green-500 text-green-400' : 'bg-black border-gray-700 text-gray-400'}`}>{opt}</button>)}</div></div>}
         <div className="grid grid-cols-2 gap-2 mb-2"><div><label className="text-[10px] text-gray-400 uppercase font-bold">Time</label>{rules.fixed ? <input type="text" value={rules.label} disabled className="w-full bg-black/50 border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-gray-500" /> : <select value={timeframeUnit} onChange={e => { setTimeframeUnit(e.target.value); setDurationValue(rules.min) }} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white">{rules.units.map(u => <option key={u} className="text-white">{u}</option>)}</select>}</div><div><label className="text-[10px] text-gray-400 uppercase font-bold">Duration</label><input type="number" value={durationValue} onChange={e => setDurationValue(parseInt(e.target.value) || 0)} disabled={isRunning || rules.fixed} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div></div>
-        <div className="grid grid-cols-2 gap-2 mb-2"><div><label className="text-[10px] text-gray-400 uppercase font-bold">Stake</label><input type="number" step="0.01" value={stake} onChange={e => setStake(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div><div><label className="text-[10px] text-gray-400 uppercase font-bold">Loss Recovery</label><input type="text" value="Flat stake · protected" disabled className="w-full bg-black/50 border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-green-400" /></div></div>
+        <div className="grid grid-cols-2 gap-2 mb-2"><div><label className="text-[10px] text-gray-400 uppercase font-bold">Stake</label><input type="number" step="0.01" value={stake} onChange={e => setStake(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div><div><label className="text-[10px] text-gray-400 uppercase font-bold">Martingale</label><input type="text" value="1.5x · bounded" disabled className="w-full bg-black/50 border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-orange-400" /></div></div>
         <div className="grid grid-cols-2 gap-2"><div><label className="text-[10px] text-gray-400 uppercase font-bold">Target</label><input type="number" step="0.01" value={targetProfit} onChange={e => setTargetProfit(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div><div><label className="text-[10px] text-gray-400 uppercase font-bold">Stop Loss</label><input type="number" step="0.01" value={stopLoss} onChange={e => setStopLoss(e.target.value)} disabled={isRunning} className="w-full bg-black border border-gray-700 rounded px-2 py-1.5 text-xs mt-0.5 text-white" /></div></div>
       </div>
       <div className="bg-gray-900 rounded-lg p-2 border border-green-500/30 mb-2 flex-shrink-0"><h3 className="text-white font-bold text-xs mb-1 flex items-center gap-1"><TrendingUp size={12} className="text-green-500" /> Performance</h3><div className="grid grid-cols-4 gap-1 text-center"><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">P/L</p><p className={`font-bold text-xs ${currentPL >= 0 ? 'text-green-500' : 'text-red-500'}`}>{currentPL >= 0 ? '+' : ''}{currentPL.toFixed(2)}</p></div><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Win Rate</p><p className="text-sky-400 font-bold text-xs">{winRate}%</p></div><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Trades</p><p className="text-white font-bold text-xs">{totalTrades}</p></div><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Next</p><p className="text-orange-400 font-bold text-xs">{currentStake.toFixed(2)}</p></div></div></div>
