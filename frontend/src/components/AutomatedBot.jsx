@@ -223,7 +223,6 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const runTradeCycle = async () => {
     if (!historyLoadedRef.current) { addLog(' Analyzing unique volatility markets...'); await loadAllHistory() }
     let recoveryQueue = []
-    let recoveryIndex = 0
     
     while (isRunningRef.current) {
       try {
@@ -243,7 +242,6 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         }
         hasLoggedScanningRef.current = false
         recoveryQueue = refreshedQueue
-        recoveryIndex = 0
         const signal = {
           ...currentTarget.signal,
           growthRate: 0.01, multiplier: 100, takeProfit: 1, contractStopLoss: 1
@@ -252,7 +250,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const researchReport = currentTarget.report
         if (!researchReport.ready || !researchReport.tradable) {
           const candidate = researchReport.candidate
-          const noticeKey = [currentTarget.symbol, tradeType, subTradeType, candidate?.option || tradeDirection, candidate?.score ?? currentTarget.score, researchReport.decision].join('|')
+          const noticeKey = [currentTarget.symbol, tradeType, subTradeType, candidate?.option || tradeDirection, researchReport.decision].join('|')
           if (noticeKey !== lastResearchNoticeRef.current) {
             lastResearchNoticeRef.current = noticeKey
             addLog(`🔬 CANDIDATE ONLY: ${currentTarget.marketName} | ${candidate?.option || tradeDirection} | Relative score ${candidate?.score ?? currentTarget.score}/94. No order sent: execution remains gated pending independent calibration and payout validation.`)
@@ -302,11 +300,10 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           addLog(`✅ WON +$${profit.toFixed(2)} | Stake reset to base`)
         } else {
           lossesRef.current += 1; consecutiveLossesRef.current++
-          recoveryIndex++
           currentStakeRef.current = boundedNextStake(stake, currentStakeRef.current, martingaleFactor, consecutiveLossesRef.current)
           setCurrentStake(currentStakeRef.current)
           if (consecutiveLossesRef.current >= 2) addLog(`⚠️ ${consecutiveLossesRef.current} consecutive losses - continuing bounded recovery and rotating market`)
-          addLog(`❌ LOST -$${profit.toFixed(2)} | Rotating to next market → Next: $${currentStakeRef.current.toFixed(2)}`)
+          addLog(`❌ LOST -$${profit.toFixed(2)} | Re-ranking fresh opportunities → Next: $${currentStakeRef.current.toFixed(2)}`)
         }
         
         setTotalTrades(totalTradesRef.current); setWins(winsRef.current); setLosses(lossesRef.current); setCurrentPL(sessionPLRef.current)
