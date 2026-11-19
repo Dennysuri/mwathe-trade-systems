@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Activity, Lock } from 'lucide-react'
-import { boundedNextStake, buildProposal, MARKET_SYMBOLS } from '../services/tradingCore'
+import { boundedNextStake, buildProposal, MARKET_SYMBOLS, VOLATILITY_MARKETS } from '../services/tradingCore'
 import { validateEntryWindow } from '../services/strategyIntelligence'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
 
 const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
-const SYMBOL_MAP = { 'Volatility 10 (1s) Index': 'R_10', 'Volatility 10 Index': 'R_10', 'Volatility 15 (1s) Index': 'R_15', 'Volatility 25 (1s) Index': 'R_25', 'Volatility 25 Index': 'R_25', 'Volatility 30 (1s) Index': 'R_30', 'Volatility 50 (1s) Index': 'R_50', 'Volatility 50 Index': 'R_50', 'Volatility 75 (1s) Index': 'R_75', 'Volatility 75 Index': 'R_75', 'Volatility 90 (1s) Index': 'R_90', 'Volatility 100 (1s) Index': 'R_100', 'Volatility 100 Index': 'R_100' }
+const SYMBOL_MAP = Object.fromEntries(VOLATILITY_MARKETS)
 const TRADE_TYPES = ['Multipliers', 'Ups & Downs', 'Touch & No Touch', 'Digits', 'Accumulators', 'Vanillas', 'Turbos']
 const SUB_TRADE_TYPES = { 'Accumulators': [], 'Vanillas': ['Call/Put'], 'Turbos': ['Turbos'], 'Multipliers': ['Multipliers'], 'Ups & Downs': ['Rise/Fall', 'Higher/Lower'], 'Touch & No Touch': ['Touch/No Touch'], 'Digits': ['Over/Under', 'Matches/Differs', 'Even/Odd'] }
 const OPTIONS = { 'Over/Under': ['Over', 'Under', 'Both'], 'Even/Odd': ['Even', 'Odd', 'Both'], 'Matches/Differs': ['Matches', 'Differs', 'Both'], 'Turbos': ['Up', 'Down', 'Both'], 'Rise/Fall': ['Rise', 'Fall', 'Both'], 'Higher/Lower': ['Higher', 'Lower', 'Both'], 'Touch/No Touch': ['Touch', 'No Touch', 'Both'], 'Call/Put': ['Call', 'Put', 'Both'], 'Multipliers': ['Up', 'Down', 'Both'] }
@@ -48,6 +48,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   const tickHistoryRef = useRef({})
   const pendingProposalRef = useRef(null)
   const pendingEntryRef = useRef(null)
+  const contractUnavailableUntilRef = useRef({})
   const sessionRef = useRef({totalTrades:0,wins:0,losses:0,lossStreak:0,stake:0.35,pl:0})
   const configRef = useRef({stake,targetProfit,stopLoss})
   configRef.current = {stake,targetProfit,stopLoss,selectedMarket,tradeType,subTradeType,option,predictedDigit,timeframeUnit,durationValue}
@@ -81,8 +82,19 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
             if (msg.msg_type === 'tick' && msg.tick?.quote !== undefined) { const symbol = msg.tick.symbol; const current = tickHistoryRef.current[symbol] || []; tickHistoryRef.current[symbol] = [...current, Number(msg.tick.quote)].slice(-500) }
             if (msg.msg_type === 'contracts_for' && pendingProposalRef.current?.reqId === msg.req_id) {
               const pending = pendingProposalRef.current; pendingProposalRef.current = null
-              if (msg.error || !JSON.stringify(msg.contracts_for || {}).includes(pending.proposal.contract_type)) addLog('⛔ Deriv does not offer this contract for the selected market. No trade sent.')
-              else websocket.send(JSON.stringify({...pending.proposal,req_id:Date.now()}))
+              const offered = Array.isArray(msg.contracts_for?.available) ? msg.contracts_for.available : []
+              const offeredTypes = offered.map(item => item.contract_type).filter(Boolean)
+              const exactContractAvailable = offeredTypes.includes(pending.proposal.contract_type)
+              if (msg.error || !exactContractAvailable) {
+                const rejectedSymbol = pending.proposal.underlying_symbol
+                contractUnavailableUntilRef.current[rejectedSymbol] = Date.now() + 60000
+                pendingEntryRef.current = null
+                const reason = msg.error?.message || (offeredTypes.length ? `available: ${offeredTypes.join(', ')}` : 'Deriv returned no available contracts')
+                addLog(`⛔ ${pending.proposal.contract_type} unavailable on ${rejectedSymbol} (${reason}). Skipping this market for 60s; no order sent.`)
+                if (isRunningRef.current) nextTradeTimer.current = setTimeout(() => executeTrade(), 300)
+              } else {
+                websocket.send(JSON.stringify({...pending.proposal,req_id:Date.now()}))
+              }
             }
             if (msg.msg_type === 'proposal') { if (msg.error) { addLog(`❌ Proposal failed: ${msg.error.message || 'Deriv rejected the proposal'}`); if (isRunningRef.current) nextTradeTimer.current=setTimeout(()=>executeTrade(),3000) } else setTimeout(() => { const gate=validateEntryWindow(pendingEntryRef.current,{maxSignalAgeMs:15000,proposalBudgetMs:300,minimumRemainingMs:250}); if(!gate.valid){addLog(`⛔ Entry expired before purchase: ${gate.reason}`);pendingEntryRef.current=null;if(isRunningRef.current)nextTradeTimer.current=setTimeout(()=>executeTrade(),1500);return} websocket.send(JSON.stringify({ buy: msg.proposal.id, price: msg.proposal.ask_price, req_id: Date.now() })) }, 200) }
             if (msg.msg_type === 'buy') { if (msg.error) { addLog(`❌ Buy failed: ${msg.error.message || 'Deriv rejected the purchase'}`); setCurrentContract(null); if (isRunningRef.current) nextTradeTimer.current=setTimeout(()=>executeTrade(),3000) } else { setCurrentContract({ id: msg.buy.contract_id }); addLog(`✅ Contract: ${msg.buy.contract_id}`); websocket.send(JSON.stringify({ proposal_open_contract: 1, contract_id: msg.buy.contract_id, subscribe: 1, req_id: Date.now() })) } }
@@ -102,7 +114,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     const socket = wsRef.current
     const config = configRef.current
     if (!socket || socket.readyState !== WebSocket.OPEN || !isRunningRef.current) return
-    const candidates = MARKET_SYMBOLS.map(symbol => {
+    const candidates = MARKET_SYMBOLS.filter(symbol => (contractUnavailableUntilRef.current[symbol] || 0) <= Date.now()).map(symbol => {
       const series = tickHistoryRef.current[symbol] || []
       if (series.length < 40) return null
       const sample = series.slice(-20), moves = sample.slice(1).map((v,i)=>v-sample[i]), driftValue = series.at(-1)-series.at(-16)
