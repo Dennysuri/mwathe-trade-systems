@@ -222,7 +222,6 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
 
   const runTradeCycle = async () => {
     if (!historyLoadedRef.current) { addLog(' Analyzing unique volatility markets...'); await loadAllHistory() }
-    let recoveryQueue = []
     
     while (isRunningRef.current) {
       try {
@@ -241,7 +240,6 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           continue
         }
         hasLoggedScanningRef.current = false
-        recoveryQueue = refreshedQueue
         const signal = {
           ...currentTarget.signal,
           growthRate: 0.01, multiplier: 100, takeProfit: 1, contractStopLoss: 1
@@ -275,12 +273,11 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const liveCheck = validateLiveOpportunity(signal, marketSnapshot, { now: Date.now(), maxSignalAgeMs: 1500 })
         if (!liveCheck.valid) {
           addLog(`Entry rejected after quote: ${liveCheck.reason} No purchase sent; returning to live ranking.`)
-          recoveryQueue = []
           recoveryIndex = 0
           continue
         }
         const entryCheck = validateEntryWindow(signal, { maxSignalAgeMs: 1500, proposalBudgetMs: 300, minimumRemainingMs: 250 })
-        if (!entryCheck.valid) { addLog(`Entry expired before purchase: ${entryCheck.reason}`); recoveryQueue = []; continue }
+        if (!entryCheck.valid) { addLog(`Entry expired before purchase: ${entryCheck.reason}`);; continue }
         addLog(`Execution checks passed in ${Math.round(performance.now() - executionStartedAt)}ms; live price drift ${liveCheck.drift.toPrecision(4)}.`)
         const buyRes = await wsRequest({ buy: proposalRes.proposal.id, price: proposalRes.proposal.ask_price })
         if (!isRunningRef.current) break
