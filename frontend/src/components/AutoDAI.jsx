@@ -133,7 +133,10 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
                     })
                     pendingEntryRef.current = null
                     if (started) addLog(`🧪 Calibration-only trial started for ${signal.subTradeType}/${signal.option} on ${signal.symbol}; ${calibration.trades}/200 settled samples, no purchase sent.`)
-                    else addLog('🛡️ No valid quote-matched calibration trial could be started; refusing this digit entry.')
+                    else {
+                      addLog('🛡️ No valid quote-matched calibration trial could be started; refusing this digit entry.')
+                      if (calibration.pending === 0 && isRunningRef.current) nextTradeTimer.current = setTimeout(() => executeTrade(), 2000)
+                    }
                     return
                   }
                 }
