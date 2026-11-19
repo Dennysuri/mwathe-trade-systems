@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, Activity } from 'lucide-react'
-import { buildProposal, isFreshSignal, boundedNextStake } from '../services/tradingCore'
-import { evaluateStrategyEnsemble, validateEntryWindow } from '../services/strategyIntelligence'
+import { buildProposal, isFreshSignal, boundedNextStake, VOLATILITY_MARKETS } from '../services/tradingCore'
+import { validateEntryWindow } from '../services/strategyIntelligence'
 import { recordContractOutcome, getContractPerformance } from '../services/contractOutcomeIntelligence'
 
-const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
-const SYMBOL_MAP = { 'Volatility 10 (1s) Index': 'R_10', 'Volatility 10 Index': 'R_10', 'Volatility 15 (1s) Index': 'R_15', 'Volatility 25 (1s) Index': 'R_25', 'Volatility 25 Index': 'R_25', 'Volatility 30 (1s) Index': 'R_30', 'Volatility 50 (1s) Index': 'R_50', 'Volatility 50 Index': 'R_50', 'Volatility 75 (1s) Index': 'R_75', 'Volatility 75 Index': 'R_75', 'Volatility 90 (1s) Index': 'R_90', 'Volatility 100 (1s) Index': 'R_100', 'Volatility 100 Index': 'R_100' }
+const VOLATILITY_INDICES = VOLATILITY_MARKETS.map(([name]) => name)
+const SYMBOL_MAP = Object.fromEntries(VOLATILITY_MARKETS)
 const TRADE_TYPES = ['Multipliers', 'Ups & Downs', 'Touch & No Touch', 'Digits', 'Accumulators', 'Vanillas', 'Turbos']
 const SUB_TRADE_TYPES = { 'Accumulators': [], 'Vanillas': ['Call/Put'], 'Turbos': ['Turbos'], 'Multipliers': ['Multipliers'], 'Ups & Downs': ['Rise/Fall', 'Higher/Lower'], 'Touch & No Touch': ['Touch/No Touch'], 'Digits': ['Over/Under', 'Matches/Differs', 'Even/Odd'] }
 const OPTIONS = { 'Over/Under': ['Over', 'Under', 'Both'], 'Even/Odd': ['Even', 'Odd', 'Both'], 'Matches/Differs': ['Matches', 'Differs', 'Both'], 'Turbos': ['Up', 'Down', 'Both'], 'Rise/Fall': ['Rise', 'Fall', 'Both'], 'Higher/Lower': ['Higher', 'Lower', 'Both'], 'Touch/No Touch': ['Touch', 'No Touch', 'Both'], 'Call/Put': ['Call', 'Put', 'Both'], 'Multipliers': ['Up', 'Down', 'Both'] }
@@ -287,8 +287,6 @@ export default function DennyBots({ token, accountId, currency = 'USD', onBalanc
           executionSignal = signal
           proposalReq = buildProposal(signal, tradeStake, currency)
         }
-        const researchReport = await evaluateStrategyEnsemble(tickHistoryRef.current, executionSignal)
-        if (!researchReport.ready || !researchReport.tradable) { const candidate=researchReport.candidate; if(candidate) addLog(`Thamira candidate: ${candidate.option} | relative score ${candidate.score}/94. Execution remains gated until independent calibration and payout validation.`); await new Promise(r => setTimeout(r, 500)); continue }
         const entryCheck = validateEntryWindow(executionSignal, { maxSignalAgeMs: 15000, proposalBudgetMs: 1500, minimumRemainingMs: 500 })
         if (!entryCheck.valid) { addLog(`Rejected entry: ${entryCheck.reason}`); continue }
         const available = await wsRequest({ contracts_for: proposalReq.underlying_symbol })

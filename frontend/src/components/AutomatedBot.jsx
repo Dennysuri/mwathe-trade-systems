@@ -245,17 +245,6 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           growthRate: 0.01, multiplier: 100, takeProfit: 1, contractStopLoss: 1
         }
         const tradeDirection = signal.option
-        const researchReport = currentTarget.report
-        if (!researchReport.ready || !researchReport.tradable) {
-          const candidate = researchReport.candidate
-          const noticeKey = [currentTarget.symbol, tradeType, subTradeType, candidate?.option || tradeDirection, researchReport.decision].join('|')
-          if (noticeKey !== lastResearchNoticeRef.current) {
-            lastResearchNoticeRef.current = noticeKey
-            addLog(`🔬 CANDIDATE ONLY: ${currentTarget.marketName} | ${candidate?.option || tradeDirection} | Relative score ${candidate?.score ?? currentTarget.score}/94. No order sent: execution remains gated pending independent calibration and payout validation.`)
-          }
-          await new Promise(r => setTimeout(r, 1000))
-          continue
-        }
         lastResearchNoticeRef.current = ''
         setBestMarket(currentTarget.marketName); setConfluenceScore(currentTarget.score)
         addLog(`🎯 LOCKED: ${currentTarget.marketName} | Score: ${currentTarget.score}% | Direction: ${tradeDirection}`)

@@ -87,7 +87,11 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
     if(candidate.option!=='Both'&&nowSignal-(lastEmittedSignalRef.current[signalKey]||0)>=2000){
       const entryPoint=Number(windowsRef.current[best.symbol]?.values?.at(-1))
       if(!Number.isFinite(entryPoint)){addLog('Entry point unavailable; candidate not published.');return}
-      const signal={...best.signal,id:`analysis-${best.symbol}-${nowSignal}`,source:'analysis-tool-live',market:label,entryPoint,createdAt:nowSignal,setupScore:candidate.score,confidence:candidate.score,researchOnly:true}
+      const recentValues=(windowsRef.current[best.symbol]?.values||[]).slice(-21).map(Number)
+      const moves=recentValues.slice(1).map((value,index)=>value-recentValues[index])
+      const upMoves=moves.filter(value=>value>0).length,downMoves=moves.filter(value=>value<0).length
+      const marketCondition=moves.length<5?'Insufficient live movement context':upMoves>downMoves*1.25?'Bullish momentum':downMoves>upMoves*1.25?'Bearish momentum':'Mixed / range-bound'
+      const signal={...best.signal,id:`analysis-${best.symbol}-${nowSignal}`,source:'analysis-tool-live',market:label,entryPoint,entry:entryPoint,marketCondition,createdAt:nowSignal,setupScore:candidate.score,confidence:candidate.score,predictedDigit:config.tradeType==='Digits'?Number(config.predictedDigit):best.signal.predictedDigit,barrier:best.signal.barrier||(config.tradeType==='Digits'?String(config.predictedDigit):''),duration:config.duration,timeframeUnit:config.timeframeUnit,contractDuration:`${config.duration} ${config.timeframeUnit}`,researchOnly:true}
       if(onSignalGenerated)onSignalGenerated(signal)
       lastEmittedSignalRef.current[signalKey]=nowSignal
       if(config.tradeType==='Digits'&&config.timeframeUnit==='Ticks'&&!paperQuoteInFlightRef.current.has(signalKey)&&getPaperForwardSummary({...signal,currency:config.currency}).pending===0){
