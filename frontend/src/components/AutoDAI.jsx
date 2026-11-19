@@ -44,6 +44,10 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   const shouldAutoScrollRef = useRef(true)
   const accountCurrencyRef = useRef('USD')
   const marketCooldownUntilRef = useRef({})
+  const recentOutcomesRef = useRef([])
+  const performanceCooldownUntilRef = useRef(0)
+  const performanceRecoveryUntilRef = useRef(0)
+  const lastPerformancePauseNoticeRef = useRef(0)
   const nextTradeTimer = useRef(null)
   const isRunningRef = useRef(false)
   const wsRef = useRef(null)
@@ -118,7 +122,16 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     const socket = wsRef.current
     const config = configRef.current
     if (!socket || socket.readyState !== WebSocket.OPEN || !isRunningRef.current) return
-    const requiredScore = sessionRef.current.lossStreak >= 3 ? 6.5 : sessionRef.current.lossStreak >= 2 ? 5 : sessionRef.current.lossStreak === 1 ? 4.5 : 3
+    const now = Date.now()
+    if (performanceCooldownUntilRef.current > now) {
+      if (lastPerformancePauseNoticeRef.current !== performanceCooldownUntilRef.current) {
+        addLog(`🛡️ Performance circuit breaker: no new entries for ${Math.ceil((performanceCooldownUntilRef.current-now)/1000)}s after the last 8 settled trades were net negative.`)
+        lastPerformancePauseNoticeRef.current = performanceCooldownUntilRef.current
+      }
+      nextTradeTimer.current = setTimeout(() => executeTrade(), Math.min(5000, Math.max(500, performanceCooldownUntilRef.current-now)))
+      return
+    }
+    const requiredScore = performanceRecoveryUntilRef.current > now ? 6.5 : sessionRef.current.lossStreak >= 3 ? 6.5 : sessionRef.current.lossStreak >= 2 ? 5 : sessionRef.current.lossStreak === 1 ? 4.5 : 3
     const candidates = MARKET_SYMBOLS.filter(symbol => (contractUnavailableUntilRef.current[symbol] || 0) <= Date.now() && (marketCooldownUntilRef.current[symbol] || 0) <= Date.now()).map(symbol => {
       const series = tickHistoryRef.current[symbol] || []
       if (series.length < 40) return null
@@ -195,6 +208,12 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
       if (session.lossStreak >= 2) addLog(`🛡️ Loss recovery: next setup requires scan score ${session.lossStreak >= 3 ? 6.5 : 5.0}+ and the losing market is cooling down.`)
     }
     session.pl += profit
+    recentOutcomesRef.current = [...recentOutcomesRef.current, profit].slice(-8)
+    if (recentOutcomesRef.current.length === 8 && recentOutcomesRef.current.reduce((sum,value)=>sum+value,0) <= 0) {
+      performanceCooldownUntilRef.current = Date.now() + 180000
+      performanceRecoveryUntilRef.current = Date.now() + 480000
+      addLog('🛡️ Eight-trade performance guard: latest 8 settled contracts are net negative. Pausing entries for 3 minutes; then require scan score 6.5+ for 5 minutes.')
+    }
     setTotalTrades(session.totalTrades);setWins(session.wins);setLosses(session.losses);setConsecutiveLosses(session.lossStreak);setCurrentStake(session.stake);setCurrentPL(session.pl)
     if (session.pl >= parseFloat(config.targetProfit)) { addLog(`🎯 Target hit! $${session.pl.toFixed(2)}`); setIsRunning(false); isRunningRef.current=false; return }
     if (session.pl <= -parseFloat(config.stopLoss)) { addLog(`🛑 Stop loss $${session.pl.toFixed(2)}`); setIsRunning(false); isRunningRef.current=false; return }
@@ -202,7 +221,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     if (isRunningRef.current) { const cooldownMs = session.lossStreak >= 3 ? 90000 : session.lossStreak >= 2 ? 45000 : session.lossStreak === 1 ? 15000 : 5000; addLog(`P/L: ${session.pl.toFixed(2)} | Trades: ${session.totalTrades}`); addLog(`🧊 Waiting ${Math.round(cooldownMs/1000)}s before next independent scan.`); nextTradeTimer.current=setTimeout(()=>executeTrade(),cooldownMs) }
   }
 
-  const startBot = () => { setValidationError(''); if (!ws || ws.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }; if (nextTradeTimer.current) clearTimeout(nextTradeTimer.current); setIsRunning(true); isRunningRef.current = true; setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConsecutiveLosses(0); marketCooldownUntilRef.current={}; sessionRef.current={totalTrades:0,wins:0,losses:0,lossStreak:0,stake:parseFloat(stake),pl:0}; shouldAutoScrollRef.current=true; addLog(` AutoD AI Started`); addLog('Market: autonomous scan across volatility indices'); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); tickHistoryRef.current={}; MARKET_SYMBOLS.forEach((symbol,index)=>ws.send(JSON.stringify({ ticks_history: symbol, count: 200, end: 'latest', style: 'ticks', subscribe: 1, req_id: Date.now()+index }))); nextTradeTimer.current = setTimeout(() => { if (isRunningRef.current) executeTrade() }, 3000) }
+  const startBot = () => { setValidationError(''); if (!ws || ws.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }; if (nextTradeTimer.current) clearTimeout(nextTradeTimer.current); setIsRunning(true); isRunningRef.current = true; setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConsecutiveLosses(0); marketCooldownUntilRef.current={}; recentOutcomesRef.current=[]; performanceCooldownUntilRef.current=0; performanceRecoveryUntilRef.current=0; lastPerformancePauseNoticeRef.current=0; sessionRef.current={totalTrades:0,wins:0,losses:0,lossStreak:0,stake:parseFloat(stake),pl:0}; shouldAutoScrollRef.current=true; addLog(` AutoD AI Started`); addLog('Market: autonomous scan across volatility indices'); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); tickHistoryRef.current={}; MARKET_SYMBOLS.forEach((symbol,index)=>ws.send(JSON.stringify({ ticks_history: symbol, count: 200, end: 'latest', style: 'ticks', subscribe: 1, req_id: Date.now()+index }))); nextTradeTimer.current = setTimeout(() => { if (isRunningRef.current) executeTrade() }, 3000) }
   const stopBot = () => { setIsRunning(false); isRunningRef.current = false; if (nextTradeTimer.current) { clearTimeout(nextTradeTimer.current); nextTradeTimer.current = null }; addLog(`⏹️ AI stopped new entries; any open contract remains monitored until settlement.`) }
   const resetBot = () => { if (isRunningRef.current) return; setLogs([]); try { localStorage.removeItem('mwathe:autod-ai-logs:v1') } catch {}; shouldAutoScrollRef.current=true; setValidationError('') }
   const rules = TIMEFRAME_RULES[tradeType]; const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
