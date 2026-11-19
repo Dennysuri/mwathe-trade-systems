@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Activity, Lock } from 'lucide-react'
 import { boundedNextStake, buildProposal, MARKET_SYMBOLS } from '../services/tradingCore'
-import { evaluateStrategyEnsemble, validateEntryWindow } from '../services/strategyIntelligence'
+import { validateEntryWindow } from '../services/strategyIntelligence'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
 
 const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
@@ -150,8 +150,6 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
       : (config.tradeType==='Touch & No Touch'||config.subTradeType==='Higher/Lower') ? ((config.tradeType==='Touch & No Touch'?direction==='down':isDown)?'-':'+')+Math.max(atr*(config.tradeType==='Touch & No Touch'?3:2),Math.abs(ticks.at(-1))*0.0001).toFixed(4) : ''
     try {
       const signal = {symbol,tradeType:config.tradeType,subTradeType:config.subTradeType,option:selectedOption,predictedDigit:target,barrier,duration:config.durationValue,timeframeUnit:config.timeframeUnit,createdAt:Date.now(),expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,config.durationValue*(config.timeframeUnit==='Hours'?3600:config.timeframeUnit==='Days'?86400:config.timeframeUnit==='Minutes'?60:1)),growthRate:0.01,multiplier:100,takeProfit:1,contractStopLoss:1}
-      const researchReport = await evaluateStrategyEnsemble(ticks, signal)
-      if (!researchReport.ready || !researchReport.tradable) { const candidate=researchReport.candidate; if(candidate) addLog(`Thamira candidate: ${candidate.option} | relative score ${candidate.score}/94. Execution remains gated pending independent calibration and payout validation.`); nextTradeTimer.current = setTimeout(() => executeTrade(), 500); return }
       const proposal = buildProposal(signal,sessionRef.current.stake)
       const reqId = Date.now()
       pendingProposalRef.current = {proposal,reqId}; pendingEntryRef.current = signal
