@@ -1,4 +1,5 @@
 import { getContractPerformance } from './contractOutcomeIntelligence.js';
+import { getPaperForwardSummary } from './paperForwardCalibration.js';
 
 /**
  * Mwathe Strategy Intelligence
@@ -210,14 +211,40 @@ export async function evaluateStrategyEnsemble(prices, config = {}) {
     : { trades: 0, wins: 0, losses: 0, winRate: null, netProfit: 0, sampleSufficient: false };
   const historicallyWeak = historicalPerformance.trades >= 30 && historicalPerformance.netProfit <= 0;
   const promising = Boolean(candidate && candidate.score >= 62 && !historicallyWeak);
+  // Only Digits tick contracts currently have an exact quote-matched paper
+  // settlement model. Never extend this authorization to other families by analogy.
+  const paperSignal = {
+    ...historyConfig,
+    symbol: config.symbol,
+    barrier: String(config.predictedDigit ?? config.barrier ?? ''),
+    duration: config.duration,
+    timeframeUnit: config.timeframeUnit,
+    currency: config.currency || 'USD'
+  };
+  const paperCalibration = config.tradeType === 'Digits' && config.timeframeUnit === 'Ticks'
+    ? getPaperForwardSummary(paperSignal)
+    : null;
+  const tradable = Boolean(promising && paperCalibration?.calibrated);
   return {
-    ready: true, tradable: false, sampleSize: clean.length, strategies, historicalPerformance,
+    ready: true, tradable, sampleSize: clean.length, strategies, historicalPerformance,
+    paperCalibration,
     candidate: promising ? candidate : null,
     watchCandidate: candidate, conviction: candidate?.score ?? null,
-    decision: historicallyWeak ? 'HISTORICALLY_WEAK' : promising ? 'CANDIDATE' : 'MONITOR',
-    reasons: promising
-      ? ['A comparatively strong live setup was detected; this score is a ranking aid, not a calibrated win probability.', 'Automated execution remains gated pending independent validation and payout-aware expected value.', historicalPerformance.trades ? `Exact-configuration history: ${historicalPerformance.trades} trades, ${(historicalPerformance.winRate * 100).toFixed(1)}% wins, net ${historicalPerformance.netProfit.toFixed(2)}.` : 'No settled history exists yet for this exact configuration.']
-      : [historicallyWeak ? 'Candidate suppressed: this exact configuration has at least 30 settled trades and non-positive cumulative P/L.' : 'No setup currently meets the relative-strength threshold; continue scanning without a long pause.', historicalPerformance.trades ? `Exact-configuration history: ${historicalPerformance.trades} trades, ${(historicalPerformance.winRate * 100).toFixed(1)}% wins, net ${historicalPerformance.netProfit.toFixed(2)}.` : 'No settled history exists yet for this exact configuration.']
+    decision: historicallyWeak ? 'HISTORICALLY_WEAK' : tradable ? 'CALIBRATED_READY' : promising ? 'CANDIDATE' : 'MONITOR',
+    reasons: [
+      promising
+        ? 'A strong live setup was detected; its relative score is not a win probability.'
+        : historicallyWeak ? 'Candidate suppressed: this exact configuration has at least 30 settled trades and non-positive cumulative P/L.' : 'No setup currently meets the relative-strength threshold; continue scanning.',
+      paperCalibration
+        ? `Quote-matched forward calibration: ${paperCalibration.trades}/${paperCalibration.minTrades} settled trials; conservative lower bound ${paperCalibration.lowerBound === null ? 'n/a' : (paperCalibration.lowerBound * 100).toFixed(1) + '%'}; worst break-even ${paperCalibration.maxBreakEvenRate === null ? 'n/a' : (paperCalibration.maxBreakEvenRate * 100).toFixed(1) + '%'}.`
+        : 'This contract family has no validated forward-settlement model; live execution remains disabled.',
+      tradable
+        ? 'Exact market, subtype, option, barrier, duration and currency profile cleared the conservative quote-matched calibration gate.'
+        : 'No order is authorized until this exact profile clears independent quote-matched calibration and payout validation.',
+      historicalPerformance.trades
+        ? `Exact-configuration settled history: ${historicalPerformance.trades} trades, ${(historicalPerformance.winRate * 100).toFixed(1)}% wins, net ${historicalPerformance.netProfit.toFixed(2)}.`
+        : 'No settled execution history exists yet for this exact configuration.'
+    ]
   };
 }
 
