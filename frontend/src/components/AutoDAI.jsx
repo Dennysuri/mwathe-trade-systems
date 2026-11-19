@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Activity, Lock } from 'lucide-react'
 import { boundedNextStake, buildProposal, MARKET_SYMBOLS, VOLATILITY_MARKETS } from '../services/tradingCore'
 import { evaluateStrategyEnsemble, validateEntryWindow } from '../services/strategyIntelligence'
-import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
+import { recordContractOutcome, getStrategyPerformance } from '../services/contractOutcomeIntelligence'
 
 const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
 const SYMBOL_MAP = Object.fromEntries(VOLATILITY_MARKETS)
@@ -151,13 +151,18 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
         const prices = ticks.slice(-21)
         const moves = prices.slice(1).map((value, index) => value - prices[index])
         const atr = moves.reduce((sum, value) => sum + Math.abs(value), 0) / Math.max(1, moves.length)
+        const strategySignal = { symbol, tradeType: config.tradeType, subTradeType: config.subTradeType, option: candidate.option, predictedDigit: Number(config.predictedDigit), duration: config.durationValue, timeframeUnit: config.timeframeUnit }
+        const strategyPerformance = getStrategyPerformance(strategySignal)
         return { symbol, ticks, atr, drift: ticks.at(-1) - ticks.at(-16), score: candidate.score,
-          report, option: candidate.option, qualified: Boolean(report.candidate) }
+          report, option: candidate.option, strategySignal, strategyPerformance,
+          qualified: Boolean(report.candidate), strategyPaused: strategyPerformance.paused }
       }))).filter(Boolean).sort((a,b) => b.score - a.score)
 
-    const executableCandidates = candidates.filter(item => item.qualified)
+    const executableCandidates = candidates.filter(item => item.qualified && !item.strategyPaused)
     if (!executableCandidates.length) {
       const watch = candidates[0]
+      const pausedWatch = candidates.find(item => item.strategyPaused)
+      if (pausedWatch) addLog(`🛡️ Cross-market strategy pause: ${config.tradeType} / ${config.subTradeType} / ${pausedWatch.option} is paused after ${pausedWatch.strategyPerformance.consecutiveLosses} consecutive losses, regardless of market.`)
       addLog(watch
         ? `Thamira watchlist leader: ${MARKET_LABEL_BY_SYMBOL[watch.symbol] || watch.symbol}, ${watch.option}, relative score ${watch.score}/94. Not execution-qualified: ${watch.report.reasons?.[0] || 'insufficient validation'}.`
         : 'Thamira is refreshing all 13 market windows; no evaluable candidate is ready yet.')
@@ -220,7 +225,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     setTotalTrades(session.totalTrades);setWins(session.wins);setLosses(session.losses);setConsecutiveLosses(session.lossStreak);setCurrentStake(session.stake);setCurrentPL(session.pl)
     if (session.pl >= parseFloat(config.targetProfit)) { addLog(`🎯 Target hit! $${session.pl.toFixed(2)}`); setIsRunning(false); isRunningRef.current=false; return }
     if (session.pl <= -parseFloat(config.stopLoss)) { addLog(`🛑 Stop loss $${session.pl.toFixed(2)}`); setIsRunning(false); isRunningRef.current=false; return }
-    if (session.lossStreak >= 4) { addLog('🛑 Four consecutive losses: AutoD AI safety stop. Review the session before restarting.'); setIsRunning(false); isRunningRef.current=false; return }
+    if (session.lossStreak >= 3) { addLog('🛑 Three consecutive losses: AutoD AI safety stop Review the session before restarting.'); setIsRunning(false); isRunningRef.current=false; return }
     if (isRunningRef.current) { const cooldownMs = session.lossStreak >= 3 ? 90000 : session.lossStreak >= 2 ? 45000 : session.lossStreak === 1 ? 15000 : 5000; addLog(`P/L: ${session.pl.toFixed(2)} | Trades: ${session.totalTrades}`); addLog(`🧊 Waiting ${Math.round(cooldownMs/1000)}s before next independent scan.`); nextTradeTimer.current=setTimeout(()=>executeTrade(),cooldownMs) }
   }
 
