@@ -66,7 +66,7 @@ export async function rankLiveMarketOpportunities(markets, config = {}, {
       setupScore: candidate.score,
       confidence: candidate.score
     };
-    return { symbol: market.symbol, marketName, score: candidate.score, report, signal };
+    return { symbol: market.symbol, marketName, score: candidate.score, qualified: Boolean(report.candidate), report, signal };
   }));
 
   return evaluated.filter(Boolean).sort((a, b) => b.score - a.score);
