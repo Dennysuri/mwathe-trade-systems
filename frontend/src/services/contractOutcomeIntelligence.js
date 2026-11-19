@@ -8,13 +8,14 @@ const read = () => {
   } catch { return []; }
 };
 
-export function contractProfile(signal = {}) {
+// Cross-market identity: deliberately excludes symbol so a weak setup cannot
+// evade its loss history by hopping to another volatility market.
+export function strategyProfile(signal = {}) {
   const digitTargetApplies = signal.tradeType === 'Digits'
     && ['Over/Under', 'Matches/Differs'].includes(signal.subTradeType);
   const barrierApplies = digitTargetApplies || signal.tradeType === 'Touch & No Touch'
     || signal.subTradeType === 'Higher/Lower';
   return [
-    signal.symbol || 'unknown-market',
     signal.tradeType || 'unknown-type',
     signal.subTradeType || 'default',
     signal.option || 'unknown-option',
@@ -25,11 +26,16 @@ export function contractProfile(signal = {}) {
   ].join('|');
 }
 
+export function contractProfile(signal = {}) {
+  return [signal.symbol || 'unknown-market', strategyProfile(signal)].join('|');
+}
+
 export function recordContractOutcome(signal, { profit, stake, contractId, bot = 'unknown' } = {}) {
   if (typeof window === 'undefined' || !Number.isFinite(Number(profit))) return null;
   const records = read();
   const row = {
-    key: contractProfile(signal), symbol: signal.symbol || 'unknown-market',
+    key: contractProfile(signal), strategyKey: strategyProfile(signal),
+    symbol: signal.symbol || 'unknown-market',
     tradeType: signal.tradeType || 'unknown-type', subTradeType: signal.subTradeType || '',
     option: signal.option || '', predictedDigit: signal.predictedDigit ?? null,
     barrier: signal.barrier ?? null, duration: signal.duration ?? null,
@@ -43,9 +49,7 @@ export function recordContractOutcome(signal, { profit, stake, contractId, bot =
   return getContractPerformance(signal);
 }
 
-export function getContractPerformance(signal = {}) {
-  const key = contractProfile(signal);
-  const matching = read().filter(row => row.key === key);
+function summarize(matching, key) {
   const wins = matching.filter(row => row.won).length;
   const trades = matching.length;
   return {
@@ -54,6 +58,32 @@ export function getContractPerformance(signal = {}) {
     netProfit: matching.reduce((sum, row) => sum + Number(row.profit || 0), 0),
     sampleSufficient: trades >= 100,
     note: trades < 100 ? 'Insufficient settled trades for reliable calibration.' : 'Historical descriptive statistics only; validate out of sample.'
+  };
+}
+
+export function getContractPerformance(signal = {}) {
+  const key = contractProfile(signal);
+  return summarize(read().filter(row => row.key === key), key);
+}
+
+export function getStrategyPerformance(signal = {}, { recentLimit = 20 } = {}) {
+  const key = strategyProfile(signal);
+  const matching = read().filter(row => (row.strategyKey || strategyProfile(row)) === key)
+    .sort((a, b) => Number(a.settledAt || 0) - Number(b.settledAt || 0));
+  const recent = matching.slice(-Math.max(1, recentLimit));
+  let consecutiveLosses = 0;
+  for (let i = recent.length - 1; i >= 0 && !recent[i].won; i--) consecutiveLosses++;
+  const last = recent.at(-1);
+  const pauseMs = consecutiveLosses >= 3 ? 15 * 60_000 : consecutiveLosses >= 2 ? 5 * 60_000 : 0;
+  const cooldownUntil = pauseMs && last ? Number(last.settledAt || 0) + pauseMs : 0;
+  const activePause = cooldownUntil > Date.now();
+  return {
+    ...summarize(matching, key), recentTrades: recent.length,
+    recentWinRate: recent.length ? recent.filter(row => row.won).length / recent.length : null,
+    consecutiveLosses, cooldownUntil, paused: activePause,
+    note: activePause
+      ? `Same strategy profile paused across all markets for ${Math.ceil((cooldownUntil - Date.now()) / 1000)}s after ${consecutiveLosses} consecutive losses.`
+      : 'Cross-market strategy history; descriptive performance is not a calibrated win probability.'
   };
 }
 
