@@ -59,7 +59,7 @@ export function beginPaperTrial(signal, { now = Date.now(), quote } = {}) {
   return true;
 }
 export function advancePaperTrials(symbol, quote, { now = Date.now(), pipSize } = {}) {
-  const digit = digitOf({ quote, pipSize });
+  const digit = digitOf(quote && typeof quote === 'object' ? quote : { quote, pipSize });
   if (digit === null) return [];
   const completed = [];
   for (const [id, trial] of pending) {
