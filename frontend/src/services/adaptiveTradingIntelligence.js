@@ -19,8 +19,7 @@ export function adaptiveStrategyKey(signal = {}) {
   return [
     signal.tradeType || '', signal.subTradeType || '', signal.option || '',
     signal.timeframeUnit || '', Number(signal.duration) || '',
-    digitTargetMatters ? (signal.predictedDigit ?? '') : '',
-    signal.barrier ?? ''
+    digitTargetMatters ? (signal.predictedDigit ?? '') : ''
   ].join('|');
 }
 
