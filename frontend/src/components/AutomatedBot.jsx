@@ -230,8 +230,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       // A market switch must not reset strategy-level recovery.
       if (recovery.paused) return false
       if (recovery.historicalTrades >= 200 && recovery.historicalWinRate < 0.8) return false
-      return
-      item.profile.tradeType === tradeType
+      return item.profile.tradeType === tradeType
       && item.profile.subTradeType === (subTradeType || '')
       && item.profile.timeframeUnit === timeframeUnit
       && Number(item.profile.duration) === Number(durationValue)
