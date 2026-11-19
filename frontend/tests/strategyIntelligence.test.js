@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { evaluateStrategyEnsemble, evaluateExpectedValue, validateEntryWindow } from '../src/services/strategyIntelligence.js';
 import { boundedNextStake } from '../src/services/tradingCore.js';
 import { contractProfile, getContractPerformance } from '../src/services/contractOutcomeIntelligence.js';
+import { beginPaperTrial, advancePaperTrials, getPaperForwardSummary, resetPaperTrials } from '../src/services/paperForwardCalibration.js';
 
 test('digit ensemble waits for sufficient observations', async () => {
   const result = await evaluateStrategyEnsemble(Array.from({length:120},(_,i)=>100.01+i/100), {tradeType:'Digits',subTradeType:'Matches/Differs',option:'Both',predictedDigit:3});
@@ -74,4 +75,35 @@ test('research candidates use the correct option vocabulary for each contract fa
     const result = await evaluateStrategyEnsemble(prices, config);
     assert.equal(result.watchCandidate?.option, expected, config.tradeType);
   }
+});
+
+test('only a fully calibrated exact Digits tick profile can become tradable', async () => {
+  resetPaperTrials();
+  const config = {symbol:'R_100',tradeType:'Digits',subTradeType:'Even/Odd',option:'Both',
+    predictedDigit:5,barrier:'5',duration:1,timeframeUnit:'Ticks',currency:'USD'};
+  const prices = Array.from({length:300},()=>100.02);
+  const before = await evaluateStrategyEnsemble(prices,config);
+  assert.equal(before.tradable,false);
+  assert.equal(before.decision,'CANDIDATE');
+  const option = before.watchCandidate.option;
+  const signal = {...config,option};
+  for(let i=0;i<220;i++){
+    assert.equal(beginPaperTrial({...signal,id:'calibrated-'+i},{quote:{askPrice:1,payout:1.8,currency:'USD'}}),true);
+    const terminalQuote = option === 'Even' ? 123.42 : 123.43;
+    assert.equal(advancePaperTrials('R_100',terminalQuote).length,1);
+  }
+  const summary=getPaperForwardSummary(signal);
+  assert.equal(summary.calibrated,true);
+  const after=await evaluateStrategyEnsemble(prices,{...config,option});
+  assert.equal(after.tradable,true);
+  assert.equal(after.decision,'CALIBRATED_READY');
+  assert.equal(after.paperCalibration.trades,220);
+});
+
+test('non-Digit families remain non-tradable without their own settlement calibration', async () => {
+  const prices=Array.from({length:300},(_,i)=>100+i*0.00001+i*i*0.000001);
+  const result=await evaluateStrategyEnsemble(prices,{symbol:'R_50',tradeType:'Ups & Downs',
+    subTradeType:'Rise/Fall',option:'Both',duration:1,timeframeUnit:'Ticks'});
+  assert.equal(result.tradable,false);
+  assert.equal(result.paperCalibration,null);
 });
