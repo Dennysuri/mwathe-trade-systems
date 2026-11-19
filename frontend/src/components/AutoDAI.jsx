@@ -3,7 +3,7 @@ import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, Shi
 import { boundedNextStake, buildProposal, MARKET_SYMBOLS, VOLATILITY_MARKETS } from '../services/tradingCore'
 import { evaluateStrategyEnsemble, validateEntryWindow } from '../services/strategyIntelligence'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
-import { getStrategyRecoveryState, getTradeDifficulty } from '../services/accountRiskIntelligence'
+import { getStrategyRecoveryState, getTradeDifficulty, evaluateAccountRisk } from '../services/accountRiskIntelligence'
 
 const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
 const SYMBOL_MAP = Object.fromEntries(VOLATILITY_MARKETS)
@@ -44,6 +44,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   const logRef = useRef(null)
   const shouldAutoScrollRef = useRef(true)
   const accountCurrencyRef = useRef('USD')
+  const accountBalanceRef = useRef(null)
   const marketCooldownUntilRef = useRef({})
   const recentOutcomesRef = useRef([])
   const performanceCooldownUntilRef = useRef(0)
@@ -87,7 +88,10 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
           try {
             const msg = JSON.parse(message.data)
             if (msg.msg_type === 'balance' && msg.balance?.currency) accountCurrencyRef.current = msg.balance.currency
-            if (msg.msg_type === 'balance' && onBalanceUpdate) onBalanceUpdate(parseFloat(msg.balance.balance))
+            if (msg.msg_type === 'balance' && Number.isFinite(Number(msg.balance?.balance))) {
+              accountBalanceRef.current = Number(msg.balance.balance)
+              if (onBalanceUpdate) onBalanceUpdate(accountBalanceRef.current)
+            }
             if (msg.msg_type === 'history' && msg.history?.prices) { const symbol = msg.echo_req?.ticks_history || msg.history.symbol; if (symbol) tickHistoryRef.current[symbol] = msg.history.prices.map(Number).filter(Number.isFinite).slice(-500) }
             if (msg.msg_type === 'tick' && msg.tick?.quote !== undefined) { const symbol = msg.tick.symbol; const current = tickHistoryRef.current[symbol] || []; tickHistoryRef.current[symbol] = [...current, Number(msg.tick.quote)].slice(-500); lastLiveTickAtRef.current[symbol] = Date.now() }
             if (msg.msg_type === 'contracts_for' && pendingProposalRef.current?.reqId === msg.req_id) {
@@ -192,6 +196,13 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
       : (config.tradeType==='Touch & No Touch'||config.subTradeType==='Higher/Lower') ? ((config.tradeType==='Touch & No Touch'?direction==='down':isDown)?'-':'+')+Math.max(atr*(config.tradeType==='Touch & No Touch'?3:2),Math.abs(ticks.at(-1))*0.0001).toFixed(4) : ''
     try {
       const signal = {symbol,tradeType:config.tradeType,subTradeType:config.subTradeType,option:selectedOption,predictedDigit:target,barrier,duration:config.durationValue,timeframeUnit:config.timeframeUnit,createdAt:Date.now(),expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,config.durationValue*(config.timeframeUnit==='Hours'?3600:config.timeframeUnit==='Days'?86400:config.timeframeUnit==='Minutes'?60:1)),growthRate:0.01,multiplier:100,takeProfit:1,contractStopLoss:1}
+      const accountRisk = evaluateAccountRisk({ balance: accountBalanceRef.current, sessionPL: sessionRef.current.pl,
+        targetProfit: config.targetProfit, stopLoss: config.stopLoss,
+        nextStake: sessionRef.current.stake, baseStake: config.stake })
+      if (accountRisk.targetReached || accountRisk.stopForRisk) {
+        addLog(`🛑 Account risk controller blocked the next entry (${accountRisk.status}). Balance: ${accountRisk.balance === null ? 'awaiting Deriv balance' : accountRisk.balance.toFixed(2)}; session P/L: ${sessionRef.current.pl.toFixed(2)}; stop-loss room: ${accountRisk.lossRemaining === null ? 'n/a' : accountRisk.lossRemaining.toFixed(2)}; next stake: ${sessionRef.current.stake.toFixed(2)}.`)
+        setIsRunning(false); isRunningRef.current = false; return
+      }
       const proposal = buildProposal(signal,sessionRef.current.stake,accountCurrencyRef.current)
       const reqId = Date.now()
       pendingProposalRef.current = {proposal,reqId}; pendingEntryRef.current = signal
@@ -232,7 +243,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     if (session.pl >= parseFloat(config.targetProfit)) { addLog(`🎯 Target hit! $${session.pl.toFixed(2)}`); setIsRunning(false); isRunningRef.current=false; return }
     if (session.pl <= -parseFloat(config.stopLoss)) { addLog(`🛑 Stop loss $${session.pl.toFixed(2)}`); setIsRunning(false); isRunningRef.current=false; return }
     if (session.lossStreak >= 4) { addLog('🛑 Four consecutive losses: AutoD AI safety stop. Review the session before restarting.'); setIsRunning(false); isRunningRef.current=false; return }
-    if (isRunningRef.current) { const cooldownMs = session.lossStreak >= 3 ? 90000 : session.lossStreak >= 2 ? 45000 : session.lossStreak === 1 ? 15000 : 5000; addLog(`P/L: ${session.pl.toFixed(2)} | Trades: ${session.totalTrades}`); addLog(`🧊 Waiting ${Math.round(cooldownMs/1000)}s before next independent scan.`); nextTradeTimer.current=setTimeout(()=>executeTrade(),cooldownMs) }
+    if (isRunningRef.current) { const cooldownMs = session.lossStreak >= 3 ? 90000 : session.lossStreak >= 2 ? 45000 : session.lossStreak === 1 ? 15000 : 5000; addLog(`Account: ${accountBalanceRef.current === null ? 'balance pending' : accountBalanceRef.current.toFixed(2)} | Session P/L: ${session.pl.toFixed(2)} | Target remaining: ${Math.max(0, parseFloat(config.targetProfit) - session.pl).toFixed(2)} | Stop-loss room: ${Math.max(0, parseFloat(config.stopLoss) + session.pl).toFixed(2)} | Trades: ${session.totalTrades}`); addLog(`🧊 Waiting ${Math.round(cooldownMs/1000)}s before next independent scan.`); nextTradeTimer.current=setTimeout(()=>executeTrade(),cooldownMs) }
   }
 
   const startBot = () => { setValidationError(''); if (!ws || ws.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }; if (nextTradeTimer.current) clearTimeout(nextTradeTimer.current); setIsRunning(true); isRunningRef.current = true; setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConsecutiveLosses(0); marketCooldownUntilRef.current={}; recentOutcomesRef.current=[]; performanceCooldownUntilRef.current=0; performanceRecoveryUntilRef.current=0; lastPerformancePauseNoticeRef.current=0; sessionRef.current={totalTrades:0,wins:0,losses:0,lossStreak:0,stake:parseFloat(stake),pl:0}; shouldAutoScrollRef.current=true; addLog(` AutoD AI Started`); addLog('Market: autonomous scan across volatility indices'); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); tickHistoryRef.current={}; lastLiveTickAtRef.current={}; MARKET_SYMBOLS.forEach((symbol,index)=>ws.send(JSON.stringify({ ticks_history: symbol, count: 200, end: 'latest', style: 'ticks', subscribe: 1, req_id: Date.now()+index }))); nextTradeTimer.current = setTimeout(() => { if (isRunningRef.current) executeTrade() }, 3000) }
