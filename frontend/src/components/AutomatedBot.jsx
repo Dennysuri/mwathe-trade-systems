@@ -5,6 +5,7 @@ import { validateEntryWindow } from '../services/strategyIntelligence'
 import { validateLiveOpportunity } from '../services/liveOpportunityEngine'
 import { rankLiveStrategyUniverse } from '../services/strategyUniverse'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
+import { getStrategyRecoveryState, getTradeDifficulty } from '../services/accountRiskIntelligence'
 import { appendTickBuffer, seedTickBuffer } from '../services/marketTickBuffer'
 
 const UNIQUE_MARKETS = VOLATILITY_MARKETS
@@ -223,16 +224,20 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     // is eligible to enter the bot's existing validation/execution path.
     const now = Date.now()
     if (performanceCooldownUntilRef.current > now) return []
-    const requiredScore = performanceRecoveryUntilRef.current > now ? 92 : consecutiveLossesRef.current >= 3 ? 92 : consecutiveLossesRef.current >= 2 ? 90 : consecutiveLossesRef.current === 1 ? 85 : 0
-    return universe.filter(item =>
+    return universe.filter(item => {
+      const recovery = getStrategyRecoveryState(item.signal, { now })
+      // Lock the exact contract profile across all 13 markets after two losses.
+      // A market switch must not reset strategy-level recovery.
+      if (recovery.paused) return false
+      if (recovery.historicalTrades >= 200 && recovery.historicalWinRate < 0.8) return false
+      return
       item.profile.tradeType === tradeType
       && item.profile.subTradeType === (subTradeType || '')
       && item.profile.timeframeUnit === timeframeUnit
       && Number(item.profile.duration) === Number(durationValue)
       && item.qualified === true
       && (marketCooldownUntilRef.current[item.symbol] || 0) <= now
-      && Number(item.score || 0) >= requiredScore
-    )
+    })
   }
 
   const runTradeCycle = async () => {
@@ -271,7 +276,10 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const tradeDirection = signal.option
         lastResearchNoticeRef.current = ''
         setBestMarket(currentTarget.marketName); setConfluenceScore(currentTarget.score)
-        addLog(`🎯 LOCKED: ${currentTarget.marketName} | Score: ${currentTarget.score}% | Direction: ${tradeDirection}`)
+        const strategyState = getStrategyRecoveryState(signal)
+        const difficulty = getTradeDifficulty(signal)
+        addLog(`🎯 LOCKED: ${currentTarget.marketName} | Relative score: ${currentTarget.score}/94 | ${tradeDirection}`)
+        addLog(`Strategy profile: ${signal.tradeType} / ${signal.subTradeType} / ${signal.option} / ${signal.duration} ${signal.timeframeUnit}; theoretical difficulty: ${difficulty.difficulty}${difficulty.baselineWinRate === null ? '' : ` (${(difficulty.baselineWinRate * 100).toFixed(1)}% uniform-outcome baseline)`}. Settled profile history: ${strategyState.historicalTrades} trades, ${strategyState.historicalWinRate === null ? 'not established' : `${(strategyState.historicalWinRate * 100).toFixed(1)}% wins`}.`)
         addLog('🚀 EXECUTING...')
         const proposalReq = buildProposal(signal, roundStake(currentStakeRef.current))
         const executionStartedAt = performance.now()
@@ -318,7 +326,9 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           currentStakeRef.current = boundedNextStake(stake, currentStakeRef.current, martingaleFactor, consecutiveLossesRef.current)
           marketCooldownUntilRef.current[currentTarget.symbol] = Date.now() + (consecutiveLossesRef.current >= 2 ? 120000 : 60000)
           setCurrentStake(currentStakeRef.current)
-          addLog(`❌ LOST -${profit.toFixed(2)} | Bounded recovery stake ${currentStakeRef.current.toFixed(2)}; ${currentTarget.symbol} paused for ${consecutiveLossesRef.current >= 2 ? 120 : 60}s.`)
+          addLog(`❌ LOST -${profit.toFixed(2)} | Bounded martingale stake ${currentStakeRef.current.toFixed(2)}; market cooldown ${consecutiveLossesRef.current >= 2 ? 120 : 60}s.`)
+          const strategyState = getStrategyRecoveryState(signal)
+          addLog(`🛡️ Cross-market strategy guard: ${strategyState.consecutiveLosses} consecutive losses for this exact contract profile. ${strategyState.paused ? 'Profile locked across all markets for 10 minutes.' : 'One more loss on this profile will trigger a global profile cooldown.'}`)
           if (consecutiveLossesRef.current >= 2) addLog(`🛡️ ${consecutiveLossesRef.current} consecutive losses: next setup must score at least ${consecutiveLossesRef.current >= 3 ? 92 : 90}/94.`)
         }
         
@@ -343,7 +353,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     currentStakeRef.current = parseFloat(stake); historyLoadedRef.current = false; hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0
     consecutiveLossesRef.current = 0; recentOutcomesRef.current = []; performanceCooldownUntilRef.current = 0; performanceRecoveryUntilRef.current = 0; lastPerformancePauseNoticeRef.current = 0
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); marketCooldownUntilRef.current = {}
-    addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets | Loss-Resistant Entry Gates)'); addLog(`Type: ${tradeType} | Stake: ${stake} | Recovery: flat stake, no martingale escalation`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); runTradeCycle()
+    addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets | Loss-Resistant Entry Gates)'); addLog(`Type: ${tradeType} | Stake: ${stake} | Martingale: ${martingaleFactor}x (bounded recovery)`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); runTradeCycle()
   }
 
   const stopBot = () => { isRunningRef.current = false; setIsRunning(false); addLog('⏹️ Stopped new entries; any open contract remains monitored until settlement.') }
