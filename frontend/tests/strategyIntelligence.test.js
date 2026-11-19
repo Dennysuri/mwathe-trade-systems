@@ -64,6 +64,7 @@ test('research candidates use the correct option vocabulary for each contract fa
   const cases = [
     [{tradeType:'Ups & Downs',subTradeType:'Rise/Fall',option:'Both'}, 'Rise'],
     [{tradeType:'Ups & Downs',subTradeType:'Higher/Lower',option:'Both'}, 'Higher'],
+    [{tradeType:'Touch & No Touch',subTradeType:'Touch/No Touch',option:'Both'}, 'Touch'],
     [{tradeType:'Multipliers',subTradeType:'Multipliers',option:'Both'}, 'Up'],
     [{tradeType:'Turbos',subTradeType:'Turbos',option:'Both'}, 'Up'],
     [{tradeType:'Vanillas',subTradeType:'Call/Put',option:'Both'}, 'Call'],
