@@ -4,7 +4,7 @@ import { boundedNextStake, buildProposal, VOLATILITY_MARKETS } from '../services
 import { validateEntryWindow } from '../services/strategyIntelligence'
 import { validateLiveOpportunity } from '../services/liveOpportunityEngine'
 import { rankLiveStrategyUniverse } from '../services/strategyUniverse'
-import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
+import { recordContractOutcome, getStrategyPerformance } from '../services/contractOutcomeIntelligence'
 import { appendTickBuffer, seedTickBuffer } from '../services/marketTickBuffer'
 
 const UNIQUE_MARKETS = VOLATILITY_MARKETS
@@ -230,6 +230,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       && item.profile.timeframeUnit === timeframeUnit
       && Number(item.profile.duration) === Number(durationValue)
       && item.qualified === true
+      && !getStrategyPerformance(item.signal || { ...item.profile, symbol: item.symbol }).paused
       && (marketCooldownUntilRef.current[item.symbol] || 0) <= now
       && Number(item.score || 0) >= requiredScore
     )
@@ -326,8 +327,8 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         if (sessionPLRef.current >= parseFloat(targetProfit)) { addLog(`🎯 TARGET HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
         if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog('🛑 STOP LOSS HIT!'); setIsRunning(false); isRunningRef.current = false; break }
         addLog(`📊 P/L: ${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
-        if (consecutiveLossesRef.current >= 4) {
-          addLog('🛑 Four consecutive losses: Automated Bot safety stop. Review the session before restarting.')
+        if (consecutiveLossesRef.current >= 3) {
+          addLog('🛑 Three consecutive losses: Automated Bot safety stop to protect capital. Review the session before restarting.')
           setIsRunning(false); isRunningRef.current = false; break
         }
         const cooldownMs = consecutiveLossesRef.current >= 3 ? 90000 : consecutiveLossesRef.current >= 2 ? 45000 : consecutiveLossesRef.current === 1 ? 15000 : 5000
@@ -343,7 +344,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     currentStakeRef.current = parseFloat(stake); historyLoadedRef.current = false; hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0
     consecutiveLossesRef.current = 0; recentOutcomesRef.current = []; performanceCooldownUntilRef.current = 0; performanceRecoveryUntilRef.current = 0; lastPerformancePauseNoticeRef.current = 0
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); marketCooldownUntilRef.current = {}
-    addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets | Loss-Resistant Entry Gates)'); addLog(`Type: ${tradeType} | Stake: ${stake} | Recovery: flat stake, no martingale escalation`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); runTradeCycle()
+    addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets | Loss-Resistant Entry Gates)'); addLog(`Type: ${tradeType} | Stake: ${stake} | Bounded martingale recovery enabled`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); runTradeCycle()
   }
 
   const stopBot = () => { isRunningRef.current = false; setIsRunning(false); addLog('⏹️ Stopped new entries; any open contract remains monitored until settlement.') }
