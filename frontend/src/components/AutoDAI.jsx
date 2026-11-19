@@ -3,6 +3,7 @@ import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, Shi
 import { boundedNextStake, buildProposal, MARKET_SYMBOLS, VOLATILITY_MARKETS } from '../services/tradingCore'
 import { evaluateStrategyEnsemble, validateEntryWindow } from '../services/strategyIntelligence'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
+import { getStrategyRecoveryState, getTradeDifficulty } from '../services/accountRiskIntelligence'
 
 const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
 const SYMBOL_MAP = Object.fromEntries(VOLATILITY_MARKETS)
@@ -148,11 +149,17 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
         })
         const candidate = report.candidate || report.watchCandidate
         if (!candidate) return null
+        const profileSignal = { tradeType: config.tradeType, subTradeType: config.subTradeType,
+          option: config.option === 'Both' ? candidate.option : config.option,
+          predictedDigit: Number(config.predictedDigit), duration: config.durationValue,
+          timeframeUnit: config.timeframeUnit, symbol }
+        const recovery = getStrategyRecoveryState(profileSignal, { now })
+        if (recovery.paused || (recovery.historicalTrades >= 200 && recovery.historicalWinRate < 0.8)) return null
         const prices = ticks.slice(-21)
         const moves = prices.slice(1).map((value, index) => value - prices[index])
         const atr = moves.reduce((sum, value) => sum + Math.abs(value), 0) / Math.max(1, moves.length)
         return { symbol, ticks, atr, drift: ticks.at(-1) - ticks.at(-16), score: candidate.score,
-          report, option: candidate.option, qualified: Boolean(report.candidate) }
+          report, option: candidate.option, qualified: Boolean(report.candidate), profileSignal, recovery }
       }))).filter(Boolean).sort((a,b) => b.score - a.score)
 
     const executableCandidates = candidates.filter(item => item.qualified)
@@ -160,11 +167,13 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
       const watch = candidates[0]
       addLog(watch
         ? `Thamira watchlist leader: ${MARKET_LABEL_BY_SYMBOL[watch.symbol] || watch.symbol}, ${watch.option}, relative score ${watch.score}/94. Not execution-qualified: ${watch.report.reasons?.[0] || 'insufficient validation'}.`
-        : 'Thamira is refreshing all 13 market windows; no evaluable candidate is ready yet.')
+        : 'Thamira is refreshing all 13 market windows; no evaluable candidate is ready yet. Profiles with two cross-market losses or established win rates below 80% remain locked for review.')
       nextTradeTimer.current=setTimeout(()=>executeTrade(),1000)
       return
     }
     const best = executableCandidates[0]
+    const difficulty = getTradeDifficulty(best.profileSignal)
+    addLog(`Strategy profile: ${config.tradeType} / ${config.subTradeType} / ${best.option} / ${config.durationValue} ${config.timeframeUnit}; theoretical difficulty: ${difficulty.difficulty}${difficulty.baselineWinRate === null ? '' : ` (${(difficulty.baselineWinRate * 100).toFixed(1)}% uniform-outcome baseline)`}. Cross-market profile history: ${best.recovery.historicalTrades} trades, ${best.recovery.historicalWinRate === null ? 'not established' : `${(best.recovery.historicalWinRate * 100).toFixed(1)}% wins`}.`)
     const ticks = best.ticks, atr = best.atr, drift = best.drift, symbol = best.symbol
     const marketLabel = MARKET_LABEL_BY_SYMBOL[symbol] || symbol
     setSelectedMarket(marketLabel)
@@ -208,6 +217,8 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
       const lostSymbol = settledSignal.symbol
       if (lostSymbol) marketCooldownUntilRef.current[lostSymbol] = Date.now() + (session.lossStreak >= 2 ? 120000 : 60000)
       addLog(`❌ AI LOST -${profit.toFixed(2)} | Bounded martingale recovery stake ${session.stake.toFixed(2)}.`)
+      const strategyState = getStrategyRecoveryState(settledSignal)
+      addLog(`🛡️ Cross-market strategy guard: ${strategyState.consecutiveLosses} consecutive losses for this exact contract profile. ${strategyState.paused ? 'Profile locked across all 13 markets for 10 minutes.' : 'Another loss on this profile will trigger a global cooldown.'}`)
       if (session.lossStreak >= 2) addLog(`🛡️ Loss recovery: next setup requires scan score ${session.lossStreak >= 3 ? 6.5 : 5.0}+ and the losing market is cooling down.`)
     }
     session.pl += profit
