@@ -104,6 +104,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
             }
             if (msg.msg_type === 'contracts_for' && pendingProposalRef.current?.reqId === msg.req_id) {
               const pending = pendingProposalRef.current; pendingProposalRef.current = null
+              if (!isRunningRef.current) { pendingEntryRef.current = null; return }
               const offered = Array.isArray(msg.contracts_for?.available) ? msg.contracts_for.available : []
               const offeredTypes = offered.map(item => item.contract_type).filter(Boolean)
               const exactContractAvailable = offeredTypes.includes(pending.proposal.contract_type)
@@ -119,6 +120,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
               }
             }
             if (msg.msg_type === 'proposal') {
+              if (!isRunningRef.current) { pendingEntryRef.current = null; return }
               if (msg.error) {
                 addLog(`❌ Proposal failed: ${msg.error.message || 'Deriv rejected the proposal'}`)
                 if (isRunningRef.current) nextTradeTimer.current = setTimeout(() => executeTrade(), 3000)
@@ -144,6 +146,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
                   }
                 }
                 setTimeout(() => {
+                  if (!isRunningRef.current) { pendingEntryRef.current = null; return }
                   const gate = validateEntryWindow(pendingEntryRef.current, { maxSignalAgeMs: 15000, proposalBudgetMs: 300, minimumRemainingMs: 250 })
                   if (!gate.valid) {
                     addLog(`⛔ Entry expired before purchase: ${gate.reason}`)
