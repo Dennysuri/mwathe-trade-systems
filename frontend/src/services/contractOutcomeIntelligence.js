@@ -8,28 +8,33 @@ const read = () => {
   } catch { return []; }
 };
 
-export function contractProfile(signal = {}) {
-  const digitTargetApplies = signal.tradeType === 'Digits'
-    && ['Over/Under', 'Matches/Differs'].includes(signal.subTradeType);
-  const barrierApplies = digitTargetApplies || signal.tradeType === 'Touch & No Touch'
-    || signal.subTradeType === 'Higher/Lower';
+const digitTargetApplies = signal => signal.tradeType === 'Digits'
+  && ['Over/Under', 'Matches/Differs'].includes(signal.subTradeType);
+const barrierApplies = signal => digitTargetApplies(signal) || signal.tradeType === 'Touch & No Touch'
+  || signal.subTradeType === 'Higher/Lower';
+
+// Strategy key intentionally excludes market symbol so losses follow the same
+// contract configuration when the scanner moves between the 13 indices.
+export function strategyProfile(signal = {}) {
   return [
-    signal.symbol || 'unknown-market',
-    signal.tradeType || 'unknown-type',
-    signal.subTradeType || 'default',
+    signal.tradeType || 'unknown-type', signal.subTradeType || 'default',
     signal.option || 'unknown-option',
-    digitTargetApplies ? (signal.predictedDigit ?? 'na') : 'na',
-    barrierApplies ? (signal.barrier ?? signal.predictedDigit ?? 'na') : 'na',
-    signal.duration ?? 'na',
-    signal.timeframeUnit || 'na'
+    digitTargetApplies(signal) ? (signal.predictedDigit ?? 'na') : 'na',
+    barrierApplies(signal) ? (signal.barrier ?? signal.predictedDigit ?? 'na') : 'na',
+    signal.duration ?? 'na', signal.timeframeUnit || 'na'
   ].join('|');
+}
+
+export function contractProfile(signal = {}) {
+  return [signal.symbol || 'unknown-market', strategyProfile(signal)].join('|');
 }
 
 export function recordContractOutcome(signal, { profit, stake, contractId, bot = 'unknown' } = {}) {
   if (typeof window === 'undefined' || !Number.isFinite(Number(profit))) return null;
   const records = read();
   const row = {
-    key: contractProfile(signal), symbol: signal.symbol || 'unknown-market',
+    key: contractProfile(signal), strategyKey: strategyProfile(signal),
+    symbol: signal.symbol || 'unknown-market',
     tradeType: signal.tradeType || 'unknown-type', subTradeType: signal.subTradeType || '',
     option: signal.option || '', predictedDigit: signal.predictedDigit ?? null,
     barrier: signal.barrier ?? null, duration: signal.duration ?? null,
@@ -43,18 +48,31 @@ export function recordContractOutcome(signal, { profit, stake, contractId, bot =
   return getContractPerformance(signal);
 }
 
-export function getContractPerformance(signal = {}) {
-  const key = contractProfile(signal);
-  const matching = read().filter(row => row.key === key);
+function summarize(matching, key) {
   const wins = matching.filter(row => row.won).length;
   const trades = matching.length;
+  let consecutiveLosses = 0;
+  for (let i = matching.length - 1; i >= 0 && !matching[i].won; i--) consecutiveLosses++;
   return {
     key, trades, wins, losses: trades - wins,
     winRate: trades ? wins / trades : null,
     netProfit: matching.reduce((sum, row) => sum + Number(row.profit || 0), 0),
-    sampleSufficient: trades >= 100,
-    note: trades < 100 ? 'Insufficient settled trades for reliable calibration.' : 'Historical descriptive statistics only; validate out of sample.'
+    consecutiveLosses, sampleSufficient: trades >= 100,
+    note: trades < 100 ? 'Insufficient settled trades for reliable calibration.' : 'Historical descriptive statistics; validate out of sample.'
   };
+}
+
+export function getContractPerformance(signal = {}) {
+  const key = contractProfile(signal);
+  const matching = read().filter(row => row.key === key);
+  return summarize(matching, key);
+}
+
+export function getStrategyPerformance(signal = {}) {
+  const key = strategyProfile(signal);
+  const matching = read().filter(row => (row.strategyKey || strategyProfile(row)) === key)
+    .sort((a, b) => Number(a.settledAt || 0) - Number(b.settledAt || 0));
+  return summarize(matching, key);
 }
 
 export function getContractOutcomeSummary() {
