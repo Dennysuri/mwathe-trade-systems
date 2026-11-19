@@ -48,11 +48,9 @@ export function buildStrategyProfiles(selectedConfig = {}) {
   const profiles = STRATEGY_DEFINITIONS.map(definition => {
     const selected = definition.tradeType === selectedConfig.tradeType
       && definition.subTradeType === (selectedConfig.subTradeType || '');
-    const useSelectedDuration = selected && selectedConfig.timeframeUnit === definition.timeframeUnit
-      && Number.isFinite(Number(selectedConfig.duration)) && Number(selectedConfig.duration) > 0;
     return {
       ...definition,
-      duration: useSelectedDuration ? Number(selectedConfig.duration) : definition.duration,
+      duration: definition.duration,
       option: selected && selectedConfig.option && selectedConfig.option !== 'Both'
         ? selectedConfig.option : 'Both',
       predictedDigit: Number.isInteger(Number(selectedConfig.predictedDigit))
@@ -63,7 +61,7 @@ export function buildStrategyProfiles(selectedConfig = {}) {
       takeProfit: selectedConfig.takeProfit,
       contractStopLoss: selectedConfig.contractStopLoss,
       profileId: [definition.tradeType, definition.subTradeType || 'default',
-        definition.timeframeUnit, useSelectedDuration ? Number(selectedConfig.duration) : definition.duration].join('|')
+        definition.timeframeUnit, definition.duration].join('|')
     };
   });
   // Include a user-selected duration even when it is outside the discovery ladder.
