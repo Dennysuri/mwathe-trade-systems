@@ -226,6 +226,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     return universe.filter(item =>
       item.profile.tradeType === tradeType
       && item.profile.subTradeType === (subTradeType || '')
+      && item.qualified === true
       && (marketCooldownUntilRef.current[item.symbol] || 0) <= now
       && Number(item.score || 0) >= requiredScore
     )
@@ -252,7 +253,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
             await new Promise(r => setTimeout(r, Math.min(5000, Math.max(500, performanceCooldownUntilRef.current - Date.now()))))
           } else {
             if (!hasLoggedScanningRef.current) {
-              addLog('Scanning live markets; waiting for a fresh setup to pass quality and loss-recovery gates.')
+              addLog('Thamira is comparing live market, strategy and duration candidates; watch-only patterns are not sent as trades.')
               hasLoggedScanningRef.current = true
             }
             await new Promise(r => setTimeout(r, 1000))
