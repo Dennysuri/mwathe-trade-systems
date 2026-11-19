@@ -145,20 +145,25 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
           option: config.option, predictedDigit: Number(config.predictedDigit),
           duration: config.durationValue, timeframeUnit: config.timeframeUnit, symbol
         })
-        if (!report.candidate) return null
+        const candidate = report.candidate || report.watchCandidate
+        if (!candidate) return null
         const prices = ticks.slice(-21)
         const moves = prices.slice(1).map((value, index) => value - prices[index])
         const atr = moves.reduce((sum, value) => sum + Math.abs(value), 0) / Math.max(1, moves.length)
-        return { symbol, ticks, atr, drift: ticks.at(-1) - ticks.at(-16), score: report.candidate.score,
-          report, option: report.candidate.option }
+        return { symbol, ticks, atr, drift: ticks.at(-1) - ticks.at(-16), score: candidate.score,
+          report, option: candidate.option, qualified: Boolean(report.candidate) }
       }))).filter(Boolean).sort((a,b) => b.score - a.score)
 
-    if (!candidates.length) {
-      addLog('Thamira is comparing all live markets; no candidate has yet passed the strategy evidence gate.')
+    const executableCandidates = candidates.filter(item => item.qualified)
+    if (!executableCandidates.length) {
+      const watch = candidates[0]
+      addLog(watch
+        ? `Thamira watchlist leader: ${MARKET_LABEL_BY_SYMBOL[watch.symbol] || watch.symbol}, ${watch.option}, relative score ${watch.score}/94. Not execution-qualified: ${watch.report.reasons?.[0] || 'insufficient validation'}.`
+        : 'Thamira is refreshing all 13 market windows; no evaluable candidate is ready yet.')
       nextTradeTimer.current=setTimeout(()=>executeTrade(),1000)
       return
     }
-    const best = candidates[0]
+    const best = executableCandidates[0]
     const ticks = best.ticks, atr = best.atr, drift = best.drift, symbol = best.symbol
     const marketLabel = MARKET_LABEL_BY_SYMBOL[symbol] || symbol
     setSelectedMarket(marketLabel)
