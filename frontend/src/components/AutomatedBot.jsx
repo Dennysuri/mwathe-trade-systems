@@ -278,7 +278,10 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
           growthRate: 0.01, multiplier: 100, takeProfit: 1, contractStopLoss: 1
         }
         const accountRisk = evaluateAccountRisk({ balance: accountBalanceRef.current, sessionPL: sessionPLRef.current, targetProfit, stopLoss, nextStake: currentStakeRef.current })
-        if (!accountRisk.allowEntry) { addLog(`🛡️ Account guard: ${accountRisk.message}. New entries stopped.`); isRunningRef.current = false; setIsRunning(false); break }
+        if (!accountRisk.allowEntry) {
+          if (accountRisk.balanceUnavailable) { addLog('⏳ Waiting for Deriv to confirm account balance before entry.'); await new Promise(resolve => setTimeout(resolve, 1000)); continue }
+          addLog(`🛡️ Account guard: ${accountRisk.message}. New entries stopped.`); isRunningRef.current = false; setIsRunning(false); break
+        }
         const adaptiveStatus = getAdaptiveStrategyStatus(signal)
         if (adaptiveStatus.blocked) { addLog(`🧠 Strategy recovery pause: ${signal.tradeType}/${signal.subTradeType}/${signal.option} has ${adaptiveStatus.consecutiveLosses} consecutive losses across markets.`); await new Promise(r => setTimeout(r, Math.max(500, adaptiveStatus.blockedUntil - Date.now()))); continue }
         const tradeDirection = signal.option
