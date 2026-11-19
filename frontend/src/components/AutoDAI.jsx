@@ -2,7 +2,8 @@ import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Activity, Lock } from 'lucide-react'
 import { boundedNextStake, buildProposal, MARKET_SYMBOLS, VOLATILITY_MARKETS } from '../services/tradingCore'
 import { evaluateStrategyEnsemble, validateEntryWindow } from '../services/strategyIntelligence'
-import { recordContractOutcome } from '../services/contractOutcomeIntelligence'\nimport { evaluateAccountRisk, getAdaptiveStrategyStatus, recordAdaptiveOutcome } from '../services/adaptiveTradingIntelligence'
+import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
+import { evaluateAccountRisk, getAdaptiveStrategyStatus, recordAdaptiveOutcome } from '../services/adaptiveTradingIntelligence'
 
 const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
 const SYMBOL_MAP = Object.fromEntries(VOLATILITY_MARKETS)
@@ -42,7 +43,8 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
 
   const logRef = useRef(null)
   const shouldAutoScrollRef = useRef(true)
-  const accountCurrencyRef = useRef('USD')\n  const accountBalanceRef = useRef(null)
+  const accountCurrencyRef = useRef('USD')
+  const accountBalanceRef = useRef(null)
   const marketCooldownUntilRef = useRef({})
   const recentOutcomesRef = useRef([])
   const performanceCooldownUntilRef = useRef(0)
@@ -85,7 +87,8 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
         websocket.onmessage = (message) => {
           try {
             const msg = JSON.parse(message.data)
-            if (msg.msg_type === 'balance' && msg.balance?.currency) accountCurrencyRef.current = msg.balance.currency\n            if (msg.msg_type === 'balance' && msg.balance?.balance !== undefined) accountBalanceRef.current = Number(msg.balance.balance)
+            if (msg.msg_type === 'balance' && msg.balance?.currency) accountCurrencyRef.current = msg.balance.currency
+            if (msg.msg_type === 'balance' && msg.balance?.balance !== undefined) accountBalanceRef.current = Number(msg.balance.balance)
             if (msg.msg_type === 'balance' && onBalanceUpdate) onBalanceUpdate(parseFloat(msg.balance.balance))
             if (msg.msg_type === 'history' && msg.history?.prices) { const symbol = msg.echo_req?.ticks_history || msg.history.symbol; if (symbol) tickHistoryRef.current[symbol] = msg.history.prices.map(Number).filter(Number.isFinite).slice(-500) }
             if (msg.msg_type === 'tick' && msg.tick?.quote !== undefined) { const symbol = msg.tick.symbol; const current = tickHistoryRef.current[symbol] || []; tickHistoryRef.current[symbol] = [...current, Number(msg.tick.quote)].slice(-500); lastLiveTickAtRef.current[symbol] = Date.now() }
@@ -155,7 +158,10 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
           report, option: candidate.option, qualified: Boolean(report.candidate) }
       }))).filter(Boolean).sort((a,b) => b.score - a.score)
 
-    const executableCandidates = candidates.filter(item => {\n      const selectedSignal = { symbol: item.symbol, tradeType: config.tradeType, subTradeType: config.subTradeType, option: config.option === 'Both' ? item.option : config.option, predictedDigit: Number(config.predictedDigit), duration: config.durationValue, timeframeUnit: config.timeframeUnit }\n      return item.qualified && !getAdaptiveStrategyStatus(selectedSignal, now).blocked\n    })
+    const executableCandidates = candidates.filter(item => {
+      const selectedSignal = { symbol: item.symbol, tradeType: config.tradeType, subTradeType: config.subTradeType, option: config.option === 'Both' ? item.option : config.option, predictedDigit: Number(config.predictedDigit), duration: config.durationValue, timeframeUnit: config.timeframeUnit }
+      return item.qualified && !getAdaptiveStrategyStatus(selectedSignal, now).blocked
+    })
     if (!executableCandidates.length) {
       const watch = candidates[0]
       addLog(watch
@@ -183,7 +189,11 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
       : (config.tradeType==='Touch & No Touch'||config.subTradeType==='Higher/Lower') ? ((config.tradeType==='Touch & No Touch'?direction==='down':isDown)?'-':'+')+Math.max(atr*(config.tradeType==='Touch & No Touch'?3:2),Math.abs(ticks.at(-1))*0.0001).toFixed(4) : ''
     try {
       const signal = {symbol,tradeType:config.tradeType,subTradeType:config.subTradeType,option:selectedOption,predictedDigit:target,barrier,duration:config.durationValue,timeframeUnit:config.timeframeUnit,createdAt:Date.now(),expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,config.durationValue*(config.timeframeUnit==='Hours'?3600:config.timeframeUnit==='Days'?86400:config.timeframeUnit==='Minutes'?60:1)),growthRate:0.01,multiplier:100,takeProfit:1,contractStopLoss:1}
-      const accountRisk = evaluateAccountRisk({ balance: accountBalanceRef.current, sessionPL: sessionRef.current.pl, targetProfit: config.targetProfit, stopLoss: config.stopLoss, nextStake: sessionRef.current.stake })\n      if (!accountRisk.allowEntry) { addLog(`🛡️ Account guard: ${accountRisk.message}. New entries stopped.`); isRunningRef.current = false; setIsRunning(false); return }\n      const adaptiveStatus = getAdaptiveStrategyStatus(signal)\n      if (adaptiveStatus.blocked) { addLog(`🧠 Strategy recovery pause: this exact strategy is cooling down across all markets.`); nextTradeTimer.current = setTimeout(() => executeTrade(), Math.max(500, adaptiveStatus.blockedUntil - Date.now())); return }\n      const proposal = buildProposal(signal,sessionRef.current.stake,accountCurrencyRef.current)
+      const accountRisk = evaluateAccountRisk({ balance: accountBalanceRef.current, sessionPL: sessionRef.current.pl, targetProfit: config.targetProfit, stopLoss: config.stopLoss, nextStake: sessionRef.current.stake })
+      if (!accountRisk.allowEntry) { addLog(`🛡️ Account guard: ${accountRisk.message}. New entries stopped.`); isRunningRef.current = false; setIsRunning(false); return }
+      const adaptiveStatus = getAdaptiveStrategyStatus(signal)
+      if (adaptiveStatus.blocked) { addLog(`🧠 Strategy recovery pause: this exact strategy is cooling down across all markets.`); nextTradeTimer.current = setTimeout(() => executeTrade(), Math.max(500, adaptiveStatus.blockedUntil - Date.now())); return }
+      const proposal = buildProposal(signal,sessionRef.current.stake,accountCurrencyRef.current)
       const reqId = Date.now()
       pendingProposalRef.current = {proposal,reqId}; pendingEntryRef.current = signal
       addLog(`🔎 Live setup ${selectedOption}; validating ${proposal.contract_type} with Deriv.`)
@@ -196,7 +206,9 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     const config = configRef.current
     session.totalTrades += 1
     const settledSignal = pendingEntryRef.current || {}
-    const outcomeStats = recordContractOutcome(settledSignal, { profit, stake: session.stake, contractId: currentContract?.id, bot: 'AutoD AI' })\n    const adaptiveStats = recordAdaptiveOutcome(settledSignal, { profit, stake: session.stake, bot: 'AutoD AI' })\n    addLog(`🧠 Strategy profile: ${adaptiveStats.consecutiveLosses} consecutive losses across markets; ${adaptiveStats.trades} recent outcomes; win rate ${adaptiveStats.winRate === null ? 'n/a' : (adaptiveStats.winRate * 100).toFixed(1) + '%'} (80% target).`)
+    const outcomeStats = recordContractOutcome(settledSignal, { profit, stake: session.stake, contractId: currentContract?.id, bot: 'AutoD AI' })
+    const adaptiveStats = recordAdaptiveOutcome(settledSignal, { profit, stake: session.stake, bot: 'AutoD AI' })
+    addLog(`🧠 Strategy profile: ${adaptiveStats.consecutiveLosses} consecutive losses across markets; ${adaptiveStats.trades} recent outcomes; win rate ${adaptiveStats.winRate === null ? 'n/a' : (adaptiveStats.winRate * 100).toFixed(1) + '%'} (80% target).`)
     if (outcomeStats) addLog(`Thamira history: ${outcomeStats.trades} settled for this exact setup; win rate ${outcomeStats.winRate === null ? 'n/a' : (outcomeStats.winRate * 100).toFixed(1) + '%'}.`)
     pendingEntryRef.current = null
     if (profit > 0) {
