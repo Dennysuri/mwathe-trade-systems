@@ -167,8 +167,24 @@ function rankOpportunity(strategies, config) {
   const rangeExtreme = Math.max(reversion?.rangePosition || 0.5, 1 - (reversion?.rangePosition || 0.5));
   const score = clamp(45 + Math.min(22, momentumStrength * 8) + Math.max(0, directionalAgreement - 0.5) * 70
     + Math.max(0, rangeExtreme - 0.8) * 30, 0, 94);
-  return { option: config.option === 'Both' ? (direction === 'up' ? 'Rise' : direction === 'down' ? 'Fall' : 'Both') : config.option,
-    direction, score: Math.round(score),
+  let inferredOption;
+  if (config.option && config.option !== 'Both') inferredOption = config.option;
+  else if (config.tradeType === 'Ups & Downs') {
+    inferredOption = config.subTradeType === 'Higher/Lower'
+      ? (direction === 'up' ? 'Higher' : direction === 'down' ? 'Lower' : 'Both')
+      : (direction === 'up' ? 'Rise' : direction === 'down' ? 'Fall' : 'Both');
+  } else if (config.tradeType === 'Touch & No Touch') {
+    inferredOption = momentumStrength >= 0.35 ? 'Touch' : 'No Touch';
+  } else if (config.tradeType === 'Multipliers' || config.tradeType === 'Turbos') {
+    inferredOption = direction === 'up' ? 'Up' : direction === 'down' ? 'Down' : 'Both';
+  } else if (config.tradeType === 'Vanillas') {
+    inferredOption = direction === 'up' ? 'Call' : direction === 'down' ? 'Put' : 'Both';
+  } else if (config.tradeType === 'Accumulators') {
+    inferredOption = 'Accumulate';
+  } else {
+    inferredOption = direction === 'up' ? 'Rise' : direction === 'down' ? 'Fall' : 'Both';
+  }
+  return { option: inferredOption, direction, score: Math.round(score),
     supportingFamilies: strategies.map(s => s.family),
     evidence: { directionalAgreement, momentumStrength, volatility: regime?.volatility ?? null, rangePosition: reversion?.rangePosition ?? null },
     note: 'Relative multi-family setup score; not a calibrated probability.' };
