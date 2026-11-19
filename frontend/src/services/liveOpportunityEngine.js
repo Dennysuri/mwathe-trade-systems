@@ -24,7 +24,10 @@ export async function rankLiveMarketOpportunities(markets, config = {}, {
       symbol: market.symbol,
       barrier: config.tradeType === 'Digits' ? String(config.predictedDigit) : config.barrier
     });
-    const candidate = report.candidate;
+    // Preserve the strongest observed setup for Thamira's comparison board even
+    // when it does not yet pass the legacy display threshold. Execution remains
+    // separately qualified and must never treat a watch candidate as approved.
+    const candidate = report.candidate || report.watchCandidate;
     if (!report.ready || !candidate || !candidate.option || candidate.option === 'Both') return null;
 
     const entryPoint = prices.at(-1);
