@@ -83,7 +83,8 @@ export function evaluateAccountRisk({ balance, sessionPL = 0, targetProfit, stop
   const pl = Number(sessionPL) || 0;
   const remainingToTarget = target > 0 ? Math.max(0, target - pl) : null;
   const remainingLossRoom = stop > 0 ? Math.max(0, stop + pl) : null;
-  const balanceValue = Number(balance);
+  const balanceProvided = balance !== null && balance !== undefined && balance !== '';
+  const balanceValue = balanceProvided ? Number(balance) : NaN;
   const validBalance = Number.isFinite(balanceValue) && balanceValue >= 0;
   const stopHit = stop > 0 && pl <= -stop;
   const targetHit = target > 0 && pl >= target;
