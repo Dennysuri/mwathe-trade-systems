@@ -25,7 +25,6 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const [stake, setStake] = useState('1.00')
   const [targetProfit, setTargetProfit] = useState('50.00')
   const [stopLoss, setStopLoss] = useState('20.00')
-  const [martingaleFactor, setMartingaleFactor] = useState('1.5')
   
   const [isRunning, setIsRunning] = useState(false)
   const [validationError, setValidationError] = useState('')
