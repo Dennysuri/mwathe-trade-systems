@@ -273,8 +273,8 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         
         const contractResult = await monitorContract(buyRes.buy.contract_id); if (!contractResult) break
         const profit = parseFloat(contractResult.profit || 0); const isWin = profit > 0
-        const performance = recordContractOutcome(signal, { profit, stake: currentStakeRef.current, contractId: contractResult.contract_id, bot: 'Automated Bot' })
-        if (performance) addLog(`Thamira history: ${performance.trades} settled for this exact setup; win rate ${performance.winRate === null ? 'n/a' : (performance.winRate * 100).toFixed(1) + '%'}.`)
+        const outcomeStats = recordContractOutcome(signal, { profit, stake: currentStakeRef.current, contractId: contractResult.contract_id, bot: 'Automated Bot' })
+        if (outcomeStats) addLog(`Thamira history: ${outcomeStats.trades} settled for this exact setup; win rate ${outcomeStats.winRate === null ? 'n/a' : (outcomeStats.winRate * 100).toFixed(1) + '%'}.`)
         totalTradesRef.current += 1; sessionPLRef.current += profit
         
         if (isWin) {
