@@ -51,6 +51,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   const isRunningRef = useRef(false)
   const wsRef = useRef(null)
   const tickHistoryRef = useRef({})
+  const lastLiveTickAtRef = useRef({})
   const pendingProposalRef = useRef(null)
   const pendingEntryRef = useRef(null)
   const contractUnavailableUntilRef = useRef({})
@@ -86,7 +87,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
             if (msg.msg_type === 'balance' && msg.balance?.currency) accountCurrencyRef.current = msg.balance.currency
             if (msg.msg_type === 'balance' && onBalanceUpdate) onBalanceUpdate(parseFloat(msg.balance.balance))
             if (msg.msg_type === 'history' && msg.history?.prices) { const symbol = msg.echo_req?.ticks_history || msg.history.symbol; if (symbol) tickHistoryRef.current[symbol] = msg.history.prices.map(Number).filter(Number.isFinite).slice(-500) }
-            if (msg.msg_type === 'tick' && msg.tick?.quote !== undefined) { const symbol = msg.tick.symbol; const current = tickHistoryRef.current[symbol] || []; tickHistoryRef.current[symbol] = [...current, Number(msg.tick.quote)].slice(-500) }
+            if (msg.msg_type === 'tick' && msg.tick?.quote !== undefined) { const symbol = msg.tick.symbol; const current = tickHistoryRef.current[symbol] || []; tickHistoryRef.current[symbol] = [...current, Number(msg.tick.quote)].slice(-500); lastLiveTickAtRef.current[symbol] = Date.now() }
             if (msg.msg_type === 'contracts_for' && pendingProposalRef.current?.reqId === msg.req_id) {
               const pending = pendingProposalRef.current; pendingProposalRef.current = null
               const offered = Array.isArray(msg.contracts_for?.available) ? msg.contracts_for.available : []
@@ -135,7 +136,8 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     // each market window fresh. Relative scores rank markets, not win probabilities.
     const candidates = (await Promise.all(MARKET_SYMBOLS
       .filter(symbol => (contractUnavailableUntilRef.current[symbol] || 0) <= now
-        && (marketCooldownUntilRef.current[symbol] || 0) <= now)
+        && (marketCooldownUntilRef.current[symbol] || 0) <= now
+        && now - (lastLiveTickAtRef.current[symbol] || 0) <= 5000)
       .map(async symbol => {
         const ticks = tickHistoryRef.current[symbol] || []
         const report = await evaluateStrategyEnsemble(ticks, {
@@ -221,7 +223,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     if (isRunningRef.current) { const cooldownMs = session.lossStreak >= 3 ? 90000 : session.lossStreak >= 2 ? 45000 : session.lossStreak === 1 ? 15000 : 5000; addLog(`P/L: ${session.pl.toFixed(2)} | Trades: ${session.totalTrades}`); addLog(`🧊 Waiting ${Math.round(cooldownMs/1000)}s before next independent scan.`); nextTradeTimer.current=setTimeout(()=>executeTrade(),cooldownMs) }
   }
 
-  const startBot = () => { setValidationError(''); if (!ws || ws.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }; if (nextTradeTimer.current) clearTimeout(nextTradeTimer.current); setIsRunning(true); isRunningRef.current = true; setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConsecutiveLosses(0); marketCooldownUntilRef.current={}; recentOutcomesRef.current=[]; performanceCooldownUntilRef.current=0; performanceRecoveryUntilRef.current=0; lastPerformancePauseNoticeRef.current=0; sessionRef.current={totalTrades:0,wins:0,losses:0,lossStreak:0,stake:parseFloat(stake),pl:0}; shouldAutoScrollRef.current=true; addLog(` AutoD AI Started`); addLog('Market: autonomous scan across volatility indices'); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); tickHistoryRef.current={}; MARKET_SYMBOLS.forEach((symbol,index)=>ws.send(JSON.stringify({ ticks_history: symbol, count: 200, end: 'latest', style: 'ticks', subscribe: 1, req_id: Date.now()+index }))); nextTradeTimer.current = setTimeout(() => { if (isRunningRef.current) executeTrade() }, 3000) }
+  const startBot = () => { setValidationError(''); if (!ws || ws.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }; if (nextTradeTimer.current) clearTimeout(nextTradeTimer.current); setIsRunning(true); isRunningRef.current = true; setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConsecutiveLosses(0); marketCooldownUntilRef.current={}; recentOutcomesRef.current=[]; performanceCooldownUntilRef.current=0; performanceRecoveryUntilRef.current=0; lastPerformancePauseNoticeRef.current=0; sessionRef.current={totalTrades:0,wins:0,losses:0,lossStreak:0,stake:parseFloat(stake),pl:0}; shouldAutoScrollRef.current=true; addLog(` AutoD AI Started`); addLog('Market: autonomous scan across volatility indices'); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); tickHistoryRef.current={}; lastLiveTickAtRef.current={}; MARKET_SYMBOLS.forEach((symbol,index)=>ws.send(JSON.stringify({ ticks_history: symbol, count: 200, end: 'latest', style: 'ticks', subscribe: 1, req_id: Date.now()+index }))); nextTradeTimer.current = setTimeout(() => { if (isRunningRef.current) executeTrade() }, 3000) }
   const stopBot = () => { setIsRunning(false); isRunningRef.current = false; if (nextTradeTimer.current) { clearTimeout(nextTradeTimer.current); nextTradeTimer.current = null }; addLog(`⏹️ AI stopped new entries; any open contract remains monitored until settlement.`) }
   const resetBot = () => { if (isRunningRef.current) return; setLogs([]); try { localStorage.removeItem('mwathe:autod-ai-logs:v1') } catch {}; shouldAutoScrollRef.current=true; setValidationError('') }
   const rules = TIMEFRAME_RULES[tradeType]; const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
