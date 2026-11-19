@@ -1,4 +1,5 @@
 const STORAGE_KEY = 'mwathe:contract-outcomes:v1';
+import { strategyRecoveryProfile } from './accountRiskIntelligence.js';
 const MAX_RECORDS = 5000;
 
 const read = () => {
@@ -29,7 +30,7 @@ export function recordContractOutcome(signal, { profit, stake, contractId, bot =
   if (typeof window === 'undefined' || !Number.isFinite(Number(profit))) return null;
   const records = read();
   const row = {
-    key: contractProfile(signal), symbol: signal.symbol || 'unknown-market',
+    key: contractProfile(signal), strategyKey: strategyRecoveryProfile(signal), symbol: signal.symbol || 'unknown-market',
     tradeType: signal.tradeType || 'unknown-type', subTradeType: signal.subTradeType || '',
     option: signal.option || '', predictedDigit: signal.predictedDigit ?? null,
     barrier: signal.barrier ?? null, duration: signal.duration ?? null,
