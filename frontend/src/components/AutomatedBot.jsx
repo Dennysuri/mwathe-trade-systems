@@ -306,7 +306,8 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
             if (started) {
               addLog(`🧪 Calibration-only trial started for ${signal.subTradeType}/${signal.option} on ${signal.symbol}; ${calibration.trades}/200 settled samples, no purchase sent.`)
             } else if (calibration.pending === 0) {
-              addLog('🛡️ No valid quote-matched calibration trial could be started; refusing this digit entry.')
+              addLog('🛡️ No valid quote-matched calibration trial could be started; refusing this digit entry and retrying after a fresh quote.')
+              await new Promise(resolve => setTimeout(resolve, 1500))
               continue
             }
             const waitUntil = Date.now() + Math.max(15000, Number(signal.duration) * 5000)
