@@ -226,6 +226,8 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     return universe.filter(item =>
       item.profile.tradeType === tradeType
       && item.profile.subTradeType === (subTradeType || '')
+      && item.profile.timeframeUnit === timeframeUnit
+      && Number(item.profile.duration) === Number(durationValue)
       && item.qualified === true
       && (marketCooldownUntilRef.current[item.symbol] || 0) <= now
       && Number(item.score || 0) >= requiredScore
