@@ -2,7 +2,8 @@ import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Zap } from 'lucide-react'
 import { boundedNextStake, buildProposal, VOLATILITY_MARKETS } from '../services/tradingCore'
 import { validateEntryWindow } from '../services/strategyIntelligence'
-import { rankLiveMarketOpportunities, validateLiveOpportunity } from '../services/liveOpportunityEngine'
+import { validateLiveOpportunity } from '../services/liveOpportunityEngine'
+import { rankLiveStrategyUniverse } from '../services/strategyUniverse'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
 import { appendTickBuffer, seedTickBuffer } from '../services/marketTickBuffer'
 
@@ -207,48 +208,38 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       lastLiveAt: lastLiveAtRef.current[symbol] || 0,
       liveTicks: liveTickCountRef.current[symbol] || 0
     }))
-    return rankLiveMarketOpportunities(markets, {
+    const universe = await rankLiveStrategyUniverse(markets, {
       tradeType, subTradeType, option, predictedDigit: Number(predictedDigit),
       duration: durationValue, timeframeUnit
     }, { now: Date.now(), maxAgeMs: 5000, minLiveTicks: 1 })
+    // Research all supported profiles, but only the exact user-selected profile
+    // is eligible to enter the bot's existing validation/execution path.
+    return universe.filter(item =>
+      item.profile.tradeType === tradeType
+      && item.profile.subTradeType === (subTradeType || '')
+    )
   }
 
   const runTradeCycle = async () => {
     if (!historyLoadedRef.current) { addLog(' Analyzing unique volatility markets...'); await loadAllHistory() }
-    let recoveryQueue = []
-    let recoveryIndex = 0
     
     while (isRunningRef.current) {
       try {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { await new Promise(r => setTimeout(r, 3000)); continue }
         
-        if (recoveryQueue.length === 0 || recoveryIndex >= recoveryQueue.length) {
-          recoveryQueue = await scanMarkets()
-          recoveryIndex = 0
-          
-          // STRICT NO REPEAT LOGGING
-          if (recoveryQueue.length === 0) { 
-            if (!hasLoggedScanningRef.current) {
-              addLog(' Waiting for worthy signal...');
-              hasLoggedScanningRef.current = true;
-            }
-            await new Promise(r => setTimeout(r, 2000)); continue 
-          }
-          // Reset flag ONLY when we find a valid queue
-          hasLoggedScanningRef.current = false; 
-        }
-
-        // Refresh the complete market + signal ranking immediately before any quote request.
+        // One fresh all-strategy scan per cycle avoids duplicate work. All profiles
+        // are evaluated together; only the selected profile is returned by scanMarkets.
         const refreshedQueue = await scanMarkets()
         const currentTarget = refreshedQueue[0]
         if (!currentTarget) {
-          recoveryQueue = []
-          recoveryIndex = 0
-          await new Promise(r => setTimeout(r, 250))
+          if (!hasLoggedScanningRef.current) {
+            addLog('Scanning all supported trade families and subtypes across 13 live markets; no qualified selected-profile candidate yet.')
+            hasLoggedScanningRef.current = true
+          }
+          await new Promise(r => setTimeout(r, 1000))
           continue
         }
-        recoveryQueue = refreshedQueue
-        recoveryIndex = 0
+        hasLoggedScanningRef.current = false
         const signal = {
           ...currentTarget.signal,
           growthRate: 0.01, multiplier: 100, takeProfit: 1, contractStopLoss: 1
@@ -257,7 +248,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const researchReport = currentTarget.report
         if (!researchReport.ready || !researchReport.tradable) {
           const candidate = researchReport.candidate
-          const noticeKey = [currentTarget.symbol, tradeType, subTradeType, candidate?.option || tradeDirection, candidate?.score ?? currentTarget.score, researchReport.decision].join('|')
+          const noticeKey = [currentTarget.symbol, tradeType, subTradeType, candidate?.option || tradeDirection, researchReport.decision].join('|')
           if (noticeKey !== lastResearchNoticeRef.current) {
             lastResearchNoticeRef.current = noticeKey
             addLog(`🔬 CANDIDATE ONLY: ${currentTarget.marketName} | ${candidate?.option || tradeDirection} | Relative score ${candidate?.score ?? currentTarget.score}/94. No order sent: execution remains gated pending independent calibration and payout validation.`)
@@ -282,12 +273,10 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const liveCheck = validateLiveOpportunity(signal, marketSnapshot, { now: Date.now(), maxSignalAgeMs: 1500 })
         if (!liveCheck.valid) {
           addLog(`Entry rejected after quote: ${liveCheck.reason} No purchase sent; returning to live ranking.`)
-          recoveryQueue = []
-          recoveryIndex = 0
           continue
         }
         const entryCheck = validateEntryWindow(signal, { maxSignalAgeMs: 1500, proposalBudgetMs: 300, minimumRemainingMs: 250 })
-        if (!entryCheck.valid) { addLog(`Entry expired before purchase: ${entryCheck.reason}`); recoveryQueue = []; continue }
+        if (!entryCheck.valid) { addLog(`Entry expired before purchase: ${entryCheck.reason}`); continue }
         addLog(`Execution checks passed in ${Math.round(performance.now() - executionStartedAt)}ms; live price drift ${liveCheck.drift.toPrecision(4)}.`)
         const buyRes = await wsRequest({ buy: proposalRes.proposal.id, price: proposalRes.proposal.ask_price })
         if (!isRunningRef.current) break
@@ -300,18 +289,17 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         totalTradesRef.current += 1; sessionPLRef.current += profit
         
         if (isWin) {
-          winsRef.current += 1; currentStakeRef.current = parseFloat(stake); recoveryIndex = 0
+          winsRef.current += 1; currentStakeRef.current = parseFloat(stake)
           consecutiveLossesRef.current = 0
     lastResearchNoticeRef.current = ''
           setCurrentStake(currentStakeRef.current)
           addLog(`✅ WON +$${profit.toFixed(2)} | Stake reset to base`)
         } else {
           lossesRef.current += 1; consecutiveLossesRef.current++
-          recoveryIndex++
           currentStakeRef.current = boundedNextStake(stake, currentStakeRef.current, martingaleFactor, consecutiveLossesRef.current)
           setCurrentStake(currentStakeRef.current)
           if (consecutiveLossesRef.current >= 2) addLog(`⚠️ ${consecutiveLossesRef.current} consecutive losses - continuing bounded recovery and rotating market`)
-          addLog(`❌ LOST -$${profit.toFixed(2)} | Rotating to next market → Next: $${currentStakeRef.current.toFixed(2)}`)
+          addLog(`❌ LOST -$${profit.toFixed(2)} | Re-ranking fresh opportunities → Next: $${currentStakeRef.current.toFixed(2)}`)
         }
         
         setTotalTrades(totalTradesRef.current); setWins(winsRef.current); setLosses(lossesRef.current); setCurrentPL(sessionPLRef.current)
@@ -329,7 +317,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     currentStakeRef.current = parseFloat(stake); historyLoadedRef.current = false; hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0
     consecutiveLossesRef.current = 0
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); setLogs([])
-    addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets | Hard Gates)'); addLog(`Type: ${tradeType} | Stake: $${stake} | Martingale: ${martingaleFactor}x`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); runTradeCycle()
+    addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets | Full Strategy Universe | Hard Gates)'); addLog(`Type: ${tradeType} | Stake: $${stake} | Martingale: ${martingaleFactor}x`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); runTradeCycle()
   }
 
   const stopBot = () => { isRunningRef.current = false; setIsRunning(false); addLog('⏹️ Stopped new entries; any open contract remains monitored until settlement.') }
