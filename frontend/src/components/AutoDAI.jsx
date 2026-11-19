@@ -31,7 +31,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   const martingaleFactor = 1.5
   const [isRunning, setIsRunning] = useState(false)
   const [validationError, setValidationError] = useState('')
-  const [logs, setLogs] = useState(['AI Core initialized.'])
+  const [logs, setLogs] = useState(() => { try { return JSON.parse(localStorage.getItem('mwathe:autod-ai-logs:v1') || 'null') || ['AI Core initialized.'] } catch { return ['AI Core initialized.'] } })
   const [currentPL, setCurrentPL] = useState(0.00)
   const [totalTrades, setTotalTrades] = useState(0)
   const [wins, setWins] = useState(0)
@@ -42,6 +42,9 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   const [currentContract, setCurrentContract] = useState(null)
 
   const logRef = useRef(null)
+  const shouldAutoScrollRef = useRef(true)
+  const accountCurrencyRef = useRef('USD')
+  const marketCooldownUntilRef = useRef({})
   const nextTradeTimer = useRef(null)
   const isRunningRef = useRef(false)
   const wsRef = useRef(null)
@@ -54,8 +57,9 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
   configRef.current = {stake,targetProfit,stopLoss,selectedMarket,tradeType,subTradeType,option,predictedDigit,timeframeUnit,durationValue}
 
 
-  const addLog = (msg) => setLogs(prev => [...prev.slice(-20), `[${new Date().toLocaleTimeString()}] ${msg}`])
-  useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight }, [logs])
+  const addLog = (msg) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`].slice(-2000))
+  useEffect(() => { try { localStorage.setItem('mwathe:autod-ai-logs:v1', JSON.stringify(logs)) } catch {} }, [logs])
+  useEffect(() => { if (logRef.current && shouldAutoScrollRef.current) logRef.current.scrollTop = logRef.current.scrollHeight }, [logs])
   useEffect(() => { if (SUB_TRADE_TYPES[tradeType]?.length > 0) setSubTradeType(SUB_TRADE_TYPES[tradeType][0]); else setSubTradeType('') }, [tradeType])
   useEffect(() => { if (subTradeType && OPTIONS[subTradeType]) setOption(OPTIONS[subTradeType][0]) }, [subTradeType])
   useEffect(() => { const rules = TIMEFRAME_RULES[tradeType]; setTimeframeUnit(rules.defaultUnit); setDurationValue(rules.min) }, [tradeType])
@@ -77,6 +81,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
         websocket.onmessage = (message) => {
           try {
             const msg = JSON.parse(message.data)
+            if (msg.msg_type === 'balance' && msg.balance?.currency) accountCurrencyRef.current = msg.balance.currency
             if (msg.msg_type === 'balance' && onBalanceUpdate) onBalanceUpdate(parseFloat(msg.balance.balance))
             if (msg.msg_type === 'history' && msg.history?.prices) { const symbol = msg.echo_req?.ticks_history || msg.history.symbol; if (symbol) tickHistoryRef.current[symbol] = msg.history.prices.map(Number).filter(Number.isFinite).slice(-500) }
             if (msg.msg_type === 'tick' && msg.tick?.quote !== undefined) { const symbol = msg.tick.symbol; const current = tickHistoryRef.current[symbol] || []; tickHistoryRef.current[symbol] = [...current, Number(msg.tick.quote)].slice(-500) }
@@ -114,13 +119,14 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     const socket = wsRef.current
     const config = configRef.current
     if (!socket || socket.readyState !== WebSocket.OPEN || !isRunningRef.current) return
-    const candidates = MARKET_SYMBOLS.filter(symbol => (contractUnavailableUntilRef.current[symbol] || 0) <= Date.now()).map(symbol => {
+    const requiredScore = sessionRef.current.lossStreak >= 3 ? 6.5 : sessionRef.current.lossStreak >= 2 ? 5 : sessionRef.current.lossStreak === 1 ? 4.5 : 3
+    const candidates = MARKET_SYMBOLS.filter(symbol => (contractUnavailableUntilRef.current[symbol] || 0) <= Date.now() && (marketCooldownUntilRef.current[symbol] || 0) <= Date.now()).map(symbol => {
       const series = tickHistoryRef.current[symbol] || []
       if (series.length < 40) return null
       const sample = series.slice(-20), moves = sample.slice(1).map((v,i)=>v-sample[i]), driftValue = series.at(-1)-series.at(-16)
       const volatility = moves.reduce((sum,v)=>sum+Math.abs(v),0)/(moves.length||1)
       return volatility>0 ? {symbol,ticks:series,drift:driftValue,atr:volatility,score:config.tradeType==='Accumulators'?Math.abs(series.at(-1))/(volatility||1):Math.abs(driftValue)/volatility} : null
-    }).filter(item=>item && item.score>=(config.tradeType==='Accumulators'?50:3)).sort((a,b)=>b.score-a.score)
+    }).filter(item=>item && item.score>=(config.tradeType==='Accumulators'?50:requiredScore)).sort((a,b)=>b.score-a.score)
     if (!candidates.length) { addLog('⏳ Scanning live markets; no eligible setup yet.'); nextTradeTimer.current=setTimeout(()=>executeTrade(),500); return }
     const best = candidates[0]
     const ticks = best.ticks, atr = best.atr, drift = best.drift, symbol = best.symbol
@@ -162,11 +168,11 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
       : (config.tradeType==='Touch & No Touch'||config.subTradeType==='Higher/Lower') ? ((config.tradeType==='Touch & No Touch'?direction==='down':isDown)?'-':'+')+Math.max(atr*(config.tradeType==='Touch & No Touch'?3:2),Math.abs(ticks.at(-1))*0.0001).toFixed(4) : ''
     try {
       const signal = {symbol,tradeType:config.tradeType,subTradeType:config.subTradeType,option:selectedOption,predictedDigit:target,barrier,duration:config.durationValue,timeframeUnit:config.timeframeUnit,createdAt:Date.now(),expiryEpoch:Math.floor(Date.now()/1000)+Math.max(60,config.durationValue*(config.timeframeUnit==='Hours'?3600:config.timeframeUnit==='Days'?86400:config.timeframeUnit==='Minutes'?60:1)),growthRate:0.01,multiplier:100,takeProfit:1,contractStopLoss:1}
-      const proposal = buildProposal(signal,sessionRef.current.stake)
+      const proposal = buildProposal(signal,sessionRef.current.stake,accountCurrencyRef.current)
       const reqId = Date.now()
       pendingProposalRef.current = {proposal,reqId}; pendingEntryRef.current = signal
       addLog(`🔎 Live setup ${selectedOption}; validating ${proposal.contract_type} with Deriv.`)
-      socket.send(JSON.stringify({contracts_for:symbol,currency:'USD',req_id:reqId}))
+      socket.send(JSON.stringify({contracts_for:symbol,req_id:reqId}))
     } catch (error) { addLog(`⛔ ${error.message}`); nextTradeTimer.current = setTimeout(() => executeTrade(), 3000) }
   }
 
@@ -174,28 +180,31 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
     const session = sessionRef.current
     const config = configRef.current
     session.totalTrades += 1
-    const performance = recordContractOutcome(pendingEntryRef.current || {}, { profit, stake: session.stake, contractId: currentContract?.id, bot: 'AutoD AI' })
-    if (performance) addLog(`Thamira history: ${performance.trades} settled for this exact setup; win rate ${performance.winRate === null ? 'n/a' : (performance.winRate * 100).toFixed(1) + '%'}.`)
+    const outcomeStats = recordContractOutcome(pendingEntryRef.current || {}, { profit, stake: session.stake, contractId: currentContract?.id, bot: 'AutoD AI' })
+    if (outcomeStats) addLog(`Thamira history: ${outcomeStats.trades} settled for this exact setup; win rate ${outcomeStats.winRate === null ? 'n/a' : (outcomeStats.winRate * 100).toFixed(1) + '%'}.`)
     pendingEntryRef.current = null
     if (profit > 0) {
       session.wins += 1; session.lossStreak = 0; session.stake = parseFloat(config.stake) || 0.35
       addLog(`✅ AI WON +$${profit.toFixed(2)}`)
     } else {
       session.losses += 1; session.lossStreak += 1
-      session.stake = boundedNextStake(config.stake,session.stake,martingaleFactor,session.lossStreak)
-      addLog(`❌ AI LOST -$${profit.toFixed(2)} | Bounded stake $${session.stake.toFixed(2)}`)
+      session.stake = parseFloat(config.stake) || 0.35
+      const lostSymbol = pendingEntryRef.current?.symbol
+      if (lostSymbol) marketCooldownUntilRef.current[lostSymbol] = Date.now() + (session.lossStreak >= 2 ? 120000 : 60000)
+      addLog(`❌ AI LOST -${profit.toFixed(2)} | Base stake retained; no martingale escalation.`)
+      if (session.lossStreak >= 2) addLog(`🛡️ Loss recovery: next setup requires scan score ${session.lossStreak >= 3 ? 6.5 : 5.0}+ and the losing market is cooling down.`)
     }
     session.pl += profit
     setTotalTrades(session.totalTrades);setWins(session.wins);setLosses(session.losses);setConsecutiveLosses(session.lossStreak);setCurrentStake(session.stake);setCurrentPL(session.pl)
     if (session.pl >= parseFloat(config.targetProfit)) { addLog(`🎯 Target hit! $${session.pl.toFixed(2)}`); setIsRunning(false); isRunningRef.current=false; return }
     if (session.pl <= -parseFloat(config.stopLoss)) { addLog(`🛑 Stop loss $${session.pl.toFixed(2)}`); setIsRunning(false); isRunningRef.current=false; return }
-    if (session.lossStreak >= 2) addLog('⚠️ Loss streak: entering bounded recovery assessment. Continuing within the 3x stake cap and session stop-loss.')
-    if (isRunningRef.current) { addLog(`P/L: $${session.pl.toFixed(2)} | Trades: ${session.totalTrades}`); nextTradeTimer.current=setTimeout(()=>executeTrade(),500) }
+    if (session.lossStreak >= 4) { addLog('🛑 Four consecutive losses: AutoD AI safety stop. Review the session before restarting.'); setIsRunning(false); isRunningRef.current=false; return }
+    if (isRunningRef.current) { const cooldownMs = session.lossStreak >= 3 ? 90000 : session.lossStreak >= 2 ? 45000 : session.lossStreak === 1 ? 15000 : 5000; addLog(`P/L: ${session.pl.toFixed(2)} | Trades: ${session.totalTrades}`); addLog(`🧊 Waiting ${Math.round(cooldownMs/1000)}s before next independent scan.`); nextTradeTimer.current=setTimeout(()=>executeTrade(),cooldownMs) }
   }
 
-  const startBot = () => { setValidationError(''); if (!ws || ws.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }; if (nextTradeTimer.current) clearTimeout(nextTradeTimer.current); setIsRunning(true); isRunningRef.current = true; setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConsecutiveLosses(0); sessionRef.current={totalTrades:0,wins:0,losses:0,lossStreak:0,stake:parseFloat(stake),pl:0}; setLogs([]); addLog(` AutoD AI Started`); addLog('Market: autonomous scan across volatility indices'); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); tickHistoryRef.current={}; MARKET_SYMBOLS.forEach((symbol,index)=>ws.send(JSON.stringify({ ticks_history: symbol, count: 200, end: 'latest', style: 'ticks', subscribe: 1, req_id: Date.now()+index }))); nextTradeTimer.current = setTimeout(() => { if (isRunningRef.current) executeTrade() }, 3000) }
+  const startBot = () => { setValidationError(''); if (!ws || ws.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }; if (nextTradeTimer.current) clearTimeout(nextTradeTimer.current); setIsRunning(true); isRunningRef.current = true; setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConsecutiveLosses(0); marketCooldownUntilRef.current={}; sessionRef.current={totalTrades:0,wins:0,losses:0,lossStreak:0,stake:parseFloat(stake),pl:0}; shouldAutoScrollRef.current=true; addLog(` AutoD AI Started`); addLog('Market: autonomous scan across volatility indices'); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); tickHistoryRef.current={}; MARKET_SYMBOLS.forEach((symbol,index)=>ws.send(JSON.stringify({ ticks_history: symbol, count: 200, end: 'latest', style: 'ticks', subscribe: 1, req_id: Date.now()+index }))); nextTradeTimer.current = setTimeout(() => { if (isRunningRef.current) executeTrade() }, 3000) }
   const stopBot = () => { setIsRunning(false); isRunningRef.current = false; if (nextTradeTimer.current) { clearTimeout(nextTradeTimer.current); nextTradeTimer.current = null }; addLog(`⏹️ AI stopped new entries; any open contract remains monitored until settlement.`) }
-  const resetBot = () => { if (isRunningRef.current) return; setLogs([]); setValidationError('') }
+  const resetBot = () => { if (isRunningRef.current) return; setLogs([]); try { localStorage.removeItem('mwathe:autod-ai-logs:v1') } catch {}; shouldAutoScrollRef.current=true; setValidationError('') }
   const rules = TIMEFRAME_RULES[tradeType]; const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
   if (!isAuthenticated) {
     return (
@@ -228,7 +237,7 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
       </div>
       <div className="bg-gray-900 rounded-lg p-2 border border-green-500/30 mb-2 flex-shrink-0"><h3 className="text-white font-bold text-xs mb-1 flex items-center gap-1"><TrendingUp size={12} className="text-green-500" /> Performance</h3><div className="grid grid-cols-4 gap-1 text-center"><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">P/L</p><p className={`font-bold text-xs ${currentPL >= 0 ? 'text-green-500' : 'text-red-500'}`}>{currentPL >= 0 ? '+' : ''}{currentPL.toFixed(2)}</p></div><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Win Rate</p><p className="text-sky-400 font-bold text-xs">{winRate}%</p></div><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Trades</p><p className="text-white font-bold text-xs">{totalTrades}</p></div><div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Next</p><p className="text-orange-400 font-bold text-xs">{currentStake.toFixed(2)}</p></div></div></div>
       <div className="grid grid-cols-3 gap-2 flex-shrink-0 mb-2"><button onClick={startBot} disabled={isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${isRunning ? 'bg-gray-800 text-gray-500' : 'bg-green-500 text-black'}`}><Play size={14} /> Run</button><button onClick={stopBot} disabled={!isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${!isRunning ? 'bg-gray-800 text-gray-500' : 'bg-red-500 text-white'}`}><Square size={14} /> Stop</button><button onClick={resetBot} disabled={isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${isRunning?'bg-gray-900 text-gray-600':'bg-gray-800 border border-gray-700 text-orange-400'}`}><RefreshCw size={14} /> Reset</button></div>
-      <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col"><div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">AI LOG</span></div><div ref={logRef} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5">{logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') ? 'text-red-500' : log.includes('🤖') || log.includes('🚀') ? 'text-sky-400' : 'text-gray-400'}>{log}</p>)}</div></div>
+      <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col"><div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">AI LOG</span></div><div ref={logRef} onScroll={() => { const el=logRef.current; if(el) shouldAutoScrollRef.current=el.scrollHeight-el.scrollTop-el.clientHeight<60 }} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5">{logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') ? 'text-red-500' : log.includes('🤖') || log.includes('🚀') ? 'text-sky-400' : 'text-gray-400'}>{log}</p>)}</div></div>
     </div>
   )
 }
