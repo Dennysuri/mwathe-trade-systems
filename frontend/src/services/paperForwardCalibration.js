@@ -95,7 +95,7 @@ export function getPaperForwardSummary(signal = null) {
   return { trades, wins, losses: trades - wins, winRate: trades ? wins / trades : null,
     lowerBound, maxBreakEvenRate, safetyMargin: SAFETY_MARGIN, minTrades: MIN_CALIBRATION_TRADES,
     calibrated, pending: signal ? [...pending.values()].filter(item => item.key === paperProfile(signal)).length : pending.size,
-    targetWinRate: 0.8, targetWinRateMet: trades >= 20 && wins / trades >= 0.8,
+    targetWinRate: 0.8, targetWinRateMet: trades >= 100 && wins / trades >= 0.8,
     note: 'Quote-matched forward paper outcomes. Calibration is local to this browser; the lower confidence bound must beat the worst observed quote break-even rate plus margin.' };
 }
 export function resetPaperTrials() { pending.clear(); }
