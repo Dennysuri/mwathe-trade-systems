@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Activity, Lock } from 'lucide-react'
 import { buildProposal, MARKET_SYMBOLS, VOLATILITY_MARKETS } from '../services/tradingCore'
-import { validateEntryWindow } from '../services/strategyIntelligence'
+import { evaluateStrategyEnsemble, validateEntryWindow } from '../services/strategyIntelligence'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
 
 const VOLATILITY_INDICES = ['Volatility 10 (1s) Index', 'Volatility 10 Index', 'Volatility 15 (1s) Index', 'Volatility 25 (1s) Index', 'Volatility 25 Index', 'Volatility 30 (1s) Index', 'Volatility 50 (1s) Index', 'Volatility 50 Index', 'Volatility 75 (1s) Index', 'Volatility 75 Index', 'Volatility 90 (1s) Index', 'Volatility 100 (1s) Index', 'Volatility 100 Index']
@@ -132,43 +132,40 @@ export default function AutoDAI({ token, accountId, onBalanceUpdate }) {
       return
     }
     const requiredScore = performanceRecoveryUntilRef.current > now ? 6.5 : sessionRef.current.lossStreak >= 3 ? 6.5 : sessionRef.current.lossStreak >= 2 ? 5 : sessionRef.current.lossStreak === 1 ? 4.5 : 3
-    const candidates = MARKET_SYMBOLS.filter(symbol => (contractUnavailableUntilRef.current[symbol] || 0) <= Date.now() && (marketCooldownUntilRef.current[symbol] || 0) <= Date.now()).map(symbol => {
-      const series = tickHistoryRef.current[symbol] || []
-      if (series.length < 40) return null
-      const sample = series.slice(-20), moves = sample.slice(1).map((v,i)=>v-sample[i]), driftValue = series.at(-1)-series.at(-16)
-      const volatility = moves.reduce((sum,v)=>sum+Math.abs(v),0)/(moves.length||1)
-      return volatility>0 ? {symbol,ticks:series,drift:driftValue,atr:volatility,score:config.tradeType==='Accumulators'?Math.abs(series.at(-1))/(volatility||1):Math.abs(driftValue)/volatility} : null
-    }).filter(item=>item && item.score>=(config.tradeType==='Accumulators'?50:requiredScore)).sort((a,b)=>b.score-a.score)
-    if (!candidates.length) { addLog('⏳ Scanning live markets; no eligible setup yet.'); nextTradeTimer.current=setTimeout(()=>executeTrade(),500); return }
+    // Thamira evaluates the same contract-specific strategy ensemble on every
+    // live market. Historical ticks seed the model; current subscribed ticks keep
+    // each market window fresh. Relative scores rank markets, not win probabilities.
+    const candidates = (await Promise.all(MARKET_SYMBOLS
+      .filter(symbol => (contractUnavailableUntilRef.current[symbol] || 0) <= now
+        && (marketCooldownUntilRef.current[symbol] || 0) <= now)
+      .map(async symbol => {
+        const ticks = tickHistoryRef.current[symbol] || []
+        const report = await evaluateStrategyEnsemble(ticks, {
+          tradeType: config.tradeType, subTradeType: config.subTradeType,
+          option: config.option, predictedDigit: Number(config.predictedDigit),
+          duration: config.durationValue, timeframeUnit: config.timeframeUnit, symbol
+        })
+        if (!report.candidate) return null
+        const prices = ticks.slice(-21)
+        const moves = prices.slice(1).map((value, index) => value - prices[index])
+        const atr = moves.reduce((sum, value) => sum + Math.abs(value), 0) / Math.max(1, moves.length)
+        return { symbol, ticks, atr, drift: ticks.at(-1) - ticks.at(-16), score: report.candidate.score,
+          report, option: report.candidate.option }
+      }))).filter(Boolean).sort((a,b) => b.score - a.score)
+
+    if (!candidates.length) {
+      addLog('Thamira is comparing all live markets; no candidate has yet passed the strategy evidence gate.')
+      nextTradeTimer.current=setTimeout(()=>executeTrade(),1000)
+      return
+    }
     const best = candidates[0]
     const ticks = best.ticks, atr = best.atr, drift = best.drift, symbol = best.symbol
     const marketLabel = MARKET_LABEL_BY_SYMBOL[symbol] || symbol
     setSelectedMarket(marketLabel)
-    addLog(`Market selected automatically: ${marketLabel} (${symbol}); scan score ${best.score.toFixed(2)}.`)
-    const direction = drift > 0 ? 'up' : 'down'
-    let selectedOption = config.option
-    if (selectedOption === 'Both') {
-      selectedOption = config.tradeType === 'Vanillas' ? (direction==='up'?'Call':'Put')
-        : config.tradeType === 'Touch & No Touch' ? 'Touch'
-        : config.tradeType === 'Multipliers' || config.tradeType === 'Turbos' ? (direction==='up'?'Up':'Down')
-        : config.subTradeType === 'Higher/Lower' ? (direction==='up'?'Higher':'Lower')
-        : config.tradeType === 'Digits' ? (config.subTradeType === 'Over/Under' ? (direction==='up'?'Over':'Under') : config.subTradeType === 'Matches/Differs' ? 'Differs' : (getQuoteDigit(ticks.at(-1))%2===0?'Even':'Odd'))
-        : config.subTradeType === 'Even/Odd' ? 'Even' : config.subTradeType === 'Matches/Differs' ? 'Differs'
-        : direction==='up'?'Rise':'Fall'
-    }
+    addLog(`Thamira selected ${marketLabel} (${symbol}); best relative setup score ${best.score}/94; families: ${best.report.candidate.supportingFamilies.join(', ')}.`)
+    const direction = drift > 0 ? 'up' : drift < 0 ? 'down' : 'flat'
+    let selectedOption = config.option === 'Both' ? best.option : config.option
     const target = config.subTradeType === 'Over/Under' ? Math.max(1, Math.min(8, Number(config.predictedDigit) || 5)) : Math.max(0, Math.min(9, Number(config.predictedDigit) || 0))
-    if (config.tradeType === 'Digits') {
-      const digits = ticks.slice(-120).map(getQuoteDigit), previous = digits.at(-1)
-      const transitions = digits.slice(0,-1).reduce((out,d,i)=>{if(d===previous)out.push(digits[i+1]);return out},[])
-      if (transitions.length < 10) { addLog('Insufficient conditional digit history; no trade.'); nextTradeTimer.current=setTimeout(()=>executeTrade(),500); return }
-      const rate = predicate => (transitions.filter(predicate).length+1)/(transitions.length+2)
-      const candidates = config.subTradeType==='Over/Under'?[{name:'Over',p:rate(d=>d>target),base:(9-target)/10},{name:'Under',p:rate(d=>d<target),base:target/10}]
-        :config.subTradeType==='Matches/Differs'?[{name:'Matches',p:rate(d=>d===target),base:0.1},{name:'Differs',p:rate(d=>d!==target),base:0.9}]
-        :[{name:'Even',p:rate(d=>d%2===0),base:0.5},{name:'Odd',p:rate(d=>d%2===1),base:0.5}]
-      const chosen=config.option==='Both'?candidates.sort((a,b)=>(b.p-b.base)-(a.p-a.base))[0]:candidates.find(item=>item.name===selectedOption)
-      if(!chosen || chosen.p-chosen.base<0.04){addLog('Digit edge did not exceed the minimum threshold; no trade.');nextTradeTimer.current=setTimeout(()=>executeTrade(),500);return}
-      selectedOption=chosen.name
-    }
     const isDown = ['Fall','Lower','Down','Put','No Touch','Under','Odd','Differs'].includes(selectedOption)
     if (config.tradeType !== 'Digits' && config.tradeType !== 'Accumulators' && config.tradeType !== 'Touch & No Touch' && ((direction==='up' && isDown) || (direction==='down' && !isDown))) {
       addLog('Selected direction conflicts with current tick trend; no trade sent.')
