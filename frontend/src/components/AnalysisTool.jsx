@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { Brain, Activity, Zap, Play, Square, Cpu, CheckCircle2 } from 'lucide-react'
 import { MARKET_SYMBOLS, VOLATILITY_MARKETS, buildProposal } from '../services/tradingCore'
-import { rankLiveMarketOpportunities } from '../services/liveOpportunityEngine'
+import { rankLiveStrategyUniverse, findSelectedStrategyOpportunity } from '../services/strategyUniverse'
 import { beginPaperTrial, advancePaperTrials, getPaperForwardSummary } from '../services/paperForwardCalibration'
 import { createMarketWindow, seedMarketWindow, appendLiveTick, isLiveReady } from '../services/liveMarketWindow'
 
@@ -177,17 +177,19 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
       if(scanInFlightRef.current)return
       scanInFlightRef.current=true
       try{
-        const ranked=await rankLiveMarketOpportunities(MARKET_SYMBOLS.map(symbol=>({
+        const ranked=await rankLiveStrategyUniverse(MARKET_SYMBOLS.map(symbol=>({
           symbol, name:VOLATILITY_MARKETS.find(([,marketSymbol])=>marketSymbol===symbol)?.[0]||symbol,
           prices:windowsRef.current[symbol]?.values||[],
           lastLiveAt:windowsRef.current[symbol]?.lastLiveAt||0,
           liveTicks:windowsRef.current[symbol]?.liveTicks||0
         })),config,{now,maxAgeMs:5000,minLiveTicks:1})
         const best=ranked[0]
+        const selectedBest=findSelectedStrategyOpportunity(ranked,config)
         if(best){
-          setFinalSignal({researchOnly:true,market:best.marketName,option:best.signal.option,entryPoint:best.signal.entryPoint,contractDuration:best.signal.contractTimeframe,sampleSize:best.report.sampleSize,marketCount:ranked.length,score:best.score,detail:'Market, contract direction, entry point and timeframe are ranked together from the same fresh live window. Score is relative setup strength, not a verified win probability.'})
-          if(activeRef.current)publishCandidate(best,config)
+          const marketCount=new Set(ranked.map(item=>item.symbol)).size
+          setFinalSignal({researchOnly:true,market:best.marketName,tradeType:best.profile.tradeType,subTradeType:best.profile.subTradeType,option:best.signal.option,entryPoint:best.signal.entryPoint,contractDuration:best.signal.contractTimeframe,sampleSize:best.report.sampleSize,marketCount,score:best.score,detail:`Best research candidate across ${best.profile.tradeType} / ${best.profile.subTradeType || 'default'} and all supported profiles. Relative setup score only; not a calibrated win probability. Live execution remains restricted to the selected parameters and existing safety gates.`})
         }
+        if(activeRef.current&&selectedBest)publishCandidate(selectedBest,config)
         if(activeRef.current){
           const elapsed=now-cycleStartedAtRef.current,cycleMs=config.analysisDuration*1000
           setProgress(Math.min(99,elapsed/cycleMs*100))
@@ -228,7 +230,7 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
       {tradeType==='Digits'&&<div><label className="text-[10px] text-mwathe-gray uppercase font-bold">Target Digit (0-9)</label><input type="number" min="0" max="9" value={predictedDigit} onChange={e=>setPredictedDigit(e.target.value)} disabled={isAnalyzing} className="w-full bg-mwathe-black border border-gray-700 rounded-lg px-2 py-2 text-xs mt-1"/></div>}
     </div>
     {(isAnalyzing||progress>=100)&&<div className="rounded-xl p-3 border bg-mwathe-darkgray/50 border-mwathe-skyblue/30"><div className="flex items-center justify-between mb-2"><h3 className="text-xs font-bold flex items-center gap-1 text-mwathe-skyblue">{progress>=100?<><CheckCircle2 size={12}/> Scan complete</>:<><Activity size={12} className="animate-pulse"/> Scanning live markets...</>}</h3><span className="text-[10px] font-bold">{Math.round(progress)}%</span></div><div className="w-full bg-gray-800 h-2 rounded-full overflow-hidden"><motion.div className="h-full bg-gradient-to-r from-mwathe-orange to-mwathe-green" initial={{width:0}} animate={{width:`${progress}%`}}/></div></div>}
-    {finalSignal&&<div className="rounded-xl p-3 border border-amber-500/40 bg-amber-500/10"><p className="font-bold text-sm">{finalSignal.market}</p><p className="text-xs text-mwathe-gray">{finalSignal.marketCount} candidate markets · {finalSignal.sampleSize} observations · Entry: {finalSignal.entryPoint??'—'} · Contract: {finalSignal.contractDuration}{finalSignal.score ? ` · Thamira score ${finalSignal.score}/94` : ''}</p><p className="text-[10px] text-amber-300 mt-1">{finalSignal.detail}</p></div>}
+    {finalSignal&&<div className="rounded-xl p-3 border border-amber-500/40 bg-amber-500/10"><p className="font-bold text-sm">{finalSignal.market}</p><p className="text-xs text-mwathe-gray">{finalSignal.marketCount} live markets · {finalSignal.tradeType}{finalSignal.subTradeType ? ' / '+finalSignal.subTradeType : ''} · {finalSignal.sampleSize} observations · Entry: {finalSignal.entryPoint??'—'} · Contract: {finalSignal.contractDuration}{finalSignal.score ? ` · Thamira score ${finalSignal.score}/94` : ''}</p><p className="text-[10px] text-amber-300 mt-1">{finalSignal.detail}</p></div>}
     <div className="bg-black rounded-xl border border-gray-800 overflow-hidden h-32 flex flex-col"><div className="bg-mwathe-darkgray px-3 py-1.5 flex items-center gap-2 border-b border-gray-800"><Zap size={12} className="text-mwathe-orange"/><span className="text-[10px] text-mwathe-orange font-bold">SYSTEM LOG</span></div><div className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5">{aiLogs.length===0?<p className="text-gray-600">Waiting for live analysis...</p>:aiLogs.map((log,i)=><p key={i} className="text-mwathe-skyblue">{log}</p>)}</div></div>
     <div className="grid grid-cols-3 gap-2 pt-2"><button onClick={handleStart} disabled={isAnalyzing} className={`py-3 rounded-xl font-bold flex items-center justify-center gap-2 ${isAnalyzing?'bg-gray-800 text-gray-500':'bg-mwathe-green text-black'}`}><Play size={16}/> Start</button><button onClick={handleStop} disabled={!isAnalyzing} className={`py-3 rounded-xl font-bold flex items-center justify-center gap-2 ${!isAnalyzing?'bg-gray-800 text-gray-500':'bg-red-500 text-white'}`}><Square size={16}/> Stop</button><button onClick={handleReset} disabled={isAnalyzing} className={`py-3 rounded-xl font-bold flex items-center justify-center gap-2 ${isAnalyzing?'bg-gray-800 text-gray-500':'bg-gray-700 text-white'}`}><Activity size={16}/> Reset</button></div>
   </div>
