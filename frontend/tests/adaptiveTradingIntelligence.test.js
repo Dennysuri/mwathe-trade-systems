@@ -42,6 +42,8 @@ test('account guard respects target, stop loss and remaining loss allowance', ()
   assert.equal(evaluateAccountRisk({ sessionPL: -20, targetProfit: 10, stopLoss: 20, nextStake: 1 }).stopHit, true);
   assert.equal(evaluateAccountRisk({ sessionPL: -9, targetProfit: 10, stopLoss: 10, nextStake: 2 }).insufficientLossRoom, true);
   assert.equal(evaluateAccountRisk({ balance: 100, sessionPL: -2, targetProfit: 10, stopLoss: 10, nextStake: 1 }).allowEntry, true);
+  assert.equal(evaluateAccountRisk({ sessionPL: 0, targetProfit: 10, stopLoss: 10, nextStake: 1 }).balanceUnavailable, true);
+  assert.equal(evaluateAccountRisk({ balance: 0.5, sessionPL: 0, targetProfit: 10, stopLoss: 10, nextStake: 1 }).insufficientBalance, true);
 });
 
 test('contract difficulty differentiates Over 1 from Over 7 and parity', () => {
