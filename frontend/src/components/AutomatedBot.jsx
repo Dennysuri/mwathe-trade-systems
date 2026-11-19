@@ -33,6 +33,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const [validationError, setValidationError] = useState('')
   const [logs, setLogs] = useState(() => { try { return JSON.parse(localStorage.getItem('mwathe:automated-bot-logs:v1') || 'null') || ['System initialized.'] } catch { return ['System initialized.'] } })
   const [currentPL, setCurrentPL] = useState(0.00)
+  const [accountBalance, setAccountBalance] = useState(null)
   const [totalTrades, setTotalTrades] = useState(0)
   const [wins, setWins] = useState(0)
   const [losses, setLosses] = useState(0)
@@ -119,7 +120,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
                 pendingLiveTicksRef.current[symbol] = appendTickBuffer(pendingLiveTicksRef.current[symbol], msg.tick.quote)
               }
             }
-            if (msg.msg_type === 'balance' && msg.balance?.balance !== undefined) { accountBalanceRef.current = parseFloat(msg.balance.balance); if (onBalanceUpdate) onBalanceUpdate(accountBalanceRef.current) }
+            if (msg.msg_type === 'balance' && msg.balance?.balance !== undefined) { accountBalanceRef.current = parseFloat(msg.balance.balance); setAccountBalance(accountBalanceRef.current); if (onBalanceUpdate) onBalanceUpdate(accountBalanceRef.current) }
           } catch (e) {}
         }
         ws.onclose = () => {
@@ -427,7 +428,33 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         <h3 className="text-white font-bold text-xs mb-1 flex items-center gap-1"><TrendingUp size={12} className="text-green-500" /> Performance</h3>
         <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Best Market:</span><span className="text-[10px] text-orange-400 font-bold">{bestMarket}</span></div>
         <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Confluence Score:</span><span className={`text-[10px] font-bold ${confluenceScore >= 70 ? 'text-green-400' : 'text-orange-400'}`}>{confluenceScore.toFixed(0)}%</span></div>
-        <div className="grid grid-cols-4 gap-1 text-center mb-1">
+        <div className="mb-1 grid grid-cols-3 gap-1 text-center text-[9px]"><div className="bg-black/50 rounded p-1"><span className="text-gray-400">Account balance</span><p className="text-white font-bold">{accountBalance === null ? 'Waiting…' : '
+          <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">P/L</p><p className={`font-bold text-xs ${currentPL >= 0 ? 'text-green-500' : 'text-red-500'}`}>{currentPL >= 0 ? '+' : ''}{currentPL.toFixed(2)}</p></div>
+          <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Win Rate</p><p className="text-sky-400 font-bold text-xs">{winRate}%</p></div>
+          <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Trades</p><p className="text-white font-bold text-xs">{totalTrades}</p></div>
+          <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Next</p><p className="text-orange-400 font-bold text-xs">{currentStake.toFixed(2)}</p></div>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <div className="bg-green-900/20 border border-green-500/30 rounded p-1 text-center"><p className="text-[9px] text-green-400 uppercase font-bold">Trades Won</p><p className="text-green-400 font-bold text-lg">{wins}</p></div>
+          <div className="bg-red-900/20 border border-red-500/30 rounded p-1 text-center"><p className="text-[9px] text-red-400 uppercase font-bold">Trades Lost</p><p className="text-red-400 font-bold text-lg">{losses}</p></div>
+        </div>
+      </div>
+      <div className="grid grid-cols-3 gap-2 flex-shrink-0 mb-2">
+        <button onClick={startBot} disabled={isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${isRunning ? 'bg-gray-800 text-gray-500' : 'bg-green-500 text-black'}`}><Play size={14} /> Run</button>
+        <button onClick={stopBot} disabled={!isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${!isRunning ? 'bg-gray-800 text-gray-500' : 'bg-red-500 text-white'}`}><Square size={14} /> Stop</button>
+        <button onClick={resetBot} disabled={isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${isRunning?'bg-gray-900 text-gray-600':'bg-gray-800 border border-gray-700 text-orange-400'}`}><RefreshCw size={14} /> Reset</button>
+      </div>
+      <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col">
+        <div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">EXECUTION LOG</span></div>
+        <div ref={logRef} onScroll={() => { const el = logRef.current; if (el) shouldAutoScrollRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60 }} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5" style={{scrollBehavior: 'auto'}}>
+          {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('TARGET') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') || log.includes('Error') || log.includes('STOP') ? 'text-red-500' : log.includes('🚀') || log.includes('') || log.includes('🔬') || log.includes('⏳') || log.includes('') || log.includes('⚠️') ? 'text-sky-400' : log.includes('━━') ? 'text-gray-600' : 'text-gray-400'}>{log}</p>)}
+        </div>
+      </div>
+    </div>
+  )
+}
+ + accountBalance.toFixed(2)}</p></div><div className="bg-black/50 rounded p-1"><span className="text-gray-400">To target</span><p className="text-green-400 font-bold">\${Math.max(0, (parseFloat(targetProfit) || 0) - currentPL).toFixed(2)}</p></div><div className="bg-black/50 rounded p-1"><span className="text-gray-400">Loss allowance</span><p className="text-orange-400 font-bold">\${Math.max(0, (parseFloat(stopLoss) || 0) + currentPL).toFixed(2)}</p></div></div>
+      <div className="grid grid-cols-4 gap-1 text-center mb-1">
           <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">P/L</p><p className={`font-bold text-xs ${currentPL >= 0 ? 'text-green-500' : 'text-red-500'}`}>{currentPL >= 0 ? '+' : ''}{currentPL.toFixed(2)}</p></div>
           <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Win Rate</p><p className="text-sky-400 font-bold text-xs">{winRate}%</p></div>
           <div className="bg-black/50 rounded p-1"><p className="text-[9px] text-gray-400">Trades</p><p className="text-white font-bold text-xs">{totalTrades}</p></div>
