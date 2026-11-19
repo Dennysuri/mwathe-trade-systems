@@ -273,11 +273,10 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const liveCheck = validateLiveOpportunity(signal, marketSnapshot, { now: Date.now(), maxSignalAgeMs: 1500 })
         if (!liveCheck.valid) {
           addLog(`Entry rejected after quote: ${liveCheck.reason} No purchase sent; returning to live ranking.`)
-          recoveryIndex = 0
           continue
         }
         const entryCheck = validateEntryWindow(signal, { maxSignalAgeMs: 1500, proposalBudgetMs: 300, minimumRemainingMs: 250 })
-        if (!entryCheck.valid) { addLog(`Entry expired before purchase: ${entryCheck.reason}`);; continue }
+        if (!entryCheck.valid) { addLog(`Entry expired before purchase: ${entryCheck.reason}`); continue }
         addLog(`Execution checks passed in ${Math.round(performance.now() - executionStartedAt)}ms; live price drift ${liveCheck.drift.toPrecision(4)}.`)
         const buyRes = await wsRequest({ buy: proposalRes.proposal.id, price: proposalRes.proposal.ask_price })
         if (!isRunningRef.current) break
@@ -290,7 +289,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         totalTradesRef.current += 1; sessionPLRef.current += profit
         
         if (isWin) {
-          winsRef.current += 1; currentStakeRef.current = parseFloat(stake); recoveryIndex = 0
+          winsRef.current += 1; currentStakeRef.current = parseFloat(stake)
           consecutiveLossesRef.current = 0
     lastResearchNoticeRef.current = ''
           setCurrentStake(currentStakeRef.current)
