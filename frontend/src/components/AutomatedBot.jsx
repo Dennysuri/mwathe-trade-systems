@@ -5,7 +5,7 @@ import { validateEntryWindow } from '../services/strategyIntelligence'
 import { validateLiveOpportunity } from '../services/liveOpportunityEngine'
 import { rankLiveStrategyUniverse } from '../services/strategyUniverse'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
-import { getStrategyRecoveryState, getTradeDifficulty } from '../services/accountRiskIntelligence'
+import { getStrategyRecoveryState, getTradeDifficulty, evaluateAccountRisk } from '../services/accountRiskIntelligence'
 import { appendTickBuffer, seedTickBuffer } from '../services/marketTickBuffer'
 
 const UNIQUE_MARKETS = VOLATILITY_MARKETS
@@ -46,6 +46,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const hasLoggedScanningRef = useRef(false); const reconnectAttemptsRef = useRef(0)
   const pingIntervalRef = useRef(null)
   const consecutiveLossesRef = useRef(0)
+  const accountBalanceRef = useRef(null)
   const lastResearchNoticeRef = useRef('')
   const marketCooldownUntilRef = useRef({})
   const recentOutcomesRef = useRef([])
@@ -113,7 +114,10 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
                 pendingLiveTicksRef.current[symbol] = appendTickBuffer(pendingLiveTicksRef.current[symbol], msg.tick.quote)
               }
             }
-            if (msg.msg_type === 'balance' && onBalanceUpdate) onBalanceUpdate(parseFloat(msg.balance.balance))
+            if (msg.msg_type === 'balance' && Number.isFinite(Number(msg.balance?.balance))) {
+              accountBalanceRef.current = Number(msg.balance.balance)
+              if (onBalanceUpdate) onBalanceUpdate(accountBalanceRef.current)
+            }
           } catch (e) {}
         }
         ws.onclose = () => {
@@ -280,7 +284,14 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         addLog(`🎯 LOCKED: ${currentTarget.marketName} | Relative score: ${currentTarget.score}/94 | ${tradeDirection}`)
         addLog(`Strategy profile: ${signal.tradeType} / ${signal.subTradeType} / ${signal.option} / ${signal.duration} ${signal.timeframeUnit}; theoretical difficulty: ${difficulty.difficulty}${difficulty.baselineWinRate === null ? '' : ` (${(difficulty.baselineWinRate * 100).toFixed(1)}% uniform-outcome baseline)`}. Settled profile history: ${strategyState.historicalTrades} trades, ${strategyState.historicalWinRate === null ? 'not established' : `${(strategyState.historicalWinRate * 100).toFixed(1)}% wins`}.`)
         addLog('🚀 EXECUTING...')
-        const proposalReq = buildProposal(signal, roundStake(currentStakeRef.current))
+        const nextStake = roundStake(currentStakeRef.current)
+        const accountRisk = evaluateAccountRisk({ balance: accountBalanceRef.current, sessionPL: sessionPLRef.current,
+          targetProfit, stopLoss, nextStake, baseStake: stake })
+        if (accountRisk.targetReached || accountRisk.stopForRisk) {
+          addLog(`🛑 Account risk controller blocked the next entry (${accountRisk.status}). Balance: ${accountRisk.balance === null ? 'awaiting Deriv balance' : accountRisk.balance.toFixed(2)}; session P/L: ${sessionPLRef.current.toFixed(2)}; stop-loss room: ${accountRisk.lossRemaining === null ? 'n/a' : accountRisk.lossRemaining.toFixed(2)}; next stake: ${nextStake.toFixed(2)}.`)
+          setIsRunning(false); isRunningRef.current = false; break
+        }
+        const proposalReq = buildProposal(signal, nextStake)
         const executionStartedAt = performance.now()
         // The proposal request itself validates the exact contract mapping; avoid a
         // separate contracts_for round trip that would add avoidable entry latency.
@@ -334,7 +345,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         setTotalTrades(totalTradesRef.current); setWins(winsRef.current); setLosses(lossesRef.current); setCurrentPL(sessionPLRef.current)
         if (sessionPLRef.current >= parseFloat(targetProfit)) { addLog(`🎯 TARGET HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
         if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog('🛑 STOP LOSS HIT!'); setIsRunning(false); isRunningRef.current = false; break }
-        addLog(`📊 P/L: ${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
+        addLog(`📊 Account: ${accountBalanceRef.current === null ? 'balance pending' : accountBalanceRef.current.toFixed(2)} | Session P/L: ${sessionPLRef.current.toFixed(2)} | Target remaining: ${Math.max(0, parseFloat(targetProfit) - sessionPLRef.current).toFixed(2)} | Stop-loss room: ${Math.max(0, parseFloat(stopLoss) + sessionPLRef.current).toFixed(2)} | Trades: ${totalTradesRef.current}`)
         if (consecutiveLossesRef.current >= 4) {
           addLog('🛑 Four consecutive losses: Automated Bot safety stop. Review the session before restarting.')
           setIsRunning(false); isRunningRef.current = false; break
