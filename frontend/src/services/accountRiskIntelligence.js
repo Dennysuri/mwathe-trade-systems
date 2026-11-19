@@ -83,7 +83,8 @@ export function evaluateAccountRisk({
   balance, equity = balance, sessionPL = 0, targetProfit, stopLoss, nextStake = 0,
   baseStake = nextStake
 } = {}) {
-  const numeric = value => Number.isFinite(Number(value)) ? Number(value) : null;
+  const numeric = value => value === null || value === undefined || value === ''
+    ? null : Number.isFinite(Number(value)) ? Number(value) : null;
   const b = numeric(balance), e = numeric(equity), pl = numeric(sessionPL) ?? 0;
   const target = numeric(targetProfit), lossLimit = numeric(stopLoss), stakeValue = numeric(nextStake) ?? 0;
   const targetRemaining = target === null ? null : Math.max(0, target - pl);
