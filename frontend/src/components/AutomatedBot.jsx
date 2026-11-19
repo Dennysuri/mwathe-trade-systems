@@ -276,10 +276,6 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         if (!accountRisk.allowEntry) { addLog(`🛡️ Account guard: ${accountRisk.message}. New entries stopped.`); isRunningRef.current = false; setIsRunning(false); break }
         const adaptiveStatus = getAdaptiveStrategyStatus(signal)
         if (adaptiveStatus.blocked) { addLog(`🧠 Strategy recovery pause: ${signal.tradeType}/${signal.subTradeType}/${signal.option} has ${adaptiveStatus.consecutiveLosses} consecutive losses across markets.`); await new Promise(r => setTimeout(r, Math.max(500, adaptiveStatus.blockedUntil - Date.now()))); continue }
-        const accountRisk = evaluateAccountRisk({ balance: accountBalanceRef.current, sessionPL: sessionPLRef.current, targetProfit, stopLoss, nextStake: currentStakeRef.current })
-        if (!accountRisk.allowEntry) { addLog(`🛡️ Account guard: ${accountRisk.message}. New entries stopped.`); isRunningRef.current = false; setIsRunning(false); break }
-        const adaptiveStatus = getAdaptiveStrategyStatus(signal)
-        if (adaptiveStatus.blocked) { addLog(`🧠 Strategy recovery pause: ${signal.tradeType}/${signal.subTradeType}/${signal.option} has ${adaptiveStatus.consecutiveLosses} consecutive losses across markets.`); await new Promise(r => setTimeout(r, Math.max(500, adaptiveStatus.blockedUntil - Date.now()))); continue }
         const tradeDirection = signal.option
         lastResearchNoticeRef.current = ''
         setBestMarket(currentTarget.marketName); setConfluenceScore(currentTarget.score)
@@ -310,8 +306,6 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const contractResult = await monitorContract(buyRes.buy.contract_id); if (!contractResult) break
         const profit = parseFloat(contractResult.profit || 0); const isWin = profit > 0
         const outcomeStats = recordContractOutcome(signal, { profit, stake: currentStakeRef.current, contractId: contractResult.contract_id, bot: 'Automated Bot' })
-        const adaptiveStats = recordAdaptiveOutcome(signal, { profit, stake: currentStakeRef.current, bot: 'Automated Bot' })
-        addLog(`🧠 Strategy profile: ${adaptiveStats.consecutiveLosses} consecutive losses across markets; ${adaptiveStats.trades} recent outcomes; win rate ${adaptiveStats.winRate === null ? 'n/a' : (adaptiveStats.winRate * 100).toFixed(1) + '%'} (80% target).`)
         const adaptiveStats = recordAdaptiveOutcome(signal, { profit, stake: currentStakeRef.current, bot: 'Automated Bot' })
         addLog(`🧠 Strategy profile: ${adaptiveStats.consecutiveLosses} consecutive losses across markets; ${adaptiveStats.trades} recent outcomes; win rate ${adaptiveStats.winRate === null ? 'n/a' : (adaptiveStats.winRate * 100).toFixed(1) + '%'} (80% target).`)
         if (outcomeStats) addLog(`Thamira history: ${outcomeStats.trades} settled for this exact setup; win rate ${outcomeStats.winRate === null ? 'n/a' : (outcomeStats.winRate * 100).toFixed(1) + '%'}.`)
