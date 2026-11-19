@@ -58,3 +58,19 @@ test('contract intelligence separates barrier and predicted-digit configurations
   assert.equal(performance.trades, 0);
   assert.equal(performance.sampleSufficient, false);
 });
+
+test('research candidates use the correct option vocabulary for each contract family', async () => {
+  const prices = Array.from({length:300},(_,i)=>100+i*0.01+Math.sin(i)*0.001);
+  const cases = [
+    [{tradeType:'Ups & Downs',subTradeType:'Rise/Fall',option:'Both'}, 'Rise'],
+    [{tradeType:'Ups & Downs',subTradeType:'Higher/Lower',option:'Both'}, 'Higher'],
+    [{tradeType:'Multipliers',subTradeType:'Multipliers',option:'Both'}, 'Up'],
+    [{tradeType:'Turbos',subTradeType:'Turbos',option:'Both'}, 'Up'],
+    [{tradeType:'Vanillas',subTradeType:'Call/Put',option:'Both'}, 'Call'],
+    [{tradeType:'Accumulators',subTradeType:'',option:'Both'}, 'Accumulate']
+  ];
+  for (const [config, expected] of cases) {
+    const result = await evaluateStrategyEnsemble(prices, config);
+    assert.equal(result.watchCandidate?.option, expected, config.tradeType);
+  }
+});
