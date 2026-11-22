@@ -6,8 +6,8 @@ import { evaluateForwardCalibrationGate } from '../services/forwardCalibrationGa
 import { validateLiveOpportunity } from '../services/liveOpportunityEngine'
 import { rankLiveStrategyUniverse } from '../services/strategyUniverse'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
-import { evaluateAccountRisk, getAdaptiveStrategyStatus, getContractDifficulty, recordAdaptiveOutcome } from '../services/adaptiveTradingIntelligence'
-import { advancePaperTrials, beginPaperTrial, getPaperForwardSummary, recordSettledContractOutcome } from '../services/paperForwardCalibration'
+import { evaluateAccountRisk, getAdaptiveStrategyStatus, recordAdaptiveOutcome } from '../services/adaptiveTradingIntelligence'
+import { advancePaperTrials, beginPaperTrial, getPaperForwardSummary, recordSettledContractOutcome, supportsForwardCalibration } from '../services/paperForwardCalibration'
 import { appendTickBuffer, seedTickBuffer } from '../services/marketTickBuffer'
 import { createRecoveryLedger, nextRecoveryStake, recordRecoveryOutcome } from '../services/recoveryAccounting'
 
@@ -387,7 +387,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         }
         // No contract family may bypass its own forward-outcome model.
         // Until a family-specific model is implemented and calibrated, fail closed.
-        if (!(signal.tradeType === 'Digits' && signal.timeframeUnit === 'Ticks')) {
+        if (!supportsForwardCalibration(signal)) {
           const unsupportedKey = `${signal.tradeType}|${signal.subTradeType || ''}|${signal.timeframeUnit}`;
           if (unsupportedNoticeRef.current !== unsupportedKey) {
             addLog(`No validated outcome model for ${signal.tradeType} / ${signal.subTradeType || 'default'} yet; trading this type is paused.`);
