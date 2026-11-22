@@ -125,6 +125,15 @@ export async function rankLiveStrategyUniverse(markets, selectedConfig = {}, opt
   const ranked = groups.flat().sort((a, b) =>
     (b.report?.candidate?.score ?? b.score) - (a.report?.candidate?.score ?? a.score));
   const cycleCompletedAt = Date.now();
+  const marketLeaders = new Map();
+  ranked.forEach(item => {
+    const previous = marketLeaders.get(item.symbol);
+    if (!previous || item.score > previous.score) {
+      marketLeaders.set(item.symbol, { score: item.score, marketName: item.marketName });
+    }
+  });
+  const marketOrder = [...marketLeaders.entries()].sort((a, b) => b[1].score - a[1].score);
+  const marketRanks = new Map(marketOrder.map(([symbol], index) => [symbol, index + 1]));
   const rows = [...diagnostics.values()].map(row => {
     const evaluatedAllProfiles = row.profileEvaluations === profiles.length;
     const feedFresh = Boolean(row.lastLiveAt) && cycleCompletedAt - row.lastLiveAt >= 0
@@ -133,6 +142,7 @@ export async function rankLiveStrategyUniverse(markets, selectedConfig = {}, opt
       && row.liveBufferSize >= (options.minLiveTicks ?? 200);
     return {
       ...row, profileCount: profiles.length, evaluatedAllProfiles, feedFresh, hasRequiredSamples,
+      rank: marketRanks.get(row.symbol) ?? null,
       analysisComplete: evaluatedAllProfiles && feedFresh && hasRequiredSamples,
       cycleStartedAt, cycleCompletedAt, cycleDurationMs: cycleCompletedAt - cycleStartedAt
     };
@@ -143,6 +153,7 @@ export async function rankLiveStrategyUniverse(markets, selectedConfig = {}, opt
     expectedMarkets: (markets || []).length,
     analysedMarkets: rows.filter(row => row.analysisComplete).length,
     profileCount: profiles.length,
+    parallelMarketCount: (markets || []).length,
     totalMarketProfileEvaluations: rows.reduce((sum, row) => sum + row.profileEvaluations, 0),
     rankingCount: ranked.length,
     best: ranked[0] ? { symbol: ranked[0].symbol, marketName: ranked[0].marketName, score: ranked[0].score } : null
