@@ -41,3 +41,21 @@ test('rejects invalid or non-profitable quotes', () => {
   }, { ask_price: 1, payout: 1 });
   assert.equal(result.allowed, false);
 });
+
+test('rejects a profile whose latest 50 outcomes fall below target despite strong lifetime results', () => {
+  const result = evaluateForwardCalibrationGate({
+    trades: 220, winRate: 0.95, recentTrades: 50, recentWinRate: 0.84,
+    lowerBound: 0.90, maxBreakEvenRate: 0.54
+  }, quote);
+  assert.equal(result.allowed, false);
+  assert.match(result.reason, /Recent forward win rate/);
+});
+
+test('requires a complete recent 50-outcome window', () => {
+  const result = evaluateForwardCalibrationGate({
+    trades: 220, winRate: 0.95, recentTrades: 49, recentWinRate: 1,
+    lowerBound: 0.90, maxBreakEvenRate: 0.54
+  }, quote);
+  assert.equal(result.allowed, false);
+  assert.match(result.reason, /most recent 50/);
+});
