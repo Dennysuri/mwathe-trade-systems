@@ -10,13 +10,15 @@ const DEFAULT_MAX_AGE_MS = 5000;
 export async function rankLiveMarketOpportunities(markets, config = {}, {
   now = Date.now(),
   maxAgeMs = DEFAULT_MAX_AGE_MS,
-  minLiveTicks = 1
+  minLiveTicks = 200
 } = {}) {
   const evaluated = await Promise.all((markets || []).map(async market => {
-    const prices = (market?.prices || []).map(Number).filter(Number.isFinite);
+    // Only post-subscription live observations may generate an entry signal.
+    // Historical prices are preload/reference data and are deliberately excluded.
+    const prices = (market?.livePrices || []).map(Number).filter(Number.isFinite);
     const liveTicks = Number(market?.liveTicks || 0);
     const lastLiveAt = Number(market?.lastLiveAt || 0);
-    if (!market?.symbol || prices.length < 1 || liveTicks < minLiveTicks ||
+    if (!market?.symbol || prices.length < minLiveTicks || liveTicks < minLiveTicks ||
         !lastLiveAt || now - lastLiveAt < 0 || now - lastLiveAt > maxAgeMs) return null;
 
     const report = await evaluateStrategyEnsemble(prices, {
