@@ -14,9 +14,9 @@ function resetStorage() {
 }
 
 test('uncalibrated validation execution is enabled only for demo accounts', () => {
-  assert.equal(canExecuteDemoValidationTrade('demo', { calibrated: false }), true);
+  assert.equal(canExecuteDemoValidationTrade('demo', { calibrated: false }), false);
   assert.equal(canExecuteDemoValidationTrade('real', { calibrated: false }), false);
-  assert.equal(canExecuteDemoValidationTrade('demo', { calibrated: true }), false);
+  assert.equal(canExecuteDemoValidationTrade('demo', { calibrated: true }), true);
   assert.equal(canExecuteDemoValidationTrade(undefined, { calibrated: false }), false);
 });
 
@@ -120,10 +120,31 @@ test('90 percent observed win-rate target is enforced alongside quote break-even
     predictedDigit:4,duration:1,timeframeUnit:'Ticks',currency:'USD'};
   for(let i=0;i<200;i++){
     assert.equal(beginPaperTrial({...signal,id:'target-'+i},{quote:quote(1,1.8)}),true);
-    advancePaperTrials('R_100',i<180?123.42:123.41);
+    advancePaperTrials('R_100',i<20?123.41:123.42);
   }
   const summary=getPaperForwardSummary(signal);
   assert.equal(summary.targetWinRate,0.9);
   assert.equal(summary.targetWinRateMet,true);
   assert.equal(summary.calibrated,true);
+});
+
+test('recent regime deterioration disables an otherwise strong lifetime calibration', () => {
+  resetPaperTrials();
+  resetStorage();
+  const signal={symbol:'R_100',tradeType:'Digits',subTradeType:'Even/Odd',option:'Even',
+    predictedDigit:4,duration:1,timeframeUnit:'Ticks',currency:'USD'};
+  for(let i=0;i<200;i++){
+    assert.equal(beginPaperTrial({...signal,id:'regime-good-'+i},{quote:quote(1,1.8)}),true);
+    advancePaperTrials('R_100',123.42);
+  }
+  assert.equal(getPaperForwardSummary(signal).calibrated,true);
+  for(let i=0;i<10;i++){
+    assert.equal(beginPaperTrial({...signal,id:'regime-bad-'+i},{quote:quote(1,1.8)}),true);
+    advancePaperTrials('R_100',123.41);
+  }
+  const summary=getPaperForwardSummary(signal);
+  assert.equal(summary.winRate,200/210);
+  assert.equal(summary.recentTrades,50);
+  assert.equal(summary.recentWinRate,0.8);
+  assert.equal(summary.calibrated,false);
 });

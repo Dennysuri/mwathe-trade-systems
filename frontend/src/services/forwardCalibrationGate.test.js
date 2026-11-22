@@ -22,14 +22,14 @@ test('requires the observed forward win rate to meet 90 percent', () => {
 
 test('rejects a high observed rate when the confidence bound does not clear break-even', () => {
   const result = evaluateForwardCalibrationGate({
-    trades: 200, winRate: 0.91, lowerBound: 0.54, maxBreakEvenRate: 0.53
+    trades: 200, winRate: 0.91, recentTrades: 50, recentWinRate: 0.91, lowerBound: 0.54, maxBreakEvenRate: 0.53
   }, quote);
   assert.equal(result.allowed, false);
 });
 
 test('allows a qualified profile only when its lower bound clears current quote break-even plus margin', () => {
   const result = evaluateForwardCalibrationGate({
-    trades: 220, winRate: 0.99, lowerBound: 0.96, maxBreakEvenRate: 0.54
+    trades: 220, winRate: 0.99, recentTrades: 50, recentWinRate: 0.98, lowerBound: 0.96, maxBreakEvenRate: 0.54
   }, quote);
   assert.equal(result.allowed, true);
   assert.ok(result.expectedValue > 0);
@@ -40,4 +40,22 @@ test('rejects invalid or non-profitable quotes', () => {
     trades: 220, winRate: 0.99, lowerBound: 0.96, maxBreakEvenRate: 0.54
   }, { ask_price: 1, payout: 1 });
   assert.equal(result.allowed, false);
+});
+
+test('rejects a profile whose latest 50 outcomes fall below target despite strong lifetime results', () => {
+  const result = evaluateForwardCalibrationGate({
+    trades: 220, winRate: 0.95, recentTrades: 50, recentWinRate: 0.84,
+    lowerBound: 0.90, maxBreakEvenRate: 0.54
+  }, quote);
+  assert.equal(result.allowed, false);
+  assert.match(result.reason, /Recent forward win rate/);
+});
+
+test('requires a complete recent 50-outcome window', () => {
+  const result = evaluateForwardCalibrationGate({
+    trades: 220, winRate: 0.95, recentTrades: 49, recentWinRate: 1,
+    lowerBound: 0.90, maxBreakEvenRate: 0.54
+  }, quote);
+  assert.equal(result.allowed, false);
+  assert.match(result.reason, /most recent 50/);
 });
