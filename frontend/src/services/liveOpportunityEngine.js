@@ -4,20 +4,35 @@ const DEFAULT_MAX_AGE_MS = 5000;
 
 /**
  * Evaluate a complete market + contract opportunity from the same live window.
- * Historical observations may seed prices, but a market is eligible only after
- * at least one fresh post-seed live tick has arrived.
+ * Historical observations initialise the statistical context. A fresh live tick
+ * is required to refresh the signal, but the bot must not wait for 200 new ticks.
  */
 export async function rankLiveMarketOpportunities(markets, config = {}, {
   now = Date.now(),
   maxAgeMs = DEFAULT_MAX_AGE_MS,
-  minLiveTicks = 1
+  minLiveTicks = 1,
+  onMarketEvaluation
 } = {}) {
   const evaluated = await Promise.all((markets || []).map(async market => {
-    const prices = (market?.prices || []).map(Number).filter(Number.isFinite);
+    const evaluationStartedAt = Date.now();
+    const reportStatus = (status, extra = {}) => onMarketEvaluation?.({
+      symbol: market?.symbol, marketName: market?.name || market?.symbol || 'Unknown',
+      status, evaluationStartedAt, evaluationCompletedAt: Date.now(),
+      liveTicks: Number(market?.liveTicks || 0), liveBufferSize: (market?.livePrices || []).length, analysisBufferSize: (market?.prices || market?.livePrices || []).length,
+      lastLiveAt: Number(market?.lastLiveAt || 0), ...extra
+    });
+    // Preloaded history supplies the statistical sample immediately; live ticks
+    // are appended to that buffer and provide the current entry context. Never
+    // analyse a market without at least one fresh post-subscription observation.
+    const prices = (market?.prices || market?.livePrices || []).map(Number).filter(Number.isFinite);
     const liveTicks = Number(market?.liveTicks || 0);
     const lastLiveAt = Number(market?.lastLiveAt || 0);
-    if (!market?.symbol || prices.length < 1 || liveTicks < minLiveTicks ||
-        !lastLiveAt || now - lastLiveAt < 0 || now - lastLiveAt > maxAgeMs) return null;
+    if (!market?.symbol || liveTicks < minLiveTicks || !(market?.livePrices || []).length) {
+      reportStatus('WAITING_FOR_FIRST_LIVE_TICK'); return null;
+    }
+    if (!lastLiveAt || now - lastLiveAt < 0 || now - lastLiveAt > maxAgeMs) {
+      reportStatus('STALE_FEED'); return null;
+    }
 
     const report = await evaluateStrategyEnsemble(prices, {
       ...config,
@@ -28,7 +43,12 @@ export async function rankLiveMarketOpportunities(markets, config = {}, {
     // when it does not yet pass the legacy display threshold. Execution remains
     // separately qualified and must never treat a watch candidate as approved.
     const candidate = report.candidate || report.watchCandidate;
-    if (!report.ready || !candidate || !candidate.option || candidate.option === 'Both') return null;
+    if (!report.ready || !candidate || !candidate.option || candidate.option === 'Both') {
+      reportStatus('ANALYSED_NO_SIGNAL', { reportReady: Boolean(report.ready) }); return null;
+    }
+    reportStatus(report.candidate ? 'QUALIFIED_CANDIDATE' : 'WATCH_CANDIDATE', {
+      score: candidate.score, qualified: Boolean(report.candidate), reportReady: Boolean(report.ready)
+    });
 
     const entryPoint = prices.at(-1);
     const duration = Number(config.duration);

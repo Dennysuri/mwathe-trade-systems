@@ -1,13 +1,14 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Zap } from 'lucide-react'
-import { boundedNextStake, buildProposal, VOLATILITY_MARKETS } from '../services/tradingCore'
-import { validateEntryWindow } from '../services/strategyIntelligence'
+import { buildProposal, VOLATILITY_MARKETS } from '../services/tradingCore'
+import { evaluateExpectedValue, validateEntryWindow } from '../services/strategyIntelligence'
 import { validateLiveOpportunity } from '../services/liveOpportunityEngine'
 import { rankLiveStrategyUniverse } from '../services/strategyUniverse'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
-import { evaluateAccountRisk, getAdaptiveStrategyStatus, getContractDifficulty, recordAdaptiveOutcome } from '../services/adaptiveTradingIntelligence'
-import { advancePaperTrials, beginPaperTrial, canExecuteDemoValidationTrade, getPaperForwardSummary } from '../services/paperForwardCalibration'
+import { evaluateAccountRisk, getContractDifficulty, recordAdaptiveOutcome } from '../services/adaptiveTradingIntelligence'
+import { advancePaperTrials, beginPaperTrial, canExecuteDemoValidationTrade, getPaperForwardSummary, recordSettledContractOutcome } from '../services/paperForwardCalibration'
 import { appendTickBuffer, seedTickBuffer } from '../services/marketTickBuffer'
+import { createRecoveryLedger, nextRecoveryStake, recordRecoveryOutcome } from '../services/recoveryAccounting'
 
 const copyLogFeed = async (entries) => {
   const value = (entries || []).join('\n');
@@ -54,20 +55,18 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
   const [bestMarket, setBestMarket] = useState('Scanning...')
   const [confluenceScore, setConfluenceScore] = useState(0)
   const [researchMarketCount, setResearchMarketCount] = useState(0)
+  const [researchDiagnostics, setResearchDiagnostics] = useState([])
+  const [researchCycle, setResearchCycle] = useState(null)
   
   const logRef = useRef(null); const wsRef = useRef(null); const isRunningRef = useRef(false); const reqIdRef = useRef(1)
-  const tickDataRef = useRef({}); const historySeededRef = useRef({}); const pendingLiveTicksRef = useRef({}); const lastLiveAtRef = useRef({}); const liveTickCountRef = useRef({}); const currentStakeRef = useRef(1.00); const sessionPLRef = useRef(0.00)
+  const tickDataRef = useRef({}); const liveTickDataRef = useRef({}); const historySeededRef = useRef({}); const pendingLiveTicksRef = useRef({}); const lastLiveAtRef = useRef({}); const liveTickCountRef = useRef({}); const currentStakeRef = useRef(1.00); const sessionPLRef = useRef(0.00)
   const totalTradesRef = useRef(0); const winsRef = useRef(0); const lossesRef = useRef(0)
+  const recoveryLedgerRef = useRef(createRecoveryLedger(1))
   const historyLoadedRef = useRef(false)
   const hasLoggedScanningRef = useRef(false); const reconnectAttemptsRef = useRef(0)
   const pingIntervalRef = useRef(null)
   const consecutiveLossesRef = useRef(0)
   const lastResearchNoticeRef = useRef('')
-  const marketCooldownUntilRef = useRef({})
-  const recentOutcomesRef = useRef([])
-  const performanceCooldownUntilRef = useRef(0)
-  const performanceRecoveryUntilRef = useRef(0)
-  const lastPerformancePauseNoticeRef = useRef(0)
   const shouldAutoScrollRef = useRef(true)
   const accountBalanceRef = useRef(null)
   // Research runs on its own cadence and never waits for contract settlement.
@@ -124,6 +123,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
               const symbol = msg.history.symbol || msg.echo_req?.ticks_history
               if (symbol) {
                 tickDataRef.current[symbol] = seedTickBuffer(msg.history.prices, pendingLiveTicksRef.current[symbol] || [])
+                liveTickDataRef.current[symbol] = []
                 historySeededRef.current[symbol] = true
                 lastLiveAtRef.current[symbol] = 0
                 liveTickCountRef.current[symbol] = 0
@@ -134,6 +134,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
               const symbol = msg.tick.symbol
               if (historySeededRef.current[symbol]) {
                 tickDataRef.current[symbol] = appendTickBuffer(tickDataRef.current[symbol], msg.tick.quote)
+                liveTickDataRef.current[symbol] = appendTickBuffer(liveTickDataRef.current[symbol], msg.tick.quote)
                 lastLiveAtRef.current[symbol] = Date.now()
                 liveTickCountRef.current[symbol] = (liveTickCountRef.current[symbol] || 0) + 1
               }
@@ -151,6 +152,14 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
           if (pingIntervalRef.current) clearInterval(pingIntervalRef.current)
           historyLoadedRef.current = false
           historyLoadInFlightRef.current = false
+          liveTickDataRef.current = {}
+          liveTickCountRef.current = {}
+          lastLiveAtRef.current = {}
+          // A closed Deriv socket loses every tick subscription. Force all
+          // market history/tick subscriptions to be recreated after reconnect.
+          historySeededRef.current = {}
+          pendingLiveTicksRef.current = {}
+          tickDataRef.current = {}
           if (researchTimerRef.current) { clearInterval(researchTimerRef.current); researchTimerRef.current = null }
           if (wsRef.current === ws) wsRef.current = null
           if (connectionActiveRef.current) {
@@ -187,24 +196,41 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { historyLoadInFlightRef.current = false; return resolve() }
       let loadedCount = 0
       let finished = false
-      const finish = () => { if (finished) return; finished = true; historyLoadedRef.current = true; historyLoadInFlightRef.current = false; resolve() }
-      const totalMarkets = UNIQUE_MARKETS.length
-      const checkDone = () => { loadedCount++; if (loadedCount >= totalMarkets) finish() }
-      UNIQUE_MARKETS.forEach(([,sym]) => {
+      const listeners = []
+      let completedCount = 0
+      const pendingMarkets = UNIQUE_MARKETS.filter(([, sym]) => !historySeededRef.current[sym])
+      const totalMarkets = pendingMarkets.length
+      const finish = (complete = false) => {
+        if (finished) return
+        finished = true
+        listeners.forEach(({ handler }) => wsRef.current?.removeEventListener('message', handler))
+        historyLoadedRef.current = complete
+        historyLoadInFlightRef.current = false
+        if (!complete) addLog(`⚠️ Historical preload incomplete (${completedCount}/${totalMarkets} successful); missing markets will be retried and cannot qualify for trading.`)
+        resolve()
+      }
+      if (totalMarkets === 0) return finish(true)
+      const checkDone = success => {
+        if (success) completedCount++
+        loadedCount++
+        if (loadedCount >= totalMarkets) finish(completedCount === totalMarkets)
+      }
+      pendingMarkets.forEach(([,sym]) => {
         const reqId = reqIdRef.current++
         const onMessage = (event) => {
           try {
             const msg = JSON.parse(event.data)
-            if (msg.req_id === reqId && msg.msg_type === 'history') {
-              wsRef.current.removeEventListener('message', onMessage)
-              checkDone()
+            if (msg.req_id === reqId && (msg.msg_type === 'history' || msg.error)) {
+              wsRef.current?.removeEventListener('message', onMessage)
+              checkDone(msg.msg_type === 'history' && Array.isArray(msg.history?.prices) && msg.history.prices.length > 0)
             }
           } catch (e) {}
         }
+        listeners.push({ handler: onMessage })
         wsRef.current.addEventListener('message', onMessage)
         wsRef.current.send(JSON.stringify({ ticks_history: sym, count: 250, end: 'latest', style: 'ticks', subscribe: 1, req_id: reqId }))
       })
-      setTimeout(finish, 4000)
+      setTimeout(() => finish(false), 10000)
     })
   }
 
@@ -258,40 +284,36 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
   // Shared market + contract ranking. A market is considered only after fresh live ticks.
   const scanMarkets = async () => {
     const markets = UNIQUE_MARKETS.map(([name, symbol]) => ({
-      name, symbol, prices: tickDataRef.current[symbol] || [],
+      name, symbol, prices: tickDataRef.current[symbol] || [], livePrices: liveTickDataRef.current[symbol] || [],
       lastLiveAt: lastLiveAtRef.current[symbol] || 0,
       liveTicks: liveTickCountRef.current[symbol] || 0
     }))
     const selectedConfig = researchConfigRef.current
-    const universe = await rankLiveStrategyUniverse(markets, selectedConfig, { now: Date.now(), maxAgeMs: 5000, minLiveTicks: 1 })
+    const universe = await rankLiveStrategyUniverse(markets, selectedConfig, {
+      now: Date.now(), maxAgeMs: 5000, minLiveTicks: 1,
+      onMarketDiagnostics: setResearchDiagnostics,
+      onResearchCycle: setResearchCycle
+    })
     // Research all supported profiles, but only the exact user-selected profile
     // is eligible to enter the bot's existing validation/execution path.
     const now = Date.now()
-    const freshMarketCount = markets.filter(m => m.lastLiveAt && now - m.lastLiveAt >= 0 && now - m.lastLiveAt <= 5000 && Number(m.liveTicks) >= 1).length
+    const freshMarketCount = markets.filter(m => m.lastLiveAt && now - m.lastLiveAt >= 0 && now - m.lastLiveAt <= 5000 && Number(m.liveTicks) >= 1 && (m.livePrices || []).length >= 1).length
     setResearchMarketCount(freshMarketCount)
     if (universe[0]) { setBestMarket(universe[0].marketName); setConfluenceScore(universe[0].score) }
-    if (performanceCooldownUntilRef.current > now) {
-      latestResearchRef.current = { updatedAt: now, candidates: [], marketCount: freshMarketCount }
-      return []
-    }
-    const requiredScore = performanceRecoveryUntilRef.current > now ? 92 : consecutiveLossesRef.current >= 3 ? 92 : consecutiveLossesRef.current >= 2 ? 90 : consecutiveLossesRef.current === 1 ? 85 : 0
     const eligible = universe.filter(item => {
-      const adaptive = getAdaptiveStrategyStatus(item.signal || { ...item.profile, option: item.signal?.option || selectedConfig.option, predictedDigit: Number(selectedConfig.predictedDigit) }, now)
-      return !adaptive.blocked
-      && item.profile.tradeType === selectedConfig.tradeType
+      return item.profile.tradeType === selectedConfig.tradeType
       && item.profile.subTradeType === (selectedConfig.subTradeType || '')
       && item.profile.timeframeUnit === selectedConfig.timeframeUnit
       && Number(item.profile.duration) === Number(selectedConfig.duration)
       && item.qualified === true
-      && (marketCooldownUntilRef.current[item.symbol] || 0) <= now
-      && Number(item.score || 0) >= requiredScore
+
     })
     latestResearchRef.current = { updatedAt: now, candidates: eligible, marketCount: freshMarketCount }
     return eligible
   }
 
   const refreshResearch = async () => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !historyLoadedRef.current || researchInFlightRef.current) return
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || researchInFlightRef.current) return
     researchInFlightRef.current = true
     try { await scanMarkets() }
     catch (error) { addLog(`Parallel market research error: ${error.message}`) }
@@ -303,8 +325,11 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
     let active = true
     const ensureResearch = async () => {
       if (!active || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
-      if (!historyLoadedRef.current) await loadAllHistory()
-      if (!active || !historyLoadedRef.current || researchTimerRef.current) return
+      // Start the history preload in the background. Each market becomes
+      // researchable as soon as its own history and first live tick arrive;
+      // one slow market must not block the other twelve.
+      if (!historyLoadedRef.current && !historyLoadInFlightRef.current) void loadAllHistory()
+      if (!active || researchTimerRef.current) return
       await refreshResearch()
       if (active && !researchTimerRef.current) researchTimerRef.current = setInterval(refreshResearch, 1000)
     }
@@ -319,7 +344,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
   }, [token, accountId])
 
   const runTradeCycle = async () => {
-    if (!historyLoadedRef.current) { addLog(' Analyzing unique volatility markets...'); await loadAllHistory() }
+    if (!historyLoadedRef.current && !historyLoadInFlightRef.current) void loadAllHistory()
 
     while (isRunningRef.current) {
       try {
@@ -331,20 +356,11 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         const refreshedQueue = Date.now() - researchSnapshot.updatedAt <= 2500 ? researchSnapshot.candidates : []
         const currentTarget = refreshedQueue[0]
         if (!currentTarget) {
-          if (performanceCooldownUntilRef.current > Date.now()) {
-            if (lastPerformancePauseNoticeRef.current !== performanceCooldownUntilRef.current) {
-              const remaining = Math.ceil((performanceCooldownUntilRef.current - Date.now()) / 1000)
-              addLog(`🛡️ Performance circuit breaker: no new entries for ${remaining}s after the last 8 settled trades were net negative.`)
-              lastPerformancePauseNoticeRef.current = performanceCooldownUntilRef.current
-            }
-            await new Promise(r => setTimeout(r, Math.min(5000, Math.max(500, performanceCooldownUntilRef.current - Date.now()))))
-          } else {
-            if (!hasLoggedScanningRef.current) {
-              addLog('Thamira is comparing live market, strategy and duration candidates; watch-only patterns are not sent as trades.')
-              hasLoggedScanningRef.current = true
-            }
-            await new Promise(r => setTimeout(r, 1000))
-          }
+          if (!hasLoggedScanningRef.current) {
+          addLog('Thamira is waiting for a qualified setup on the selected contract; historical context is active and live feeds continue updating.')
+          hasLoggedScanningRef.current = true
+        }
+        await new Promise(r => setTimeout(r, 1000))
           continue
         }
         hasLoggedScanningRef.current = false
@@ -357,8 +373,6 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
           if (accountRisk.balanceUnavailable) { addLog('⏳ Waiting for Deriv to confirm account balance before entry.'); await new Promise(resolve => setTimeout(resolve, 1000)); continue }
           addLog(`🛡️ Account guard: ${accountRisk.message}. New entries stopped.`); isRunningRef.current = false; setIsRunning(false); break
         }
-        const adaptiveStatus = getAdaptiveStrategyStatus(signal)
-        if (adaptiveStatus.blocked) { addLog(`🧠 Strategy recovery pause: ${signal.tradeType}/${signal.subTradeType}/${signal.option} has ${adaptiveStatus.consecutiveLosses} consecutive losses across markets.`); await new Promise(r => setTimeout(r, Math.max(500, adaptiveStatus.blockedUntil - Date.now()))); continue }
         const tradeDirection = signal.option
         lastResearchNoticeRef.current = ''
         setBestMarket(currentTarget.marketName); setConfluenceScore(currentTarget.score)
@@ -368,22 +382,76 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         const executionStartedAt = performance.now()
         // The proposal request itself validates the exact contract mapping; avoid a
         // separate contracts_for round trip that would add avoidable entry latency.
-        const proposalRes = await wsRequest(proposalReq)
+        let proposalRes = await wsRequest(proposalReq)
         if (!isRunningRef.current) break
+        // Recalculate the recovery stake against this exact quote before buying.
+        const quoteAsk = Number(proposalRes.proposal?.ask_price)
+        const quotePayout = Number(proposalRes.proposal?.payout)
+        const quoteNetRate = quoteAsk > 0 && quotePayout > quoteAsk ? (quotePayout - quoteAsk) / quoteAsk : 0
+        const quoteRecovery = nextRecoveryStake(recoveryLedgerRef.current, {
+          baseStake: parseFloat(stake) || 1, martingaleFactor: parseFloat(martingaleFactor) || 1,
+          netProfitPerUnit: quoteNetRate, maxStakeMultiplier: 3
+        })
+        if (!quoteRecovery.allowed) {
+          addLog(`🛑 Recovery gate: ${quoteRecovery.reason} Required stake ${Number(quoteRecovery.requiredStake).toFixed(2)}; configured ceiling is 3x base. No order sent.`)
+          isRunningRef.current = false; setIsRunning(false); break
+        }
+        if (Math.abs(quoteRecovery.stake - currentStakeRef.current) >= 0.01) {
+          const riskAtRecoveryStake = evaluateAccountRisk({ balance: accountBalanceRef.current, sessionPL: sessionPLRef.current, targetProfit, stopLoss, nextStake: quoteRecovery.stake })
+          if (!riskAtRecoveryStake.allowEntry) {
+            addLog(`🛡️ Recovery stake rejected by account guard: ${riskAtRecoveryStake.message}. No order sent.`)
+            isRunningRef.current = false; setIsRunning(false); break
+          }
+          currentStakeRef.current = quoteRecovery.stake
+          setCurrentStake(quoteRecovery.stake)
+          proposalRes = await wsRequest(buildProposal(signal, roundStake(quoteRecovery.stake)))
+          if (!isRunningRef.current) break
+          const repricedAsk = Number(proposalRes.proposal?.ask_price)
+          const repricedPayout = Number(proposalRes.proposal?.payout)
+          const repricedRate = repricedAsk > 0 && repricedPayout > repricedAsk ? (repricedPayout - repricedAsk) / repricedAsk : 0
+          const repricedDecision = nextRecoveryStake(recoveryLedgerRef.current, {
+            baseStake: parseFloat(stake) || 1, martingaleFactor: parseFloat(martingaleFactor) || 1,
+            netProfitPerUnit: repricedRate, maxStakeMultiplier: 3
+          })
+          if (!repricedDecision.allowed || Math.abs(repricedDecision.stake - quoteRecovery.stake) >= 0.01) {
+            addLog('🛡️ Recovery quote changed the required stake; rejecting this quote and returning to fresh market research.')
+            continue
+          }
+        }
+        if (signal.tradeType === 'Digits') {
+          const lowerBound = Number(currentTarget.report?.candidate?.evidence?.lowerBound)
+          const ask = Number(proposalRes.proposal?.ask_price)
+          const payout = Number(proposalRes.proposal?.payout)
+          if (!Number.isFinite(lowerBound) || !Number.isFinite(ask) || !Number.isFinite(payout) || payout <= ask) {
+            addLog('🛡️ Payout gate: no defensible live confidence bound or valid net payout; candidate rejected.')
+            continue
+          }
+          const valueCheck = evaluateExpectedValue({ winProbability: lowerBound, netProfitOnWin: payout - ask, lossOnLoss: ask })
+          if (!valueCheck.valid || !valueCheck.positive) {
+            addLog(`🛡️ Payout-aware gate rejected ${signal.symbol}/${signal.option}: conservative win-rate bound ${(lowerBound * 100).toFixed(1)}%, quote break-even ${(valueCheck.breakEvenProbability * 100).toFixed(1)}%, expected value ${Number(valueCheck.expectedValue).toFixed(4)} per quoted contract.`)
+            continue
+          }
+          addLog(`💹 Payout validated: conservative live bound ${(lowerBound * 100).toFixed(1)}% exceeds quote break-even ${(valueCheck.breakEvenProbability * 100).toFixed(1)}%.`)
+        }
         if (signal.tradeType === 'Digits' && signal.timeframeUnit === 'Ticks') {
           const calibration = getPaperForwardSummary(signal)
           if (!calibration.calibrated) {
-            const started = beginPaperTrial({ ...signal, id: `paper-${signal.symbol}-${Date.now()}` }, {
-              quote: { askPrice: proposalRes.proposal.ask_price, payout: proposalRes.proposal.payout,
-                currency: proposalRes.proposal.currency, quotedAt: Date.now() }
-            })
-            if (started) {
-              const difficulty = getContractDifficulty(signal)
-              addLog(`🧪 ${accountType === 'demo' ? 'Demo validation sample started' : 'Calibration-only trial started'} for ${signal.subTradeType}/${signal.option} on ${signal.symbol}; theoretical baseline ${difficulty.theoreticalWinChance === null ? 'n/a' : (difficulty.theoreticalWinChance * 100).toFixed(1) + '%'}; exact profile barrier ${signal.predictedDigit ?? 'n/a'}, duration ${signal.duration} ${signal.timeframeUnit}; ${calibration.wins}/${calibration.trades} wins, ${calibration.trades}/200 settled samples, 90% observed-win target plus quote break-even confidence required.`)
-            } else if (calibration.pending === 0) {
-              addLog('🛡️ No valid quote-matched calibration trial could be started; refusing this digit entry and retrying after a fresh quote.')
-              await new Promise(resolve => setTimeout(resolve, 1500))
-              continue
+            // Demo samples come from the actual Deriv contract settlement below.
+            // Paper-forward trials are reserved for calibration-only real-account
+            // profiles, avoiding duplicate/misaligned demo outcome attribution.
+            if (accountType !== 'demo') {
+              const started = beginPaperTrial({ ...signal, id: `paper-${signal.symbol}-${Date.now()}` }, {
+                quote: { askPrice: proposalRes.proposal.ask_price, payout: proposalRes.proposal.payout,
+                  currency: proposalRes.proposal.currency, quotedAt: Date.now() }
+              })
+              if (started) {
+                const difficulty = getContractDifficulty(signal)
+                addLog(`🧪 Calibration-only forward trial started for ${signal.subTradeType}/${signal.option} on ${signal.symbol}; theoretical baseline ${difficulty.theoreticalWinChance === null ? 'n/a' : (difficulty.theoreticalWinChance * 100).toFixed(1) + '%'}; exact profile barrier ${signal.predictedDigit ?? 'n/a'}, duration ${signal.duration} ${signal.timeframeUnit}; ${calibration.wins}/${calibration.trades} wins, ${calibration.trades}/200 settled samples, 90% observed-win target plus quote break-even confidence required.`)
+              } else if (calibration.pending === 0) {
+                addLog('🛡️ No valid quote-matched calibration trial could be started; refusing this digit entry and retrying after a fresh quote.')
+                await new Promise(resolve => setTimeout(resolve, 1500))
+                continue
+              }
             }
             const demoPilot = canExecuteDemoValidationTrade(accountType, calibration)
             if (!demoPilot) {
@@ -403,7 +471,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
           }
         }
         const marketSnapshot = {
-          prices: tickDataRef.current[currentTarget.symbol] || [],
+          prices: liveTickDataRef.current[currentTarget.symbol] || [],
           lastLiveAt: lastLiveAtRef.current[currentTarget.symbol] || 0
         }
         const liveCheck = validateLiveOpportunity(signal, marketSnapshot, { now: Date.now(), maxSignalAgeMs: 1500 })
@@ -419,44 +487,51 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         
         const contractResult = await monitorContract(buyRes.buy.contract_id); if (!contractResult) break
         const profit = parseFloat(contractResult.profit || 0); const isWin = profit > 0
+        if (signal.tradeType === 'Digits' && signal.timeframeUnit === 'Ticks') {
+          const settledCalibration = recordSettledContractOutcome(signal, {
+            quote: proposalRes.proposal, profit, contractId: contractResult.contract_id
+          })
+          if (settledCalibration) addLog(`🧪 Broker-settled calibration: ${settledCalibration.wins}/${settledCalibration.trades} wins, ${settledCalibration.trades}/200 samples for this exact contract profile.`)
+        }
         const outcomeStats = recordContractOutcome(signal, { profit, stake: currentStakeRef.current, contractId: contractResult.contract_id, bot: 'Automated Bot' })
         const adaptiveStats = recordAdaptiveOutcome(signal, { profit, stake: currentStakeRef.current, bot: 'Automated Bot' })
         addLog(`🧠 Strategy profile: ${adaptiveStats.consecutiveLosses} consecutive losses across markets; ${adaptiveStats.trades} recent outcomes; win rate ${adaptiveStats.winRate === null ? 'n/a' : (adaptiveStats.winRate * 100).toFixed(1) + '%'} (90% target).`)
         if (outcomeStats) addLog(`Thamira history: ${outcomeStats.trades} settled for this exact setup; win rate ${outcomeStats.winRate === null ? 'n/a' : (outcomeStats.winRate * 100).toFixed(1) + '%'}.`)
         totalTradesRef.current += 1; sessionPLRef.current += profit
-        recentOutcomesRef.current = [...recentOutcomesRef.current, profit].slice(-8)
-        if (recentOutcomesRef.current.length === 8 && recentOutcomesRef.current.reduce((sum, value) => sum + value, 0) <= 0) {
-          performanceCooldownUntilRef.current = Date.now() + 180000
-          performanceRecoveryUntilRef.current = Date.now() + 480000
-          addLog('🛡️ Eight-trade performance guard: the latest 8 settled contracts are net negative. Pausing entries for 3 minutes; then require 92/94 setup scores for 5 minutes.')
+        const quotedAsk = Number(proposalRes.proposal.ask_price)
+        const quotedPayout = Number(proposalRes.proposal.payout)
+        const netProfitPerUnit = quotedAsk > 0 && quotedPayout > quotedAsk ? (quotedPayout - quotedAsk) / quotedAsk : 0
+        recoveryLedgerRef.current = recordRecoveryOutcome(recoveryLedgerRef.current, {
+          profit, baseStakeWinProfit: (parseFloat(stake) || 1) * netProfitPerUnit
+        })
+        const recoveryDecision = nextRecoveryStake(recoveryLedgerRef.current, {
+          baseStake: parseFloat(stake) || 1, martingaleFactor: parseFloat(martingaleFactor) || 1,
+          netProfitPerUnit, maxStakeMultiplier: 3
+        })
+        if (!recoveryDecision.allowed) {
+          addLog(`🛑 Recovery stake required ${Number(recoveryDecision.requiredStake).toFixed(2)} exceeds the configured 3x base-stake ceiling. No further entry will be forced.`)
+          isRunningRef.current = false; setIsRunning(false); break
         }
+        currentStakeRef.current = recoveryDecision.stake
+        setCurrentStake(currentStakeRef.current)
+        addLog(`🧮 Cumulative recovery: ideal all-win profit ${recoveryLedgerRef.current.idealProfit.toFixed(2)} | actual P/L ${recoveryLedgerRef.current.actualProfit.toFixed(2)} | remaining gap ${recoveryLedgerRef.current.deficit.toFixed(2)} | next stake ${currentStakeRef.current.toFixed(2)}.`)
+
         
         if (isWin) {
-          winsRef.current += 1; currentStakeRef.current = parseFloat(stake)
+          winsRef.current += 1
           consecutiveLossesRef.current = 0
-    lastResearchNoticeRef.current = ''
-          setCurrentStake(currentStakeRef.current)
-          addLog(`✅ WON +$${profit.toFixed(2)} | Stake reset to base`)
+          lastResearchNoticeRef.current = ''
+          addLog(recoveryLedgerRef.current.deficit <= 0 ? `✅ WON +${profit.toFixed(2)} | Cumulative recovery achieved; base stake restored.` : `✅ WON +${profit.toFixed(2)} | Recovery remains active; stake retained at ${currentStakeRef.current.toFixed(2)}.`)
         } else {
           lossesRef.current += 1; consecutiveLossesRef.current++
-          currentStakeRef.current = boundedNextStake(stake, currentStakeRef.current, martingaleFactor, consecutiveLossesRef.current)
-          marketCooldownUntilRef.current[currentTarget.symbol] = Date.now() + (consecutiveLossesRef.current >= 2 ? 120000 : 60000)
-          setCurrentStake(currentStakeRef.current)
-          addLog(`❌ LOST -${profit.toFixed(2)} | Bounded recovery stake ${currentStakeRef.current.toFixed(2)}; ${currentTarget.symbol} paused for ${consecutiveLossesRef.current >= 2 ? 120 : 60}s.`)
-          if (consecutiveLossesRef.current >= 2) addLog(`🛡️ ${consecutiveLossesRef.current} consecutive losses: next setup must score at least ${consecutiveLossesRef.current >= 3 ? 92 : 90}/94.`)
+          addLog(`❌ LOST -${Math.abs(profit).toFixed(2)} | Cumulative deficit ${recoveryLedgerRef.current.deficit.toFixed(2)}; recovery stake ${currentStakeRef.current.toFixed(2)}.`)
         }
         
         setTotalTrades(totalTradesRef.current); setWins(winsRef.current); setLosses(lossesRef.current); setCurrentPL(sessionPLRef.current)
         if (sessionPLRef.current >= parseFloat(targetProfit)) { addLog(`🎯 TARGET HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
         if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog('🛑 STOP LOSS HIT!'); setIsRunning(false); isRunningRef.current = false; break }
         addLog(`📊 P/L: ${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
-        if (consecutiveLossesRef.current >= 4) {
-          addLog('🛑 Four consecutive losses: Automated Bot safety stop. Review the session before restarting.')
-          setIsRunning(false); isRunningRef.current = false; break
-        }
-        const cooldownMs = consecutiveLossesRef.current >= 3 ? 90000 : consecutiveLossesRef.current >= 2 ? 45000 : consecutiveLossesRef.current === 1 ? 15000 : 5000
-        addLog(`🧊 Waiting ${Math.round(cooldownMs / 1000)}s before the next independent market scan.`)
-        await new Promise(r => setTimeout(r, cooldownMs))
+        await new Promise(r => setTimeout(r, 250))
       } catch (error) { if (!isRunningRef.current) break; addLog(`❌ Error: ${error.message}`); await new Promise(r => setTimeout(r, 2000)) }
     }
     researchInFlightRef.current = false
@@ -465,10 +540,10 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
   const startBot = () => {
     setValidationError(''); if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }
     isRunningRef.current = true; setIsRunning(true); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0
-    currentStakeRef.current = parseFloat(stake); hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0
-    consecutiveLossesRef.current = 0; recentOutcomesRef.current = []; performanceCooldownUntilRef.current = 0; performanceRecoveryUntilRef.current = 0; lastPerformancePauseNoticeRef.current = 0
-    setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); marketCooldownUntilRef.current = {}
-    addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets | Loss-Resistant Entry Gates)'); addLog(`Account mode: ${accountType === 'demo' ? 'DEMO — live validation orders enabled' : 'REAL — 90% profile calibration required before digit orders'}`); addLog(`Type: ${tradeType} | Stake: ${stake} | Recovery: adaptive strategy guard + bounded martingale`); addLog(`Target: ${targetProfit} | Stop: ${stopLoss}`); runTradeCycle()
+    currentStakeRef.current = parseFloat(stake); recoveryLedgerRef.current = createRecoveryLedger(parseFloat(stake) || 1); hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0
+    consecutiveLossesRef.current = 0
+    setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0)
+    addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets | Live-Only Predictive Gates | Cumulative Recovery)'); addLog(`Account mode: ${accountType === 'demo' ? 'DEMO — live validation orders enabled' : 'REAL — 90% profile calibration required before digit orders'}`); addLog(`Type: ${tradeType} | Base stake: ${stake} | Martingale: ${martingaleFactor}x with cumulative deficit recovery and 3x hard cap`); addLog(`Target: ${targetProfit} | Stop: ${stopLoss}`); runTradeCycle()
   }
 
   const stopBot = () => { isRunningRef.current = false; setIsRunning(false); addLog('⏹️ Stopped new entries; all 13-market live research continues, and any open contract remains monitored until settlement.') }
@@ -506,9 +581,18 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
       </div>
       <div className="bg-gray-900 rounded-lg p-2 border border-green-500/30 mb-2 flex-shrink-0">
   <h3 className="text-white font-bold text-xs mb-1 flex items-center gap-1"><TrendingUp size={12} className="text-green-500" /> Performance</h3>
-  <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Live research:</span><span className="text-[10px] text-green-400 font-bold">{researchMarketCount}/13 markets</span></div>
+  <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Fresh live markets:</span><span className="text-[10px] text-green-400 font-bold">{researchMarketCount}/13 markets</span></div>
+  <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Research cycle:</span><span className="text-[10px] text-sky-300 font-bold">{researchCycle ? `${researchCycle.analysedMarkets}/${researchCycle.expectedMarkets} markets · ${researchCycle.cycleDurationMs}ms` : 'Waiting for first cycle'}</span></div>
+  <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Profile evaluations:</span><span className="text-[10px] text-sky-300 font-bold">{researchCycle ? `${researchCycle.totalMarketProfileEvaluations.toLocaleString()} · ${researchCycle.parallelMarketCount} markets × ${researchCycle.profileCount} profiles` : '—'}</span></div>
   <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Best Market:</span><span className="text-[10px] text-orange-400 font-bold">{bestMarket}</span></div>
   <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Confluence Score:</span><span className={`text-[10px] font-bold ${confluenceScore >= 70 ? 'text-green-400' : 'text-orange-400'}`}>{confluenceScore.toFixed(0)}%</span></div>
+  <details className="mb-2 bg-black/40 border border-gray-800 rounded p-2 flex-shrink-0">
+    <summary className="text-[10px] text-sky-300 font-bold cursor-pointer">13-market live research evidence ({researchDiagnostics.filter(row => row.analysisComplete).length}/13 fully evaluated)</summary>
+    <div className="mt-2 overflow-x-auto"><table className="w-full text-[9px] text-left"><thead><tr className="text-gray-500 border-b border-gray-800"><th className="py-1 pr-2">Market</th><th className="py-1 pr-2">Status</th><th className="py-1 pr-2">Ticks</th><th className="py-1 pr-2">Profiles</th><th className="py-1 pr-2">Rank</th><th className="py-1 pr-2">Score</th><th className="py-1">Last analysed</th></tr></thead><tbody>
+      {researchDiagnostics.map(row => <tr key={row.symbol} className="border-b border-gray-900"><td className="py-1 pr-2 text-gray-300">{row.marketName}</td><td className={`py-1 pr-2 ${row.status === 'STALE_FEED' || row.status === 'INSUFFICIENT_LIVE_TICKS' ? 'text-orange-400' : row.analysisComplete ? 'text-green-400' : 'text-sky-300'}`}>{row.status}</td><td className="py-1 pr-2 tabular-nums">{row.liveTicks}/{row.liveBufferSize}</td><td className="py-1 pr-2 tabular-nums">{row.profileEvaluations}/{row.profileCount}</td><td className="py-1 pr-2 tabular-nums">{row.rank ?? '—'}</td><td className="py-1 pr-2 tabular-nums">{row.score == null ? '—' : row.score.toFixed(0)}</td><td className="py-1 tabular-nums">{row.evaluationCompletedAt ? new Date(row.evaluationCompletedAt).toLocaleTimeString() : '—'}</td></tr>)}
+    </tbody></table></div>
+    {researchCycle && <p className="mt-1 text-[9px] text-gray-500">Cycle {new Date(researchCycle.cycleStartedAt).toLocaleTimeString()}–{new Date(researchCycle.cycleCompletedAt).toLocaleTimeString()} · {researchCycle.rankingCount} ranked opportunities · {researchCycle.best ? `Leader: ${researchCycle.best.marketName} (${researchCycle.best.score.toFixed(0)})` : 'No current candidate'}.</p>}
+  </details>
   <div className="mb-1 grid grid-cols-3 gap-1 text-center text-[9px]">
     <div className="bg-black/50 rounded p-1"><span className="text-gray-400">Account balance</span><p className="text-white font-bold">{accountBalance === null ? 'Waiting…' : '$' + accountBalance.toFixed(2)}</p></div>
     <div className="bg-black/50 rounded p-1"><span className="text-gray-400">To target</span><p className="text-green-400 font-bold">{'$' + Math.max(0, (parseFloat(targetProfit) || 0) - currentPL).toFixed(2)}</p></div>

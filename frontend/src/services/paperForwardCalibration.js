@@ -84,6 +84,37 @@ export function advancePaperTrials(symbol, quote, { now = Date.now(), pipSize } 
   }
   return completed;
 }
+/**
+ * Persist the actual settled Deriv demo contract result against its exact
+ * proposal quote. This is stronger calibration evidence than a synthetic
+ * paper path because it uses the broker-confirmed contract outcome.
+ */
+export function recordSettledContractOutcome(signal, { quote, profit, contractId, now = Date.now() } = {}) {
+  if (!signal || signal.tradeType !== 'Digits' || signal.timeframeUnit !== 'Ticks'
+      || !['Over/Under', 'Matches/Differs', 'Even/Odd'].includes(signal.subTradeType)
+      || !['Over', 'Under', 'Matches', 'Differs', 'Even', 'Odd'].includes(signal.option)) return null;
+  const askPrice = Number(quote?.ask_price ?? quote?.askPrice);
+  const payout = Number(quote?.payout);
+  const settledProfit = Number(profit);
+  if (!Number.isFinite(askPrice) || !Number.isFinite(payout) || !Number.isFinite(settledProfit)
+      || askPrice <= 0 || payout <= askPrice) return null;
+  const key = paperProfile(signal);
+  const rows = readRows();
+  if (contractId && rows.some(row => row.contractId === contractId)) return getPaperForwardSummary(signal);
+  rows.push({
+    key, symbol: signal.symbol, tradeType: 'Digits', subTradeType: signal.subTradeType,
+    option: signal.option, predictedDigit: Number(signal.predictedDigit),
+    duration: Number(signal.duration), timeframeUnit: 'Ticks',
+    currency: quote?.currency || signal.currency || 'unknown',
+    askPrice, payout, breakEvenRate: askPrice / payout,
+    quotedAt: Number(quote?.date_start || quote?.quotedAt || now),
+    entryAt: now, settledAt: now, contractId: contractId || null,
+    source: 'deriv-settled-contract', won: settledProfit > 0
+  });
+  writeRows(rows);
+  return getPaperForwardSummary(signal);
+}
+
 export function getPaperForwardSummary(signal = null) {
   const rows = readRows();
   const filtered = signal ? rows.filter(row => row.key === paperProfile(signal)) : rows;

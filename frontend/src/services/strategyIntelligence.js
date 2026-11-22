@@ -61,16 +61,26 @@ function digitStrategies(prices, config) {
     const interval = wilson(hits, transitionDigits.length);
     return { option, observed: transitionDigits.length ? hits / transitionDigits.length : 0, baseline: base(option), lower: interval.lower, upper: interval.upper, observations: transitionDigits.length };
   });
+  const eventMatches = (digit, option) => sub === 'Over/Under'
+    ? (option === 'Over' ? digit > target : digit < target)
+    : sub === 'Matches/Differs'
+      ? (option === 'Matches' ? digit === target : digit !== target)
+      : option === 'Even' ? digit % 2 === 0 : digit % 2 === 1;
+  const recentDigits = digits.slice(-50);
+  const olderDigits = digits.slice(-100, -50);
+  const stability = opts.map(option => {
+    const recentObserved = recentDigits.filter(d => eventMatches(d, option)).length / Math.max(1, recentDigits.length);
+    const olderObserved = olderDigits.filter(d => eventMatches(d, option)).length / Math.max(1, olderDigits.length);
+    return { option, recentObserved, olderObserved, drift: Math.abs(recentObserved - olderObserved) };
+  });
   return [
-    result('Bayesian-smoothed frequency / Wilson interval', 'digit-distribution', digits.length,
-      { options: frequency }, ['Baseline comparison only; overlapping rolling windows are not independent.']),
+    result('Observed frequency / Wilson confidence interval', 'digit-distribution', digits.length,
+      { options: frequency }, ['Live-window estimate only; overlapping rolling windows are not independent.']),
     result('Conditional last-digit transition test', 'digit-transition', transitionDigits.length,
-      { conditioningDigit: latest, options: conditional }, ['Transition findings are exploratory and require independent out-of-sample confirmation.']),
+      { conditioningDigit: latest, options: conditional }, ['Exploratory evidence only; never treated as an independent win-probability estimate.']),
     result('Distribution stability', 'digit-drift', digits.length,
-      { recentWindow: digits.slice(-50).length, olderWindow: digits.slice(-100, -50).length,
-        recentEvenRate: digits.slice(-50).filter(d => d % 2 === 0).length / Math.max(1, digits.slice(-50).length),
-        olderEvenRate: digits.slice(-100, -50).filter(d => d % 2 === 0).length / Math.max(1, digits.slice(-100, -50).length) },
-      ['A detected distribution change is not itself a directional prediction.'])
+      { recentWindow: recentDigits.length, olderWindow: olderDigits.length, options: stability },
+      ['Large recent-versus-prior drift reduces confidence; a regime change is not itself a directional prediction.'])
   ];
 }
 
@@ -145,17 +155,22 @@ function rankOpportunity(strategies, config) {
     const options = digit.metrics.options || [];
     const best = config.option && config.option !== 'Both'
       ? options.find(item => item.option === config.option) || null
-      : options.reduce((a, b) => !a || b.edge > a.edge ? b : a, null);
+      : options.reduce((a, b) => !a || (b.lower - b.baseline) > (a.lower - a.baseline) ? b : a, null);
     const transition = strategies.find(s => s.family === 'digit-transition');
     const conditional = transition?.metrics.options?.find(x => x.option === best?.option);
+    const stability = strategies.find(s => s.family === 'digit-drift')?.metrics.options?.find(x => x.option === best?.option);
     if (!best) return null;
-    const edge = Math.max(0, best.edge || 0);
-    const conditionalEdge = Math.max(0, (conditional?.observed || 0) - (conditional?.baseline || 0));
-    const score = clamp(50 + edge * 240 + conditionalEdge * 100, 0, 94);
-    return { option: best?.option || config.option, score: Math.round(score),
-      supportingFamilies: [digit.family, ...(conditional?.observations >= 12 ? ['digit-transition'] : [])],
-      evidence: { observedRate: best?.observed, baseline: best?.baseline, conditionalObservations: conditional?.observations || 0 },
-      note: 'Relative digit-pattern setup score; not a calibrated probability.' };
+    const conservativeEdge = Number(best.lower) - Number(best.baseline);
+    const stabilityDrift = Number(stability?.drift || 0);
+    // Rank on the conservative Wilson lower bound, not the noisy point estimate.
+    // Conditional transitions remain diagnostics until independently validated.
+    const score = clamp(50 + Math.max(0, conservativeEdge) * 240 - stabilityDrift * 80, 0, 94);
+    return { option: best.option, score: Math.round(score),
+      supportingFamilies: [digit.family, 'digit-drift', ...(conditional?.observations >= 30 ? ['digit-transition'] : [])],
+      evidence: { observedRate: best.observed, lowerBound: best.lower, baseline: best.baseline,
+        conservativeEdge, stabilityDrift, sampleSize: digit.sampleSize,
+        conditionalObservations: conditional?.observations || 0 },
+      note: 'Relative live-window ranking using a Wilson lower bound and distribution-drift penalty; not a calibrated win probability.' };
   }
   const momentum = strategies.find(s => s.family === 'momentum')?.metrics;
   const reversion = strategies.find(s => s.family === 'mean-reversion')?.metrics;
