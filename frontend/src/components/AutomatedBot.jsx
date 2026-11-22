@@ -69,6 +69,10 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const lastPerformancePauseNoticeRef = useRef(0)
   const shouldAutoScrollRef = useRef(true)
   const accountBalanceRef = useRef(null)
+  // Research runs on its own cadence and never waits for contract settlement.
+  const latestResearchRef = useRef({ updatedAt: 0, candidates: [], marketCount: 0 })
+  const researchInFlightRef = useRef(false)
+  const researchTimerRef = useRef(null)
 
   const addLog = (msg) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`].slice(-2000))
   useEffect(() => { try { localStorage.setItem('mwathe:automated-bot-logs:v1', JSON.stringify(logs)) } catch {} }, [logs])
@@ -243,9 +247,14 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     // Research all supported profiles, but only the exact user-selected profile
     // is eligible to enter the bot's existing validation/execution path.
     const now = Date.now()
-    if (performanceCooldownUntilRef.current > now) return []
+    const freshMarketCount = markets.filter(m => m.lastLiveAt && now - m.lastLiveAt >= 0 && now - m.lastLiveAt <= 5000 && Number(m.liveTicks) >= 1).length
+    if (universe[0]) { setBestMarket(universe[0].marketName); setConfluenceScore(universe[0].score) }
+    if (performanceCooldownUntilRef.current > now) {
+      latestResearchRef.current = { updatedAt: now, candidates: [], marketCount: freshMarketCount }
+      return []
+    }
     const requiredScore = performanceRecoveryUntilRef.current > now ? 92 : consecutiveLossesRef.current >= 3 ? 92 : consecutiveLossesRef.current >= 2 ? 90 : consecutiveLossesRef.current === 1 ? 85 : 0
-    return universe.filter(item => {
+    const eligible = universe.filter(item => {
       const adaptive = getAdaptiveStrategyStatus(item.signal || { ...item.profile, option: item.signal?.option || option, predictedDigit: Number(predictedDigit) }, now)
       return !adaptive.blocked
       && item.profile.tradeType === tradeType
@@ -256,18 +265,33 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       && (marketCooldownUntilRef.current[item.symbol] || 0) <= now
       && Number(item.score || 0) >= requiredScore
     })
+    latestResearchRef.current = { updatedAt: now, candidates: eligible, marketCount: freshMarketCount }
+    return eligible
   }
 
   const runTradeCycle = async () => {
     if (!historyLoadedRef.current) { addLog(' Analyzing unique volatility markets...'); await loadAllHistory() }
-    
+
+    // Independent scanner: evaluates every fresh market/profile once per second,
+    // including while proposal, purchase, settlement, or recovery waits are active.
+    const refreshResearch = async () => {
+      if (!isRunningRef.current || researchInFlightRef.current) return
+      researchInFlightRef.current = true
+      try { await scanMarkets() }
+      catch (error) { addLog(`Parallel market research error: ${error.message}`) }
+      finally { researchInFlightRef.current = false }
+    }
+    await refreshResearch()
+    researchTimerRef.current = setInterval(refreshResearch, 1000)
+
     while (isRunningRef.current) {
       try {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { await new Promise(r => setTimeout(r, 3000)); continue }
         
-        // One fresh all-strategy scan per cycle avoids duplicate work. All profiles
-        // are evaluated together; only the selected profile is returned by scanMarkets.
-        const refreshedQueue = await scanMarkets()
+        // Consume the latest independently refreshed research snapshot. A stale
+        // snapshot is never used for entry; the next parallel pass refreshes it.
+        const researchSnapshot = latestResearchRef.current
+        const refreshedQueue = Date.now() - researchSnapshot.updatedAt <= 2500 ? researchSnapshot.candidates : []
         const currentTarget = refreshedQueue[0]
         if (!currentTarget) {
           if (performanceCooldownUntilRef.current > Date.now()) {
@@ -395,6 +419,8 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         await new Promise(r => setTimeout(r, cooldownMs))
       } catch (error) { if (!isRunningRef.current) break; addLog(`❌ Error: ${error.message}`); await new Promise(r => setTimeout(r, 2000)) }
     }
+    if (researchTimerRef.current) { clearInterval(researchTimerRef.current); researchTimerRef.current = null }
+    researchInFlightRef.current = false
   }
 
   const startBot = () => {
@@ -406,7 +432,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets | Loss-Resistant Entry Gates)'); addLog(`Type: ${tradeType} | Stake: ${stake} | Recovery: adaptive strategy guard + bounded martingale`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); runTradeCycle()
   }
 
-  const stopBot = () => { isRunningRef.current = false; setIsRunning(false); addLog('⏹️ Stopped new entries; any open contract remains monitored until settlement.') }
+  const stopBot = () => { isRunningRef.current = false; setIsRunning(false); if (researchTimerRef.current) { clearInterval(researchTimerRef.current); researchTimerRef.current = null } addLog('⏹️ Stopped new entries and parallel market research; any open contract remains monitored until settlement.') }
   const resetBot = () => { if (isRunningRef.current) return; setLogs([]); try { localStorage.removeItem('mwathe:automated-bot-logs:v1') } catch {}; shouldAutoScrollRef.current = true; setValidationError('') }
   const rules = TIMEFRAME_RULES[tradeType]; const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
 
