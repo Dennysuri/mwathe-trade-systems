@@ -64,7 +64,6 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
   const recoveryLedgerRef = useRef(createRecoveryLedger(1))
   const historyLoadedRef = useRef(false)
   const hasLoggedScanningRef = useRef(false); const reconnectAttemptsRef = useRef(0)
-  const unsupportedNoticeRef = useRef('')
   const pingIntervalRef = useRef(null)
   const consecutiveLossesRef = useRef(0)
   const lastResearchNoticeRef = useRef('')
@@ -383,17 +382,6 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
           if (accountRisk.balanceUnavailable) { addLog('Waiting for account balance confirmation.'); await new Promise(resolve => setTimeout(resolve, 1000)); continue }
           addLog('Risk limit reached; new entries stopped.'); isRunningRef.current = false; setIsRunning(false); break
         }
-        // No contract family may bypass its own forward-outcome model.
-        // Until a family-specific model is implemented and calibrated, fail closed.
-        if (!supportsForwardCalibration(signal)) {
-          const unsupportedKey = `${signal.tradeType}|${signal.subTradeType || ''}|${signal.timeframeUnit}`;
-          if (unsupportedNoticeRef.current !== unsupportedKey) {
-            addLog(`No validated outcome model for ${signal.tradeType} / ${signal.subTradeType || 'default'} yet; trading this type is paused.`);
-            unsupportedNoticeRef.current = unsupportedKey;
-          }
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          continue;
-        }
         lastResearchNoticeRef.current = ''
         setBestMarket(currentTarget.marketName); setConfluenceScore(currentTarget.score)
         
@@ -516,7 +504,6 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
     isRunningRef.current = true; setIsRunning(true); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0
     currentStakeRef.current = parseFloat(stake); recoveryLedgerRef.current = createRecoveryLedger(parseFloat(stake) || 1); hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0
     consecutiveLossesRef.current = 0
-    unsupportedNoticeRef.current = ''
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0)
     addLog(`Bot started — monitoring 13 markets. Selected: ${tradeType}${subTradeType ? ` / ${subTradeType}` : ''}. ${accountType === 'demo' ? 'Demo trades will validate this exact profile.' : 'Real entries require 200 qualifying demo outcomes.'}`); runTradeCycle()
   }
