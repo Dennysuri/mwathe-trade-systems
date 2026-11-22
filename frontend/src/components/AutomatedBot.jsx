@@ -74,6 +74,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
   const latestResearchRef = useRef({ updatedAt: 0, candidates: [], marketCount: 0 })
   const researchInFlightRef = useRef(false)
   const researchTimerRef = useRef(null)
+  const connectionActiveRef = useRef(false)
   const historyLoadInFlightRef = useRef(false)
   const researchConfigRef = useRef({})
   researchConfigRef.current = { tradeType, subTradeType, option, predictedDigit: Number(predictedDigit), duration: durationValue, timeframeUnit }
@@ -88,8 +89,9 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
 
   useEffect(() => {
     if (!token || !accountId) return
+    connectionActiveRef.current = true
     const handleVisibility = () => {
-      if (document.visibilityState === 'visible' && isRunningRef.current) {
+      if (document.visibilityState === 'visible') {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
           reconnectAttemptsRef.current = 0
           connectWS()
@@ -99,6 +101,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
     document.addEventListener('visibilitychange', handleVisibility)
     
     const connectWS = async () => {
+      if (!connectionActiveRef.current) return
       try {
         const response = await fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' } })
         const data = await response.json()
@@ -149,20 +152,28 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
           historyLoadedRef.current = false
           historyLoadInFlightRef.current = false
           if (researchTimerRef.current) { clearInterval(researchTimerRef.current); researchTimerRef.current = null }
-          if (isRunningRef.current) {
+          if (wsRef.current === ws) wsRef.current = null
+          if (connectionActiveRef.current) {
             reconnectAttemptsRef.current++
             const delay = Math.min(3000 * reconnectAttemptsRef.current, 30000)
-            setTimeout(connectWS, delay)
-            if (reconnectAttemptsRef.current >= 20) {
-              addLog('❌ Max reconnection attempts reached. Stopping bot.')
-              setIsRunning(false); isRunningRef.current = false
+            if (reconnectAttemptsRef.current === 20) {
+              addLog('⚠️ Deriv connection is still unavailable; continuing 30-second reconnect attempts. Research and new entries resume automatically when connected.')
             }
+            setTimeout(connectWS, delay)
           }
         }
-      } catch (err) { addLog(`❌ Connection failed`) }
+      } catch (err) {
+        addLog(`❌ Connection failed: ${err.message}`)
+        if (connectionActiveRef.current) {
+          reconnectAttemptsRef.current++
+          const delay = Math.min(3000 * reconnectAttemptsRef.current, 30000)
+          setTimeout(connectWS, delay)
+        }
+      }
     }
     connectWS()
     return () => { 
+      connectionActiveRef.current = false
       if (wsRef.current) wsRef.current.close()
       if (pingIntervalRef.current) clearInterval(pingIntervalRef.current)
       document.removeEventListener('visibilitychange', handleVisibility)
