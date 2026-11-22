@@ -4,8 +4,18 @@ import { beginPaperTrial, advancePaperTrials, getPaperForwardSummary, resetPaper
 
 function quote(askPrice=1,payout=1.9){ return {askPrice,payout,currency:'USD',quotedAt:900}; }
 
+function resetStorage() {
+  const values = new Map();
+  globalThis.localStorage = {
+    getItem: key => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: key => values.delete(key)
+  };
+}
+
 test('paper-forward digit trials require a valid Deriv proposal quote and settle after future ticks', () => {
   resetPaperTrials();
+  resetStorage();
   const signal = { id:'paper-1', symbol:'R_100', tradeType:'Digits', subTradeType:'Over/Under',
     option:'Over', predictedDigit:4, duration:3, timeframeUnit:'Ticks', currency:'USD' };
   assert.equal(beginPaperTrial(signal,{now:1000}),false);
@@ -26,6 +36,7 @@ test('paper-forward digit trials require a valid Deriv proposal quote and settle
 
 test('paper-forward trials reject unsupported families and minute durations', () => {
   resetPaperTrials();
+  resetStorage();
   const q=quote();
   assert.equal(beginPaperTrial({symbol:'R_100',tradeType:'Ups & Downs',subTradeType:'Rise/Fall',
     option:'Rise',duration:5,timeframeUnit:'Ticks'},{quote:q}),false);
@@ -41,6 +52,7 @@ test('Wilson lower bound is conservative and invalid for zero samples', () => {
 
 test('calibration requires at least 200 quote-matched samples and beats worst break-even plus margin', () => {
   resetPaperTrials();
+  resetStorage();
   const signal={symbol:'R_100',tradeType:'Digits',subTradeType:'Even/Odd',option:'Even',
     predictedDigit:4,duration:1,timeframeUnit:'Ticks',currency:'USD'};
   for(let i=0;i<200;i++){
@@ -51,7 +63,7 @@ test('calibration requires at least 200 quote-matched samples and beats worst br
   const summary=getPaperForwardSummary(signal);
   assert.equal(summary.trades,200);
   assert.equal(summary.calibrated,false);
-  assert.equal(summary.targetWinRate,0.7);
+  assert.equal(summary.targetWinRate,0.9);
   assert.equal(summary.targetWinRateMet,false);
   assert.ok(summary.lowerBound!==null);
   assert.ok(summary.maxBreakEvenRate>0.5);
@@ -59,6 +71,7 @@ test('calibration requires at least 200 quote-matched samples and beats worst br
 
 test('strong quote-matched results can clear the conservative calibration threshold', () => {
   resetPaperTrials();
+  resetStorage();
   const signal={symbol:'R_100',tradeType:'Digits',subTradeType:'Even/Odd',option:'Even',
     predictedDigit:4,duration:1,timeframeUnit:'Ticks',currency:'USD'};
   for(let i=0;i<220;i++){
@@ -77,10 +90,12 @@ test('parity calibration profile does not fragment on irrelevant predicted digit
   assert.equal(beginPaperTrial({...first,id:'parity-a'},{quote:quote()}),true);
   assert.equal(beginPaperTrial({...second,id:'parity-b'},{quote:quote()}),false);
   resetPaperTrials();
+  resetStorage();
 });
 
 test('pip size preserves trailing zero precision when deriving the terminal digit', () => {
   resetPaperTrials();
+  resetStorage();
   const signal={id:'precision',symbol:'R_50',tradeType:'Digits',subTradeType:'Even/Odd',
     option:'Even',duration:1,timeframeUnit:'Ticks',currency:'USD'};
   assert.equal(beginPaperTrial(signal,{quote:quote()}),true);
@@ -91,16 +106,17 @@ test('pip size preserves trailing zero precision when deriving the terminal digi
 });
 
 
-test('70 percent observed win-rate target is enforced alongside quote break-even confidence', () => {
+test('90 percent observed win-rate target is enforced alongside quote break-even confidence', () => {
   resetPaperTrials();
+  resetStorage();
   const signal={symbol:'R_100',tradeType:'Digits',subTradeType:'Even/Odd',option:'Even',
     predictedDigit:4,duration:1,timeframeUnit:'Ticks',currency:'USD'};
   for(let i=0;i<200;i++){
     assert.equal(beginPaperTrial({...signal,id:'target-'+i},{quote:quote(1,1.8)}),true);
-    advancePaperTrials('R_100',i<140?123.42:123.41);
+    advancePaperTrials('R_100',i<180?123.42:123.41);
   }
   const summary=getPaperForwardSummary(signal);
-  assert.equal(summary.targetWinRate,0.7);
+  assert.equal(summary.targetWinRate,0.9);
   assert.equal(summary.targetWinRateMet,true);
   assert.equal(summary.calibrated,true);
 });
