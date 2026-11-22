@@ -510,7 +510,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         setCurrentPL(sessionPLRef.current)
         addLog(isWin
           ? `✅ WON +${profit.toFixed(2)} | Contract ${contractResult.contract_id}.`
-          : `❌ LOST -${Math.abs(profit).toFixed(2)} | Contract ${contractResult.contract_id}; cumulative deficit ${recoveryLedgerRef.current.deficit.toFixed(2)}.`)
+          : `❌ LOST -${Math.abs(profit).toFixed(2)} | Contract ${contractResult.contract_id}.`)
         addLog(`📊 P/L: ${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
         const quotedAsk = Number(proposalRes.proposal.ask_price)
         const quotedPayout = Number(proposalRes.proposal.payout)
@@ -544,7 +544,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
     currentStakeRef.current = parseFloat(stake); recoveryLedgerRef.current = createRecoveryLedger(parseFloat(stake) || 1); hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0
     consecutiveLossesRef.current = 0
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0)
-    addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets | Live-Only Predictive Gates | Cumulative Recovery)'); addLog(`Account mode: ${accountType === 'demo' ? 'DEMO — live validation orders enabled' : 'REAL — 90% profile calibration required before digit orders'}`); addLog(`Type: ${tradeType} | Base stake: ${stake} | Martingale: ${martingaleFactor}x with cumulative deficit recovery and 3x hard cap`); addLog(`Target: ${targetProfit} | Stop: ${stopLoss}`); runTradeCycle()
+    addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets | Forward-Validated Predictive Gates | Cumulative Recovery)'); addLog(`Account mode: ${accountType === 'demo' ? 'DEMO — forward calibration required before orders' : 'REAL — 90% profile calibration required before digit orders'}`); addLog(`Type: ${tradeType} | Base stake: ${stake} | Martingale: ${martingaleFactor}x with cumulative deficit recovery and 3x hard cap`); addLog(`Target: ${targetProfit} | Stop: ${stopLoss}`); runTradeCycle()
   }
 
   const stopBot = () => { isRunningRef.current = false; setIsRunning(false); addLog('⏹️ Stopped new entries; all 13-market live research continues, and any open contract remains monitored until settlement.') }
