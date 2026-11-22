@@ -6,6 +6,19 @@ import { rankLiveStrategyUniverse, findSelectedStrategyOpportunity } from '../se
 import { beginPaperTrial, advancePaperTrials, getPaperForwardSummary } from '../services/paperForwardCalibration'
 import { createMarketWindow, seedMarketWindow, appendLiveTick, isLiveReady } from '../services/liveMarketWindow'
 
+const copyLogFeed = async (entries) => {
+  const value = (entries || []).join('\n');
+  try { if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(value); return true; } } catch {}
+  try {
+    const textarea = document.createElement('textarea'); textarea.value = value;
+    textarea.setAttribute('readonly', ''); textarea.style.position = 'fixed';
+    textarea.style.opacity = '0'; textarea.style.pointerEvents = 'none';
+    document.body.appendChild(textarea); textarea.focus(); textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+    const copied = document.execCommand('copy'); textarea.remove(); return copied;
+  } catch { return false; }
+};
+
 const SUB_TRADE_TYPES = {
   Accumulators: [], Vanillas: ['Call/Put'], Turbos: ['Turbos'], Multipliers: ['Multipliers'],
   'Ups & Downs': ['Rise/Fall', 'Higher/Lower'], 'Touch & No Touch': ['Touch/No Touch'],
@@ -73,7 +86,7 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
   const [predictedDigit,setPredictedDigit]=useState('5'),[analysisDuration,setAnalysisDuration]=useState(10),[lastDigits,setLastDigits]=useState(300)
   const [timeframeUnit,setTimeframeUnit]=useState('Ticks'),[durationValue,setDurationValue]=useState(5),[validationError,setValidationError]=useState('')
   const wsRef=useRef(null),windowsRef=useRef({}),pricesRef=useRef({}),lastTickAtRef=useRef({}),timerRef=useRef(null),activeRef=useRef(false),scanInFlightRef=useRef(false),lastEmittedSignalRef=useRef({}),cycleStartedAtRef=useRef(Date.now()),configRef=useRef(null),proposalReqIdRef=useRef(920000),paperQuoteRequestsRef=useRef(new Map()),paperQuoteInFlightRef=useRef(new Set())
-  const addLog=msg=>setAiLogs(prev=>[...prev.slice(-8),`[${new Date().toLocaleTimeString()}] ${msg}`])
+  const addLog=msg=>setAiLogs(prev=>[...prev.slice(-1999),`[${new Date().toLocaleTimeString()}] ${msg}`])
   configRef.current={tradeType,subTradeType,option,predictedDigit:Number(predictedDigit),duration:durationValue,timeframeUnit,analysisDuration,lastDigits,currency}
   useEffect(()=>{if(SUB_TRADE_TYPES[tradeType]?.length)setSubTradeType(SUB_TRADE_TYPES[tradeType][0]);else setSubTradeType('')},[tradeType])
   useEffect(()=>{if(subTradeType&&OPTIONS[subTradeType])setOption(OPTIONS[subTradeType][0])},[subTradeType])
@@ -164,7 +177,7 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
               windowsRef.current[symbol]=window
               pricesRef.current[symbol]=window.values
               lastTickAtRef.current[symbol]=window.lastLiveAt
-              advancePaperTrials(symbol,msg.tick.quote).forEach(row=>{
+              advancePaperTrials(symbol,{quote:msg.tick.quote,pipSize:msg.tick.pip_size}).forEach(row=>{
                 const summary=getPaperForwardSummary({symbol:row.symbol,tradeType:row.tradeType,subTradeType:row.subTradeType,option:row.option,predictedDigit:row.predictedDigit,barrier:row.barrier,duration:row.duration,timeframeUnit:row.timeframeUnit,currency:row.currency})
                 addLog(`Paper result: ${row.symbol} | ${row.option} | ${row.won?'WIN':'LOSS'} | sample ${summary.trades} | calibrated ${summary.calibrated?'YES':'NO'}`)
               })
@@ -235,7 +248,7 @@ export default function AnalysisTool({isAnalyzing,setIsAnalyzing,progress,setPro
     </div>
     {(isAnalyzing||progress>=100)&&<div className="rounded-xl p-3 border bg-mwathe-darkgray/50 border-mwathe-skyblue/30"><div className="flex items-center justify-between mb-2"><h3 className="text-xs font-bold flex items-center gap-1 text-mwathe-skyblue">{progress>=100?<><CheckCircle2 size={12}/> Scan complete</>:<><Activity size={12} className="animate-pulse"/> Scanning live markets...</>}</h3><span className="text-[10px] font-bold">{Math.round(progress)}%</span></div><div className="w-full bg-gray-800 h-2 rounded-full overflow-hidden"><motion.div className="h-full bg-gradient-to-r from-mwathe-orange to-mwathe-green" initial={{width:0}} animate={{width:`${progress}%`}}/></div></div>}
     {finalSignal&&<div className="rounded-xl p-3 border border-amber-500/40 bg-amber-500/10"><p className="font-bold text-sm">{finalSignal.market}</p><p className="text-xs text-mwathe-gray">{finalSignal.marketCount} live markets · {finalSignal.tradeType}{finalSignal.subTradeType ? ' / '+finalSignal.subTradeType : ''} · {finalSignal.sampleSize} observations · Entry: {finalSignal.entryPoint??'—'} · Contract: {finalSignal.contractDuration}{finalSignal.score ? ` · Thamira score ${finalSignal.score}/94` : ''}</p><p className="text-[10px] text-amber-300 mt-1">{finalSignal.detail}</p></div>}
-    <div className="bg-black rounded-xl border border-gray-800 overflow-hidden h-32 flex flex-col"><div className="bg-mwathe-darkgray px-3 py-1.5 flex items-center gap-2 border-b border-gray-800"><Zap size={12} className="text-mwathe-orange"/><span className="text-[10px] text-mwathe-orange font-bold">SYSTEM LOG</span></div><div className="log-selectable flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5">{aiLogs.length===0?<p className="text-gray-600">Waiting for live analysis...</p>:aiLogs.map((log,i)=><p key={i} className="text-mwathe-skyblue">{log}</p>)}</div></div>
+    <div className="bg-black rounded-xl border border-gray-800 overflow-hidden h-32 flex flex-col"><div className="bg-mwathe-darkgray px-3 py-1.5 flex items-center justify-between gap-2 border-b border-gray-800"><div className="flex items-center gap-2"><Zap size={12} className="text-mwathe-orange"/><span className="text-[10px] text-mwathe-orange font-bold">SYSTEM LOG</span></div><button type="button" onClick={async()=>{const copied=await copyLogFeed(aiLogs);addLog(copied?"📋 Complete log feed copied to clipboard.":"⚠️ Clipboard unavailable; try long-pressing a log entry.")}} className="text-[10px] font-semibold text-sky-300 px-2 py-1 rounded border border-gray-700 active:bg-gray-700">Copy all</button></div><div className="log-selectable flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5">{aiLogs.length===0?<p className="text-gray-600">Waiting for live analysis...</p>:aiLogs.map((log,i)=><p key={i} className="text-mwathe-skyblue">{log}</p>)}</div></div>
     <div className="grid grid-cols-3 gap-2 pt-2"><button onClick={handleStart} disabled={isAnalyzing} className={`py-3 rounded-xl font-bold flex items-center justify-center gap-2 ${isAnalyzing?'bg-gray-800 text-gray-500':'bg-mwathe-green text-black'}`}><Play size={16}/> Start</button><button onClick={handleStop} disabled={!isAnalyzing} className={`py-3 rounded-xl font-bold flex items-center justify-center gap-2 ${!isAnalyzing?'bg-gray-800 text-gray-500':'bg-red-500 text-white'}`}><Square size={16}/> Stop</button><button onClick={handleReset} disabled={isAnalyzing} className={`py-3 rounded-xl font-bold flex items-center justify-center gap-2 ${isAnalyzing?'bg-gray-800 text-gray-500':'bg-gray-700 text-white'}`}><Activity size={16}/> Reset</button></div>
   </div>
 }
