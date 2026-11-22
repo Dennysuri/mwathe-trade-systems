@@ -53,6 +53,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   const [currentStake, setCurrentStake] = useState(1.00)
   const [bestMarket, setBestMarket] = useState('Scanning...')
   const [confluenceScore, setConfluenceScore] = useState(0)
+  const [researchMarketCount, setResearchMarketCount] = useState(0)
   
   const logRef = useRef(null); const wsRef = useRef(null); const isRunningRef = useRef(false); const reqIdRef = useRef(1)
   const tickDataRef = useRef({}); const historySeededRef = useRef({}); const pendingLiveTicksRef = useRef({}); const lastLiveAtRef = useRef({}); const liveTickCountRef = useRef({}); const currentStakeRef = useRef(1.00); const sessionPLRef = useRef(0.00)
@@ -248,6 +249,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     // is eligible to enter the bot's existing validation/execution path.
     const now = Date.now()
     const freshMarketCount = markets.filter(m => m.lastLiveAt && now - m.lastLiveAt >= 0 && now - m.lastLiveAt <= 5000 && Number(m.liveTicks) >= 1).length
+    setResearchMarketCount(freshMarketCount)
     if (universe[0]) { setBestMarket(universe[0].marketName); setConfluenceScore(universe[0].score) }
     if (performanceCooldownUntilRef.current > now) {
       latestResearchRef.current = { updatedAt: now, candidates: [], marketCount: freshMarketCount }
@@ -467,6 +469,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       </div>
       <div className="bg-gray-900 rounded-lg p-2 border border-green-500/30 mb-2 flex-shrink-0">
   <h3 className="text-white font-bold text-xs mb-1 flex items-center gap-1"><TrendingUp size={12} className="text-green-500" /> Performance</h3>
+  <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Live research:</span><span className="text-[10px] text-green-400 font-bold">{researchMarketCount}/13 markets</span></div>
   <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Best Market:</span><span className="text-[10px] text-orange-400 font-bold">{bestMarket}</span></div>
   <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Confluence Score:</span><span className={`text-[10px] font-bold ${confluenceScore >= 70 ? 'text-green-400' : 'text-orange-400'}`}>{confluenceScore.toFixed(0)}%</span></div>
   <div className="mb-1 grid grid-cols-3 gap-1 text-center text-[9px]">
