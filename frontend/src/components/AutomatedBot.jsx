@@ -396,11 +396,9 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
           await new Promise(resolve => setTimeout(resolve, 1000));
           continue;
         }
-        const tradeDirection = signal.option
         lastResearchNoticeRef.current = ''
         setBestMarket(currentTarget.marketName); setConfluenceScore(currentTarget.score)
         
-        const executionStartedAt = performance.now()
         // Reprice a bounded number of times because payout can vary with stake.
         // Do not mutate the live stake until one quote agrees with its recovery size.
         let requestedStake = roundStake(currentStakeRef.current)
