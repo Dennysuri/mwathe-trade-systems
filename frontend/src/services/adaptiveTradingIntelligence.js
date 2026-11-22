@@ -73,9 +73,9 @@ export function getAdaptiveStrategyStatus(signal = {}, now = Date.now()) {
   const difficulty = getContractDifficulty(signal);
   return { key, trades, wins, losses: trades - wins, winRate, netProfit,
     consecutiveLosses, blocked: blockedUntil > now, blockedUntil, difficulty,
-    targetWinRate: 0.8,
-    winRateTargetMet: trades >= 100 && winRate >= 0.8,
-    status: trades < 100 ? 'building-evidence' : winRate >= 0.8 ? 'target-met' : 'below-target' };
+    targetWinRate: 0.7,
+    winRateTargetMet: trades >= 100 && winRate >= 0.7,
+    status: trades < 100 ? 'building-evidence' : winRate >= 0.7 ? 'target-met' : 'below-target' };
 }
 
 export function evaluateAccountRisk({ balance, sessionPL = 0, targetProfit, stopLoss, nextStake = 0 } = {}) {

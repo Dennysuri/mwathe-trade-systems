@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mwathe-app-shell-v1';
+const CACHE_NAME = 'mwathe-app-shell-v2';
 const APP_SHELL = ['/', '/manifest.webmanifest', '/pwa-icon.svg'];
 
 self.addEventListener('install', (event) => {
@@ -43,16 +43,17 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cache only versioned/static files. Do not cache user-specific or trading data.
+  // Network-first for assets so an installed PWA cannot keep serving an older UI bundle.
+  // Fall back to the current cache only while offline.
   if (/\.(?:js|css|svg|png|webp|ico|woff2?)$/i.test(url.pathname)) {
     event.respondWith(
-      caches.match(request).then((cached) => cached || fetch(request).then((response) => {
+      fetch(request).then((response) => {
         if (response.ok && response.type === 'basic') {
           const copy = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
         }
         return response;
-      }))
+      }).catch(async () => (await caches.match(request)) || Response.error())
     );
   }
 });

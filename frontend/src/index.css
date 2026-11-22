@@ -29,4 +29,11 @@ html, body, #root {
 }
 .log-selectable {
   touch-action: pan-y;
+  cursor: text;
+  -webkit-tap-highlight-color: transparent;
+}
+.log-selectable p {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+  -webkit-touch-callout: default;
 }

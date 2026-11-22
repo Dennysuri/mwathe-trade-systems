@@ -9,6 +9,19 @@ import { evaluateAccountRisk, getAdaptiveStrategyStatus, getContractDifficulty, 
 import { advancePaperTrials, beginPaperTrial, getPaperForwardSummary } from '../services/paperForwardCalibration'
 import { appendTickBuffer, seedTickBuffer } from '../services/marketTickBuffer'
 
+const copyLogFeed = async (entries) => {
+  const value = (entries || []).join('\n');
+  try { if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(value); return true; } } catch {}
+  try {
+    const textarea = document.createElement('textarea'); textarea.value = value;
+    textarea.setAttribute('readonly', ''); textarea.style.position = 'fixed';
+    textarea.style.opacity = '0'; textarea.style.pointerEvents = 'none';
+    document.body.appendChild(textarea); textarea.focus(); textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+    const copied = document.execCommand('copy'); textarea.remove(); return copied;
+  } catch { return false; }
+};
+
 const UNIQUE_MARKETS = VOLATILITY_MARKETS
 const TRADE_TYPES = ['Digits', 'Ups & Downs', 'Touch & No Touch', 'Multipliers', 'Accumulators', 'Vanillas', 'Turbos']
 const SUB_TRADE_TYPES = { 'Digits': ['Over/Under', 'Matches/Differs', 'Even/Odd'], 'Ups & Downs': ['Rise/Fall', 'Higher/Lower'], 'Touch & No Touch': ['Touch/No Touch'], 'Multipliers': ['Multipliers'], 'Accumulators': [], 'Vanillas': ['Call/Put'], 'Turbos': ['Turbos'] }
@@ -305,7 +318,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
             })
             if (started) {
               const difficulty = getContractDifficulty(signal)
-              addLog(`🧪 Calibration-only trial started for ${signal.subTradeType}/${signal.option} on ${signal.symbol}; theoretical baseline ${difficulty.theoreticalWinChance === null ? 'n/a' : (difficulty.theoreticalWinChance * 100).toFixed(1) + '%'}; ${calibration.trades}/200 settled samples, no purchase sent.`)
+              addLog(`🧪 Calibration-only trial started for ${signal.subTradeType}/${signal.option} on ${signal.symbol}; theoretical baseline ${difficulty.theoreticalWinChance === null ? 'n/a' : (difficulty.theoreticalWinChance * 100).toFixed(1) + '%'}; exact profile barrier ${signal.predictedDigit ?? 'n/a'}, duration ${signal.duration} ${signal.timeframeUnit}; ${calibration.wins}/${calibration.trades} wins, ${calibration.trades}/200 settled samples, 70% observed-win target plus quote break-even confidence required; no purchase sent.`)
             } else if (calibration.pending === 0) {
               addLog('🛡️ No valid quote-matched calibration trial could be started; refusing this digit entry and retrying after a fresh quote.')
               await new Promise(resolve => setTimeout(resolve, 1500))
@@ -344,7 +357,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const profit = parseFloat(contractResult.profit || 0); const isWin = profit > 0
         const outcomeStats = recordContractOutcome(signal, { profit, stake: currentStakeRef.current, contractId: contractResult.contract_id, bot: 'Automated Bot' })
         const adaptiveStats = recordAdaptiveOutcome(signal, { profit, stake: currentStakeRef.current, bot: 'Automated Bot' })
-        addLog(`🧠 Strategy profile: ${adaptiveStats.consecutiveLosses} consecutive losses across markets; ${adaptiveStats.trades} recent outcomes; win rate ${adaptiveStats.winRate === null ? 'n/a' : (adaptiveStats.winRate * 100).toFixed(1) + '%'} (80% target).`)
+        addLog(`🧠 Strategy profile: ${adaptiveStats.consecutiveLosses} consecutive losses across markets; ${adaptiveStats.trades} recent outcomes; win rate ${adaptiveStats.winRate === null ? 'n/a' : (adaptiveStats.winRate * 100).toFixed(1) + '%'} (70% target).`)
         if (outcomeStats) addLog(`Thamira history: ${outcomeStats.trades} settled for this exact setup; win rate ${outcomeStats.winRate === null ? 'n/a' : (outcomeStats.winRate * 100).toFixed(1) + '%'}.`)
         totalTradesRef.current += 1; sessionPLRef.current += profit
         recentOutcomesRef.current = [...recentOutcomesRef.current, profit].slice(-8)
@@ -452,7 +465,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         <button onClick={resetBot} disabled={isRunning} className={`py-2 rounded-lg font-bold flex items-center justify-center gap-1 text-xs ${isRunning?'bg-gray-900 text-gray-600':'bg-gray-800 border border-gray-700 text-orange-400'}`}><RefreshCw size={14} /> Reset</button>
       </div>
       <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col">
-        <div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">EXECUTION LOG</span></div>
+        <div className="bg-gray-900 px-2 py-1 flex items-center justify-between gap-2 border-b border-gray-800 flex-shrink-0"><div className="flex items-center gap-1"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">EXECUTION LOG</span></div><button type="button" onClick={async()=>{const copied=await copyLogFeed(logs);addLog(copied?"📋 Complete log feed copied to clipboard.":"⚠️ Clipboard unavailable; try long-pressing a log entry.")}} className="text-[10px] font-semibold text-sky-300 px-2 py-1 rounded border border-gray-700 active:bg-gray-700">Copy all</button></div>
         <div ref={logRef} onScroll={() => { const el = logRef.current; if (el) shouldAutoScrollRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60 }} className="log-selectable flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5" style={{scrollBehavior: 'auto'}}>
           {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('TARGET') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') || log.includes('Error') || log.includes('STOP') ? 'text-red-500' : log.includes('🚀') || log.includes('') || log.includes('🔬') || log.includes('⏳') || log.includes('') || log.includes('⚠️') ? 'text-sky-400' : log.includes('━━') ? 'text-gray-600' : 'text-gray-400'}>{log}</p>)}
         </div>
