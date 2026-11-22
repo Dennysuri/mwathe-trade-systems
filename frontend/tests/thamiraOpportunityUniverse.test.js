@@ -27,7 +27,7 @@ test('user-selected duration is included without collapsing the duration search 
 test('live scanner retains a ranked watch candidate without qualifying it for execution', async () => {
   const prices = Array.from({length: 300}, (_, i) => 100 + Math.sin(i / 4) * 0.03 + i * 0.0008);
   const result = await rankLiveMarketOpportunities([{
-    symbol: 'R_100', name: 'Volatility 100 Index', prices,
+    symbol: 'R_100', name: 'Volatility 100 Index', livePrices: prices,
     liveTicks: 3, lastLiveAt: 10000
   }], { tradeType: 'Ups & Downs', subTradeType: 'Rise/Fall', option: 'Both', duration: 1, timeframeUnit: 'Ticks' }, {
     now: 10000, maxAgeMs: 5000, minLiveTicks: 1
