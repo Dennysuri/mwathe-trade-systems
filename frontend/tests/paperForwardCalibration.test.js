@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { beginPaperTrial, advancePaperTrials, canExecuteDemoValidationTrade, getPaperForwardSummary, resetPaperTrials, wilsonLowerBound } from '../src/services/paperForwardCalibration.js';
+import { beginPaperTrial, advancePaperTrials, canExecuteDemoValidationTrade, getPaperForwardSummary, resetPaperTrials, wilsonLowerBound, supportsForwardCalibration } from '../src/services/paperForwardCalibration.js';
 
 function quote(askPrice=1,payout=1.9){ return {askPrice,payout,currency:'USD',quotedAt:900}; }
 
@@ -147,4 +147,24 @@ test('recent regime deterioration disables an otherwise strong lifetime calibrat
   assert.equal(summary.recentTrades,50);
   assert.equal(summary.recentWinRate,0.8);
   assert.equal(summary.calibrated,false);
+});
+
+
+test('only explicitly modelled Digits tick profiles are eligible for the current calibration engine', () => {
+  assert.equal(supportsForwardCalibration({tradeType:'Digits',subTradeType:'Over/Under',timeframeUnit:'Ticks'}), true);
+  assert.equal(supportsForwardCalibration({tradeType:'Digits',subTradeType:'Matches/Differs',timeframeUnit:'Ticks'}), true);
+  assert.equal(supportsForwardCalibration({tradeType:'Digits',subTradeType:'Even/Odd',timeframeUnit:'Ticks'}), true);
+  for (const [tradeType, subTradeType, timeframeUnit] of [
+    ['Ups & Downs','Rise/Fall','Ticks'],
+    ['Ups & Downs','Higher/Lower','Minutes'],
+    ['Touch & No Touch','Touch/No Touch','Ticks'],
+    ['Multipliers','Multipliers','Auto'],
+    ['Accumulators','','Ticks'],
+    ['Vanillas','Call/Put','Minutes'],
+    ['Turbos','Turbos','Ticks'],
+    ['Digits','Over/Under','Minutes']
+  ]) {
+    assert.equal(supportsForwardCalibration({tradeType,subTradeType,timeframeUnit}), false,
+      `${tradeType} / ${subTradeType} must not bypass the family-specific validation gate`);
+  }
 });
