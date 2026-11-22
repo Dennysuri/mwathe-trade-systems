@@ -87,8 +87,30 @@ export function buildStrategyProfiles(selectedConfig = {}) {
  */
 export async function rankLiveStrategyUniverse(markets, selectedConfig = {}, options = {}) {
   const profiles = buildStrategyProfiles(selectedConfig);
+  const cycleStartedAt = Date.now();
+  const diagnostics = new Map((markets || []).map(m => [m.symbol, {
+    symbol: m.symbol, marketName: m.name || m.symbol, status: 'WAITING_FOR_EVALUATION',
+    liveTicks: Number(m.liveTicks || 0), liveBufferSize: (m.livePrices || []).length,
+    lastLiveAt: Number(m.lastLiveAt || 0), profileEvaluations: 0, candidateCount: 0,
+    evaluationStartedAt: 0, evaluationCompletedAt: 0, score: null
+  }]));
   const groups = await Promise.all(profiles.map(async profile => {
-    const ranked = await rankLiveMarketOpportunities(markets, profile, options);
+    const ranked = await rankLiveMarketOpportunities(markets, profile, {
+      ...options,
+      onMarketEvaluation: result => {
+        const row = diagnostics.get(result.symbol);
+        if (!row) return;
+        row.profileEvaluations += 1;
+        row.status = result.status;
+        row.evaluationStartedAt = row.evaluationStartedAt
+          ? Math.min(row.evaluationStartedAt, result.evaluationStartedAt) : result.evaluationStartedAt;
+        row.evaluationCompletedAt = Math.max(row.evaluationCompletedAt, result.evaluationCompletedAt);
+        if (result.status === 'QUALIFIED_CANDIDATE' || result.status === 'WATCH_CANDIDATE') row.candidateCount += 1;
+        if (Number.isFinite(result.score)) row.score = Math.max(row.score ?? -Infinity, result.score);
+        row.liveTicks = result.liveTicks; row.liveBufferSize = result.liveBufferSize;
+        row.lastLiveAt = result.lastLiveAt;
+      }
+    });
     return ranked.map(item => ({
       ...item,
       profile: {
@@ -100,8 +122,25 @@ export async function rankLiveStrategyUniverse(markets, selectedConfig = {}, opt
       }
     }));
   }));
-  return groups.flat().sort((a, b) =>
+  const ranked = groups.flat().sort((a, b) =>
     (b.report?.candidate?.score ?? b.score) - (a.report?.candidate?.score ?? a.score));
+  const cycleCompletedAt = Date.now();
+  const rows = [...diagnostics.values()].map(row => ({
+    ...row, profileCount: profiles.length,
+    analysisComplete: row.profileEvaluations === profiles.length,
+    cycleStartedAt, cycleCompletedAt, cycleDurationMs: cycleCompletedAt - cycleStartedAt
+  }));
+  options.onMarketDiagnostics?.(rows);
+  options.onResearchCycle?.({
+    cycleStartedAt, cycleCompletedAt, cycleDurationMs: cycleCompletedAt - cycleStartedAt,
+    expectedMarkets: (markets || []).length,
+    analysedMarkets: rows.filter(row => row.analysisComplete).length,
+    profileCount: profiles.length,
+    totalMarketProfileEvaluations: rows.reduce((sum, row) => sum + row.profileEvaluations, 0),
+    rankingCount: ranked.length,
+    best: ranked[0] ? { symbol: ranked[0].symbol, marketName: ranked[0].marketName, score: ranked[0].score } : null
+  });
+  return ranked;
 }
 
 export function findSelectedStrategyOpportunity(ranked, selectedConfig = {}) {
