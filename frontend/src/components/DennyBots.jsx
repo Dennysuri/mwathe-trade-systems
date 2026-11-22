@@ -4,6 +4,19 @@ import { buildProposal, isFreshSignal, boundedNextStake, VOLATILITY_MARKETS } fr
 import { validateEntryWindow } from '../services/strategyIntelligence'
 import { recordContractOutcome, getContractPerformance } from '../services/contractOutcomeIntelligence'
 
+const copyLogFeed = async (entries) => {
+  const value = (entries || []).join('\n');
+  try { if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(value); return true; } } catch {}
+  try {
+    const textarea = document.createElement('textarea'); textarea.value = value;
+    textarea.setAttribute('readonly', ''); textarea.style.position = 'fixed';
+    textarea.style.opacity = '0'; textarea.style.pointerEvents = 'none';
+    document.body.appendChild(textarea); textarea.focus(); textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+    const copied = document.execCommand('copy'); textarea.remove(); return copied;
+  } catch { return false; }
+};
+
 const VOLATILITY_INDICES = VOLATILITY_MARKETS.map(([name]) => name)
 const SYMBOL_MAP = Object.fromEntries(VOLATILITY_MARKETS)
 const TRADE_TYPES = ['Multipliers', 'Ups & Downs', 'Touch & No Touch', 'Digits', 'Accumulators', 'Vanillas', 'Turbos']
@@ -414,7 +427,7 @@ export default function DennyBots({ token, accountId, currency = 'USD', onBalanc
         <button onClick={resetBot} disabled={isRunning} className={`py-2 rounded-lg font-bold text-xs ${isRunning?'bg-gray-900 text-gray-600':'bg-gray-800 border border-gray-700 text-orange-400'}`}><RefreshCw size={14}/> Reset</button>
       </div>
       <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col">
-        <div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">ANALYSIS LOG</span></div>
+        <div className="bg-gray-900 px-2 py-1 flex items-center justify-between gap-2 border-b border-gray-800 flex-shrink-0"><div className="flex items-center gap-1"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">ANALYSIS LOG</span></div><button type="button" onClick={async()=>{const copied=await copyLogFeed(logs);addLog(copied?"📋 Complete log feed copied to clipboard.":"⚠️ Clipboard unavailable; try long-pressing a log entry.")}} className="text-[10px] font-semibold text-sky-300 px-2 py-1 rounded border border-gray-700 active:bg-gray-700">Copy all</button></div>
         <div ref={logRef} onScroll={() => { const el=logRef.current; if(el) shouldAutoScrollRef.current=el.scrollHeight-el.scrollTop-el.clientHeight<60 }} className="log-selectable flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5" style={{scrollBehavior: 'smooth'}}>
           {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('TARGET') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') || log.includes('Error') ? 'text-red-500' : log.includes('🚀') || log.includes('📊') || log.includes('') ? 'text-sky-400' : log.includes('⏹️') || log.includes('⚠️') ? 'text-orange-400' : 'text-gray-400'}>{log}</p>)}
         </div>
