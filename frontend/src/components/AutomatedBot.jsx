@@ -67,6 +67,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
   const pingIntervalRef = useRef(null)
   const consecutiveLossesRef = useRef(0)
   const lastResearchNoticeRef = useRef('')
+  const lastCalibrationNoticeRef = useRef('')
   const shouldAutoScrollRef = useRef(true)
   const accountBalanceRef = useRef(null)
   // Research runs on its own cadence and never waits for contract settlement.
@@ -429,13 +430,15 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
           const forwardGate = evaluateForwardCalibrationGate(calibration, proposalRes.proposal);
           if (!forwardGate.allowed) {
             const noticeKey = `forward:${calibration.key}:${forwardGate.reason}`;
-            if (lastResearchNoticeRef.current !== noticeKey) {
+            if (lastCalibrationNoticeRef.current !== noticeKey) {
               addLog(`Waiting for validation: ${signal.tradeType} / ${signal.subTradeType || 'default'} needs 200 demo-settled outcomes, 90% overall and recent wins, and positive quote-adjusted confidence.`);
-              lastResearchNoticeRef.current = noticeKey;
+              lastCalibrationNoticeRef.current = noticeKey;
             }
             await new Promise(resolve => setTimeout(resolve, 1000));
             continue;
           }
+        } else {
+          lastCalibrationNoticeRef.current = '';
         }
         const marketSnapshot = {
           prices: liveTickDataRef.current[currentTarget.symbol] || [],
@@ -504,6 +507,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
     isRunningRef.current = true; setIsRunning(true); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0
     currentStakeRef.current = parseFloat(stake); recoveryLedgerRef.current = createRecoveryLedger(parseFloat(stake) || 1); hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0
     consecutiveLossesRef.current = 0
+    lastCalibrationNoticeRef.current = ''
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0)
     addLog(`Bot started — monitoring 13 markets. Selected: ${tradeType}${subTradeType ? ` / ${subTradeType}` : ''}. ${accountType === 'demo' ? 'Demo trades will validate this exact profile.' : 'Real entries require 200 qualifying demo outcomes.'}`); runTradeCycle()
   }
