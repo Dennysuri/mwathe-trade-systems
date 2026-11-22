@@ -153,6 +153,11 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
           liveTickDataRef.current = {}
           liveTickCountRef.current = {}
           lastLiveAtRef.current = {}
+          // A closed Deriv socket loses every tick subscription. Force all
+          // market history/tick subscriptions to be recreated after reconnect.
+          historySeededRef.current = {}
+          pendingLiveTicksRef.current = {}
+          tickDataRef.current = {}
           if (researchTimerRef.current) { clearInterval(researchTimerRef.current); researchTimerRef.current = null }
           if (wsRef.current === ws) wsRef.current = null
           if (connectionActiveRef.current) {
