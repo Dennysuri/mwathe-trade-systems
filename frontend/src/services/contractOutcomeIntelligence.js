@@ -45,7 +45,7 @@ export function contractProfile(signal = {}) {
     signal.subTradeType || 'default',
     signal.option || 'unknown-option',
     digitTargetApplies ? (signal.predictedDigit ?? 'na') : 'na',
-    barrierApplies ? (signal.barrier ?? signal.predictedDigit ?? 'na') : 'na',
+    barrierApplies ? (signal.barrierMode === 'volatility-multiple' ? `volatility-multiple:${signal.barrierMultiple ?? 'na'}` : (signal.barrier ?? signal.predictedDigit ?? 'na')) : 'na',
     signal.duration ?? 'na',
     signal.timeframeUnit || 'na'
   ].join('|');
