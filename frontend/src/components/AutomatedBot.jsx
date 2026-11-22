@@ -492,10 +492,9 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         const contractResult = await monitorContract(buyRes.buy.contract_id); if (!contractResult) break
         const profit = parseFloat(contractResult.profit || 0); const isWin = profit > 0
         if (signal.tradeType === 'Digits' && signal.timeframeUnit === 'Ticks') {
-          const settledCalibration = recordSettledContractOutcome(signal, {
+          recordSettledContractOutcome(signal, {
             quote: proposalRes.proposal, profit, contractId: contractResult.contract_id
           })
-          if (settledCalibration) 
         }
         recordContractOutcome(signal, { profit, stake: currentStakeRef.current, contractId: contractResult.contract_id, bot: 'Automated Bot' })
         recordAdaptiveOutcome(signal, { profit, stake: currentStakeRef.current, bot: 'Automated Bot' })
