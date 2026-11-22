@@ -65,6 +65,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
   const recoveryLedgerRef = useRef(createRecoveryLedger(1))
   const historyLoadedRef = useRef(false)
   const hasLoggedScanningRef = useRef(false); const reconnectAttemptsRef = useRef(0)
+  const unsupportedNoticeRef = useRef('')
   const pingIntervalRef = useRef(null)
   const consecutiveLossesRef = useRef(0)
   const lastResearchNoticeRef = useRef('')
@@ -139,9 +140,8 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
                 lastLiveAtRef.current[symbol] = Date.now()
                 liveTickCountRef.current[symbol] = (liveTickCountRef.current[symbol] || 0) + 1
               }
-              const paperSettled = advancePaperTrials(symbol, { quote: msg.tick.quote, pipSize: msg.tick.pip_size })
-              paperSettled.forEach(row => addLog(`🧪 Forward sample settled: ${row.won ? 'WIN' : 'LOSS'} on ${symbol}; ${row.option} after ${row.duration} ticks.`))
-              if (paperSettled.length && isRunningRef.current) addLog('🧪 Forward calibration updated; the next scan will recheck its confidence bound.')
+              advancePaperTrials(symbol, { quote: msg.tick.quote, pipSize: msg.tick.pip_size })
+              // Forward-trial outcomes update calibration silently; the user sees only real trades.
               if (!historySeededRef.current[symbol]) {
                 pendingLiveTicksRef.current[symbol] = appendTickBuffer(pendingLiveTicksRef.current[symbol], msg.tick.quote)
               }
@@ -167,7 +167,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
             reconnectAttemptsRef.current++
             const delay = Math.min(3000 * reconnectAttemptsRef.current, 30000)
             if (reconnectAttemptsRef.current === 20) {
-              addLog('⚠️ Deriv connection is still unavailable; continuing 30-second reconnect attempts. Research and new entries resume automatically when connected.')
+              addLog('Connection unavailable; retrying.')
             }
             setTimeout(connectWS, delay)
           }
@@ -382,8 +382,19 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         }
         const accountRisk = evaluateAccountRisk({ balance: accountBalanceRef.current, sessionPL: sessionPLRef.current, targetProfit, stopLoss, nextStake: currentStakeRef.current })
         if (!accountRisk.allowEntry) {
-          if (accountRisk.balanceUnavailable) { addLog('⏳ Waiting for Deriv to confirm account balance before entry.'); await new Promise(resolve => setTimeout(resolve, 1000)); continue }
+          if (accountRisk.balanceUnavailable) { addLog('Waiting for account balance confirmation.'); await new Promise(resolve => setTimeout(resolve, 1000)); continue }
           addLog('Risk limit reached; new entries stopped.'); isRunningRef.current = false; setIsRunning(false); break
+        }
+        // No contract family may bypass its own forward-outcome model.
+        // Until a family-specific model is implemented and calibrated, fail closed.
+        if (!(signal.tradeType === 'Digits' && signal.timeframeUnit === 'Ticks')) {
+          const unsupportedKey = `${signal.tradeType}|${signal.subTradeType || ''}|${signal.timeframeUnit}`;
+          if (unsupportedNoticeRef.current !== unsupportedKey) {
+            addLog(`No validated outcome model for ${signal.tradeType} / ${signal.subTradeType || 'default'} yet; trading this type is paused.`);
+            unsupportedNoticeRef.current = unsupportedKey;
+          }
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          continue;
         }
         const tradeDirection = signal.option
         lastResearchNoticeRef.current = ''
@@ -439,7 +450,6 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
                 currency: proposalRes.proposal.currency, quotedAt: Date.now() }
             })
             if (started) {
-              const difficulty = getContractDifficulty(signal)
               
             } else if (calibration.pending === 0) {
               
@@ -466,13 +476,6 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
           }
           
         }
-        // Only contract families with a validated, contract-specific forward outcome model may proceed.
-        // The current forward model is limited to Digits contracts measured in ticks.
-        if (!(signal.tradeType === 'Digits' && signal.timeframeUnit === 'Ticks')) {
-          addLog(`Validation not available for ${signal.tradeType} / ${signal.subTradeType || 'default'} yet; no trade sent.`);
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          continue;
-        }
         const marketSnapshot = {
           prices: liveTickDataRef.current[currentTarget.symbol] || [],
           lastLiveAt: lastLiveAtRef.current[currentTarget.symbol] || 0
@@ -496,8 +499,8 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
           })
           if (settledCalibration) 
         }
-        const outcomeStats = recordContractOutcome(signal, { profit, stake: currentStakeRef.current, contractId: contractResult.contract_id, bot: 'Automated Bot' })
-        const adaptiveStats = recordAdaptiveOutcome(signal, { profit, stake: currentStakeRef.current, bot: 'Automated Bot' })
+        recordContractOutcome(signal, { profit, stake: currentStakeRef.current, contractId: contractResult.contract_id, bot: 'Automated Bot' })
+        recordAdaptiveOutcome(signal, { profit, stake: currentStakeRef.current, bot: 'Automated Bot' })
         
         
         totalTradesRef.current += 1
@@ -527,7 +530,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
           netProfitPerUnit, maxStakeMultiplier: 3
         })
         if (!recoveryDecision.allowed) {
-          addLog(`🛑 Recovery stake required ${Number(recoveryDecision.requiredStake).toFixed(2)} exceeds the configured 3x base-stake ceiling. The settled trade remains recorded; no further entry will be forced.`)
+          addLog('Recovery limit reached; new entries stopped.')
           isRunningRef.current = false; setIsRunning(false); break
         }
         
@@ -546,6 +549,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
     isRunningRef.current = true; setIsRunning(true); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0
     currentStakeRef.current = parseFloat(stake); recoveryLedgerRef.current = createRecoveryLedger(parseFloat(stake) || 1); hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0
     consecutiveLossesRef.current = 0
+    unsupportedNoticeRef.current = ''
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0)
     addLog(`Bot started — monitoring 13 markets. Selected strategy: ${tradeType}${subTradeType ? ` / ${subTradeType}` : ''}.`); runTradeCycle()
   }
