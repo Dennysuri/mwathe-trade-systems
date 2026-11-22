@@ -33,7 +33,7 @@ test('a market with stale live data is excluded even with a large sample', async
 });
 
 
-test('reports per-market research status for insufficient and stale live feeds', async () => {
+test('reports per-market research status for missing first live tick and stale feeds', async () => {
   const diagnostics = [];
   await rankLiveMarketOpportunities([
     { symbol: 'R_10', name: 'Volatility 10', livePrices: [1, 2], liveTicks: 2, lastLiveAt: 10000 },
@@ -43,7 +43,7 @@ test('reports per-market research status for insufficient and stale live feeds',
     onMarketEvaluation: result => diagnostics.push(result)
   });
   assert.equal(diagnostics.length, 2);
-  assert.equal(diagnostics.find(row => row.symbol === 'R_10')?.status, 'INSUFFICIENT_LIVE_TICKS');
+  assert.equal(diagnostics.find(row => row.symbol === 'R_10')?.status, 'WAITING_FOR_FIRST_LIVE_TICK');
   assert.equal(diagnostics.find(row => row.symbol === 'R_25')?.status, 'STALE_FEED');
   assert.ok(diagnostics.every(row => row.evaluationCompletedAt >= row.evaluationStartedAt));
 });
