@@ -284,20 +284,20 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
   // Shared market + contract ranking. A market is considered only after fresh live ticks.
   const scanMarkets = async () => {
     const markets = UNIQUE_MARKETS.map(([name, symbol]) => ({
-      name, symbol, livePrices: liveTickDataRef.current[symbol] || [],
+      name, symbol, prices: tickDataRef.current[symbol] || [], livePrices: liveTickDataRef.current[symbol] || [],
       lastLiveAt: lastLiveAtRef.current[symbol] || 0,
       liveTicks: liveTickCountRef.current[symbol] || 0
     }))
     const selectedConfig = researchConfigRef.current
     const universe = await rankLiveStrategyUniverse(markets, selectedConfig, {
-      now: Date.now(), maxAgeMs: 5000, minLiveTicks: 200,
+      now: Date.now(), maxAgeMs: 5000, minLiveTicks: 1,
       onMarketDiagnostics: setResearchDiagnostics,
       onResearchCycle: setResearchCycle
     })
     // Research all supported profiles, but only the exact user-selected profile
     // is eligible to enter the bot's existing validation/execution path.
     const now = Date.now()
-    const freshMarketCount = markets.filter(m => m.lastLiveAt && now - m.lastLiveAt >= 0 && now - m.lastLiveAt <= 5000 && Number(m.liveTicks) >= 200 && (m.livePrices || []).length >= 200).length
+    const freshMarketCount = markets.filter(m => m.lastLiveAt && now - m.lastLiveAt >= 0 && now - m.lastLiveAt <= 5000 && Number(m.liveTicks) >= 1 && (m.livePrices || []).length >= 1).length
     setResearchMarketCount(freshMarketCount)
     if (universe[0]) { setBestMarket(universe[0].marketName); setConfluenceScore(universe[0].score) }
     const eligible = universe.filter(item => {
@@ -354,7 +354,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         const currentTarget = refreshedQueue[0]
         if (!currentTarget) {
           if (!hasLoggedScanningRef.current) {
-          addLog('Thamira is comparing all markets with sufficient fresh live evidence; watch-only patterns are not sent as trades.')
+          addLog('Thamira is waiting for a qualified setup on the selected contract; historical context is active and live feeds continue updating.')
           hasLoggedScanningRef.current = true
         }
         await new Promise(r => setTimeout(r, 1000))
@@ -578,7 +578,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
       </div>
       <div className="bg-gray-900 rounded-lg p-2 border border-green-500/30 mb-2 flex-shrink-0">
   <h3 className="text-white font-bold text-xs mb-1 flex items-center gap-1"><TrendingUp size={12} className="text-green-500" /> Performance</h3>
-  <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Live research:</span><span className="text-[10px] text-green-400 font-bold">{researchMarketCount}/13 markets</span></div>
+  <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Fresh live markets:</span><span className="text-[10px] text-green-400 font-bold">{researchMarketCount}/13 markets</span></div>
   <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Research cycle:</span><span className="text-[10px] text-sky-300 font-bold">{researchCycle ? `${researchCycle.analysedMarkets}/${researchCycle.expectedMarkets} markets · ${researchCycle.cycleDurationMs}ms` : 'Waiting for first cycle'}</span></div>
   <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Profile evaluations:</span><span className="text-[10px] text-sky-300 font-bold">{researchCycle ? `${researchCycle.totalMarketProfileEvaluations.toLocaleString()} · ${researchCycle.parallelMarketCount} markets × ${researchCycle.profileCount} profiles` : '—'}</span></div>
   <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Best Market:</span><span className="text-[10px] text-orange-400 font-bold">{bestMarket}</span></div>
