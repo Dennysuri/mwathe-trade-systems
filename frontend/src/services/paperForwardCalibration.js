@@ -2,6 +2,7 @@ const STORAGE_KEY = 'mwathe:paper-forward:v2';
 const MAX_RECORDS = 5000;
 const MIN_CALIBRATION_TRADES = 200;
 const SAFETY_MARGIN = 0.02;
+const TARGET_WIN_RATE = 0.70;
 const Z_95 = 1.96;
 const pending = new Map();
 let memoryRows = [];
@@ -90,12 +91,14 @@ export function getPaperForwardSummary(signal = null) {
   const trades = filtered.length;
   const lowerBound = wilsonLowerBound(wins, trades);
   const maxBreakEvenRate = trades ? Math.max(...filtered.map(row => row.breakEvenRate)) : null;
+  const winRate = trades ? wins / trades : null;
   const calibrated = trades >= MIN_CALIBRATION_TRADES && lowerBound !== null
+    && winRate >= TARGET_WIN_RATE
     && lowerBound > maxBreakEvenRate + SAFETY_MARGIN;
   return { trades, wins, losses: trades - wins, winRate: trades ? wins / trades : null,
     lowerBound, maxBreakEvenRate, safetyMargin: SAFETY_MARGIN, minTrades: MIN_CALIBRATION_TRADES,
     calibrated, pending: signal ? [...pending.values()].filter(item => item.key === paperProfile(signal)).length : pending.size,
-    targetWinRate: 0.8, targetWinRateMet: trades >= 100 && wins / trades >= 0.8,
+    targetWinRate: TARGET_WIN_RATE, targetWinRateMet: trades >= MIN_CALIBRATION_TRADES && winRate >= TARGET_WIN_RATE,
     note: 'Quote-matched forward paper outcomes. Calibration is local to this browser; the lower confidence bound must beat the worst observed quote break-even rate plus margin.' };
 }
 export function resetPaperTrials() { pending.clear(); }
