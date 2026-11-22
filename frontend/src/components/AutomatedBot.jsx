@@ -55,6 +55,8 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
   const [bestMarket, setBestMarket] = useState('Scanning...')
   const [confluenceScore, setConfluenceScore] = useState(0)
   const [researchMarketCount, setResearchMarketCount] = useState(0)
+  const [researchDiagnostics, setResearchDiagnostics] = useState([])
+  const [researchCycle, setResearchCycle] = useState(null)
   
   const logRef = useRef(null); const wsRef = useRef(null); const isRunningRef = useRef(false); const reqIdRef = useRef(1)
   const tickDataRef = useRef({}); const liveTickDataRef = useRef({}); const historySeededRef = useRef({}); const pendingLiveTicksRef = useRef({}); const lastLiveAtRef = useRef({}); const liveTickCountRef = useRef({}); const currentStakeRef = useRef(1.00); const sessionPLRef = useRef(0.00)
@@ -287,7 +289,11 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
       liveTicks: liveTickCountRef.current[symbol] || 0
     }))
     const selectedConfig = researchConfigRef.current
-    const universe = await rankLiveStrategyUniverse(markets, selectedConfig, { now: Date.now(), maxAgeMs: 5000, minLiveTicks: 200 })
+    const universe = await rankLiveStrategyUniverse(markets, selectedConfig, {
+      now: Date.now(), maxAgeMs: 5000, minLiveTicks: 200,
+      onMarketDiagnostics: setResearchDiagnostics,
+      onResearchCycle: setResearchCycle
+    })
     // Research all supported profiles, but only the exact user-selected profile
     // is eligible to enter the bot's existing validation/execution path.
     const now = Date.now()
@@ -573,8 +579,17 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
       <div className="bg-gray-900 rounded-lg p-2 border border-green-500/30 mb-2 flex-shrink-0">
   <h3 className="text-white font-bold text-xs mb-1 flex items-center gap-1"><TrendingUp size={12} className="text-green-500" /> Performance</h3>
   <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Live research:</span><span className="text-[10px] text-green-400 font-bold">{researchMarketCount}/13 markets</span></div>
+  <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Research cycle:</span><span className="text-[10px] text-sky-300 font-bold">{researchCycle ? `${researchCycle.analysedMarkets}/${researchCycle.expectedMarkets} markets · ${researchCycle.cycleDurationMs}ms` : 'Waiting for first cycle'}</span></div>
+  <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Profile evaluations:</span><span className="text-[10px] text-sky-300 font-bold">{researchCycle ? researchCycle.totalMarketProfileEvaluations.toLocaleString() : '—'}</span></div>
   <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Best Market:</span><span className="text-[10px] text-orange-400 font-bold">{bestMarket}</span></div>
   <div className="mb-1 flex justify-between items-center bg-black/50 rounded p-1"><span className="text-[9px] text-gray-400">Confluence Score:</span><span className={`text-[10px] font-bold ${confluenceScore >= 70 ? 'text-green-400' : 'text-orange-400'}`}>{confluenceScore.toFixed(0)}%</span></div>
+  <details className="mb-2 bg-black/40 border border-gray-800 rounded p-2 flex-shrink-0">
+    <summary className="text-[10px] text-sky-300 font-bold cursor-pointer">13-market live research evidence ({researchDiagnostics.filter(row => row.analysisComplete).length}/13 fully evaluated)</summary>
+    <div className="mt-2 overflow-x-auto"><table className="w-full text-[9px] text-left"><thead><tr className="text-gray-500 border-b border-gray-800"><th className="py-1 pr-2">Market</th><th className="py-1 pr-2">Status</th><th className="py-1 pr-2">Ticks</th><th className="py-1 pr-2">Profiles</th><th className="py-1">Top score</th></tr></thead><tbody>
+      {researchDiagnostics.map(row => <tr key={row.symbol} className="border-b border-gray-900"><td className="py-1 pr-2 text-gray-300">{row.marketName}</td><td className={`py-1 pr-2 ${row.status === 'STALE_FEED' || row.status === 'INSUFFICIENT_LIVE_TICKS' ? 'text-orange-400' : row.analysisComplete ? 'text-green-400' : 'text-sky-300'}`}>{row.status}</td><td className="py-1 pr-2 tabular-nums">{row.liveTicks}/{row.liveBufferSize}</td><td className="py-1 pr-2 tabular-nums">{row.profileEvaluations}/{row.profileCount}</td><td className="py-1 tabular-nums">{row.score == null ? '—' : row.score.toFixed(0)}</td></tr>)}
+    </tbody></table></div>
+    {researchCycle && <p className="mt-1 text-[9px] text-gray-500">Cycle {new Date(researchCycle.cycleStartedAt).toLocaleTimeString()}–{new Date(researchCycle.cycleCompletedAt).toLocaleTimeString()} · {researchCycle.rankingCount} ranked opportunities · {researchCycle.best ? `Leader: ${researchCycle.best.marketName} (${researchCycle.best.score.toFixed(0)})` : 'No current candidate'}.</p>}
+  </details>
   <div className="mb-1 grid grid-cols-3 gap-1 text-center text-[9px]">
     <div className="bg-black/50 rounded p-1"><span className="text-gray-400">Account balance</span><p className="text-white font-bold">{accountBalance === null ? 'Waiting…' : '$' + accountBalance.toFixed(2)}</p></div>
     <div className="bg-black/50 rounded p-1"><span className="text-gray-400">To target</span><p className="text-green-400 font-bold">{'$' + Math.max(0, (parseFloat(targetProfit) || 0) - currentPL).toFixed(2)}</p></div>
