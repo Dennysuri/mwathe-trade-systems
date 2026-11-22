@@ -276,20 +276,36 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     return eligible
   }
 
+  const refreshResearch = async () => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !historyLoadedRef.current || researchInFlightRef.current) return
+    researchInFlightRef.current = true
+    try { await scanMarkets() }
+    catch (error) { addLog(`Parallel market research error: ${error.message}`) }
+    finally { researchInFlightRef.current = false }
+  }
+
+  // The 13 live subscriptions and ranking loop are independent of trade execution.
+  useEffect(() => {
+    let active = true
+    const ensureResearch = async () => {
+      if (!active || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
+      if (!historyLoadedRef.current) await loadAllHistory()
+      if (!active || !historyLoadedRef.current || researchTimerRef.current) return
+      await refreshResearch()
+      if (active && !researchTimerRef.current) researchTimerRef.current = setInterval(refreshResearch, 1000)
+    }
+    ensureResearch()
+    const connectionPoll = setInterval(ensureResearch, 1000)
+    return () => {
+      active = false
+      clearInterval(connectionPoll)
+      if (researchTimerRef.current) clearInterval(researchTimerRef.current)
+      researchTimerRef.current = null
+    }
+  }, [token, accountId])
+
   const runTradeCycle = async () => {
     if (!historyLoadedRef.current) { addLog(' Analyzing unique volatility markets...'); await loadAllHistory() }
-
-    // Independent scanner: evaluates every fresh market/profile once per second,
-    // including while proposal, purchase, settlement, or recovery waits are active.
-    const refreshResearch = async () => {
-      if (!isRunningRef.current || researchInFlightRef.current) return
-      researchInFlightRef.current = true
-      try { await scanMarkets() }
-      catch (error) { addLog(`Parallel market research error: ${error.message}`) }
-      finally { researchInFlightRef.current = false }
-    }
-    await refreshResearch()
-    researchTimerRef.current = setInterval(refreshResearch, 1000)
 
     while (isRunningRef.current) {
       try {
