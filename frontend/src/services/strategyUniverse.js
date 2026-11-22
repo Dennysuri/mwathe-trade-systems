@@ -141,7 +141,7 @@ export async function rankLiveStrategyUniverse(markets, selectedConfig = {}, opt
     // Profile-level sample sufficiency is checked by evaluateStrategyEnsemble
     // against the preloaded + live analysis buffer (200 for Digits, 80 otherwise).
     // This diagnostic is about having a fresh live feed, not accumulating 200 ticks.
-    const hasRequiredSamples = row.profileEvaluations === profiles.length;
+    const hasRequiredSamples = row.analysisBufferSize >= 200 && row.liveTicks >= 1;
     return {
       ...row, profileCount: profiles.length, evaluatedAllProfiles, feedFresh, hasRequiredSamples,
       rank: marketRanks.get(row.symbol) ?? null,
