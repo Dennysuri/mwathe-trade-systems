@@ -6,7 +6,7 @@ import { validateLiveOpportunity } from '../services/liveOpportunityEngine'
 import { rankLiveStrategyUniverse } from '../services/strategyUniverse'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
 import { evaluateAccountRisk, getContractDifficulty, recordAdaptiveOutcome } from '../services/adaptiveTradingIntelligence'
-import { advancePaperTrials, beginPaperTrial, canExecuteDemoValidationTrade, getPaperForwardSummary } from '../services/paperForwardCalibration'
+import { advancePaperTrials, beginPaperTrial, canExecuteDemoValidationTrade, getPaperForwardSummary, recordSettledContractOutcome } from '../services/paperForwardCalibration'
 import { appendTickBuffer, seedTickBuffer } from '../services/marketTickBuffer'
 import { createRecoveryLedger, nextRecoveryStake, recordRecoveryOutcome } from '../services/recoveryAccounting'
 
@@ -422,17 +422,22 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         if (signal.tradeType === 'Digits' && signal.timeframeUnit === 'Ticks') {
           const calibration = getPaperForwardSummary(signal)
           if (!calibration.calibrated) {
-            const started = beginPaperTrial({ ...signal, id: `paper-${signal.symbol}-${Date.now()}` }, {
-              quote: { askPrice: proposalRes.proposal.ask_price, payout: proposalRes.proposal.payout,
-                currency: proposalRes.proposal.currency, quotedAt: Date.now() }
-            })
-            if (started) {
-              const difficulty = getContractDifficulty(signal)
-              addLog(`🧪 ${accountType === 'demo' ? 'Demo validation sample started' : 'Calibration-only trial started'} for ${signal.subTradeType}/${signal.option} on ${signal.symbol}; theoretical baseline ${difficulty.theoreticalWinChance === null ? 'n/a' : (difficulty.theoreticalWinChance * 100).toFixed(1) + '%'}; exact profile barrier ${signal.predictedDigit ?? 'n/a'}, duration ${signal.duration} ${signal.timeframeUnit}; ${calibration.wins}/${calibration.trades} wins, ${calibration.trades}/200 settled samples, 90% observed-win target plus quote break-even confidence required.`)
-            } else if (calibration.pending === 0) {
-              addLog('🛡️ No valid quote-matched calibration trial could be started; refusing this digit entry and retrying after a fresh quote.')
-              await new Promise(resolve => setTimeout(resolve, 1500))
-              continue
+            // Demo samples come from the actual Deriv contract settlement below.
+            // Paper-forward trials are reserved for calibration-only real-account
+            // profiles, avoiding duplicate/misaligned demo outcome attribution.
+            if (accountType !== 'demo') {
+              const started = beginPaperTrial({ ...signal, id: `paper-${signal.symbol}-${Date.now()}` }, {
+                quote: { askPrice: proposalRes.proposal.ask_price, payout: proposalRes.proposal.payout,
+                  currency: proposalRes.proposal.currency, quotedAt: Date.now() }
+              })
+              if (started) {
+                const difficulty = getContractDifficulty(signal)
+                addLog(`🧪 Calibration-only forward trial started for ${signal.subTradeType}/${signal.option} on ${signal.symbol}; theoretical baseline ${difficulty.theoreticalWinChance === null ? 'n/a' : (difficulty.theoreticalWinChance * 100).toFixed(1) + '%'}; exact profile barrier ${signal.predictedDigit ?? 'n/a'}, duration ${signal.duration} ${signal.timeframeUnit}; ${calibration.wins}/${calibration.trades} wins, ${calibration.trades}/200 settled samples, 90% observed-win target plus quote break-even confidence required.`)
+              } else if (calibration.pending === 0) {
+                addLog('🛡️ No valid quote-matched calibration trial could be started; refusing this digit entry and retrying after a fresh quote.')
+                await new Promise(resolve => setTimeout(resolve, 1500))
+                continue
+              }
             }
             const demoPilot = canExecuteDemoValidationTrade(accountType, calibration)
             if (!demoPilot) {
@@ -468,6 +473,12 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         
         const contractResult = await monitorContract(buyRes.buy.contract_id); if (!contractResult) break
         const profit = parseFloat(contractResult.profit || 0); const isWin = profit > 0
+        if (signal.tradeType === 'Digits' && signal.timeframeUnit === 'Ticks') {
+          const settledCalibration = recordSettledContractOutcome(signal, {
+            quote: proposalRes.proposal, profit, contractId: contractResult.contract_id
+          })
+          if (settledCalibration) addLog(`🧪 Broker-settled calibration: ${settledCalibration.wins}/${settledCalibration.trades} wins, ${settledCalibration.trades}/200 samples for this exact contract profile.`)
+        }
         const outcomeStats = recordContractOutcome(signal, { profit, stake: currentStakeRef.current, contractId: contractResult.contract_id, bot: 'Automated Bot' })
         const adaptiveStats = recordAdaptiveOutcome(signal, { profit, stake: currentStakeRef.current, bot: 'Automated Bot' })
         addLog(`🧠 Strategy profile: ${adaptiveStats.consecutiveLosses} consecutive losses across markets; ${adaptiveStats.trades} recent outcomes; win rate ${adaptiveStats.winRate === null ? 'n/a' : (adaptiveStats.winRate * 100).toFixed(1) + '%'} (90% target).`)
