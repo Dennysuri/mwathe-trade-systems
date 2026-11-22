@@ -146,6 +146,9 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         }
         ws.onclose = () => {
           if (pingIntervalRef.current) clearInterval(pingIntervalRef.current)
+          historyLoadedRef.current = false
+          historyLoadInFlightRef.current = false
+          if (researchTimerRef.current) { clearInterval(researchTimerRef.current); researchTimerRef.current = null }
           if (isRunningRef.current) {
             reconnectAttemptsRef.current++
             const delay = Math.min(3000 * reconnectAttemptsRef.current, 30000)
@@ -442,14 +445,13 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         await new Promise(r => setTimeout(r, cooldownMs))
       } catch (error) { if (!isRunningRef.current) break; addLog(`❌ Error: ${error.message}`); await new Promise(r => setTimeout(r, 2000)) }
     }
-    if (researchTimerRef.current) { clearInterval(researchTimerRef.current); researchTimerRef.current = null }
     researchInFlightRef.current = false
   }
 
   const startBot = () => {
     setValidationError(''); if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }
     isRunningRef.current = true; setIsRunning(true); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0
-    currentStakeRef.current = parseFloat(stake); historyLoadedRef.current = false; hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0
+    currentStakeRef.current = parseFloat(stake); hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0
     consecutiveLossesRef.current = 0; recentOutcomesRef.current = []; performanceCooldownUntilRef.current = 0; performanceRecoveryUntilRef.current = 0; lastPerformancePauseNoticeRef.current = 0
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); marketCooldownUntilRef.current = {}
     addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets | Loss-Resistant Entry Gates)'); addLog(`Type: ${tradeType} | Stake: ${stake} | Recovery: adaptive strategy guard + bounded martingale`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); runTradeCycle()
