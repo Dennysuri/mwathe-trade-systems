@@ -7,12 +7,6 @@ const Z_95 = 1.96;
 const pending = new Map();
 let memoryRows = [];
 
-export function supportsForwardCalibration(signal = {}) {
-  return signal.tradeType === 'Digits'
-    && signal.timeframeUnit === 'Ticks'
-    && ['Over/Under', 'Matches/Differs', 'Even/Odd'].includes(signal.subTradeType);
-}
-
 export function paperProfile(signal = {}) {
   const targetApplies = ['Over/Under', 'Matches/Differs'].includes(signal.subTradeType);
   return [signal.symbol || 'unknown', signal.tradeType || '', signal.subTradeType || '',
