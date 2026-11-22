@@ -313,7 +313,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
   }
 
   const refreshResearch = async () => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !historyLoadedRef.current || researchInFlightRef.current) return
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || researchInFlightRef.current) return
     researchInFlightRef.current = true
     try { await scanMarkets() }
     catch (error) { addLog(`Parallel market research error: ${error.message}`) }
@@ -325,8 +325,11 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
     let active = true
     const ensureResearch = async () => {
       if (!active || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return
-      if (!historyLoadedRef.current) await loadAllHistory()
-      if (!active || !historyLoadedRef.current || researchTimerRef.current) return
+      // Start the history preload in the background. Each market becomes
+      // researchable as soon as its own history and first live tick arrive;
+      // one slow market must not block the other twelve.
+      if (!historyLoadedRef.current && !historyLoadInFlightRef.current) void loadAllHistory()
+      if (!active || researchTimerRef.current) return
       await refreshResearch()
       if (active && !researchTimerRef.current) researchTimerRef.current = setInterval(refreshResearch, 1000)
     }
@@ -341,7 +344,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
   }, [token, accountId])
 
   const runTradeCycle = async () => {
-    if (!historyLoadedRef.current) { addLog(' Analyzing unique volatility markets...'); await loadAllHistory() }
+    if (!historyLoadedRef.current && !historyLoadInFlightRef.current) void loadAllHistory()
 
     while (isRunningRef.current) {
       try {
