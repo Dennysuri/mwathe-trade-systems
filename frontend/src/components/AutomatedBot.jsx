@@ -68,6 +68,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
   const consecutiveLossesRef = useRef(0)
   const lastResearchNoticeRef = useRef('')
   const lastCalibrationNoticeRef = useRef('')
+  const balanceWaitLoggedRef = useRef(false)
   const shouldAutoScrollRef = useRef(true)
   const accountBalanceRef = useRef(null)
   // Research runs on its own cadence and never waits for contract settlement.
@@ -380,9 +381,10 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         }
         const accountRisk = evaluateAccountRisk({ balance: accountBalanceRef.current, sessionPL: sessionPLRef.current, targetProfit, stopLoss, nextStake: currentStakeRef.current })
         if (!accountRisk.allowEntry) {
-          if (accountRisk.balanceUnavailable) { addLog('Waiting for account balance confirmation.'); await new Promise(resolve => setTimeout(resolve, 1000)); continue }
+          if (accountRisk.balanceUnavailable) { if (!balanceWaitLoggedRef.current) addLog('Waiting for account balance confirmation.'); balanceWaitLoggedRef.current = true; await new Promise(resolve => setTimeout(resolve, 1000)); continue }
           addLog('Risk limit reached; new entries stopped.'); isRunningRef.current = false; setIsRunning(false); break
         }
+        balanceWaitLoggedRef.current = false
         lastResearchNoticeRef.current = ''
         setBestMarket(currentTarget.marketName); setConfluenceScore(currentTarget.score)
         
@@ -508,6 +510,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
     currentStakeRef.current = parseFloat(stake); recoveryLedgerRef.current = createRecoveryLedger(parseFloat(stake) || 1); hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0
     consecutiveLossesRef.current = 0
     lastCalibrationNoticeRef.current = ''
+    balanceWaitLoggedRef.current = false
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0)
     addLog(`Bot started — monitoring 13 markets. Selected: ${tradeType}${subTradeType ? ` / ${subTradeType}` : ''}. ${accountType === 'demo' ? 'Demo trades will validate this exact profile.' : 'Real entries require 200 qualifying demo outcomes.'}`); runTradeCycle()
   }
