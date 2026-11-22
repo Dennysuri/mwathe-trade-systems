@@ -148,3 +148,4 @@ test('recent regime deterioration disables an otherwise strong lifetime calibrat
   assert.equal(summary.recentWinRate,0.8);
   assert.equal(summary.calibrated,false);
 });
+

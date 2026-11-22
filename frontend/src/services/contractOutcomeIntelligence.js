@@ -1,5 +1,31 @@
 const STORAGE_KEY = 'mwathe:contract-outcomes:v1';
 const MAX_RECORDS = 5000;
+const FORWARD_STORAGE_KEY = 'mwathe:contract-forward-outcomes:v1';
+const MIN_FORWARD_TRADES = 200;
+const TARGET_WIN_RATE = 0.90;
+const SAFETY_MARGIN = 0.02;
+
+const readForward = () => {
+  try {
+    const value = JSON.parse(localStorage.getItem(FORWARD_STORAGE_KEY) || '[]');
+    return Array.isArray(value) ? value : [];
+  } catch { return []; }
+};
+
+const writeForward = rows => {
+  try { localStorage.setItem(FORWARD_STORAGE_KEY, JSON.stringify(rows.slice(-MAX_RECORDS))); }
+  catch { /* Calibration persistence must not interrupt contract settlement handling. */ }
+};
+
+const wilsonLowerBound = (wins, trades, z = 1.96) => {
+  if (!Number.isFinite(wins) || !Number.isFinite(trades) || trades <= 0 || wins < 0 || wins > trades) return null;
+  const p = wins / trades, z2 = z * z, denominator = 1 + z2 / trades;
+  const center = p + z2 / (2 * trades);
+  const spread = z * Math.sqrt((p * (1 - p) / trades) + z2 / (4 * trades * trades));
+  return Math.max(0, (center - spread) / denominator);
+};
+
+const forwardProfile = (signal, currency = 'USD') => [contractProfile(signal), currency || 'USD', signal.multiplier ?? 'na', signal.growthRate ?? 'na', signal.takeProfit ?? 'na', signal.contractStopLoss ?? 'na'].join('|');
 
 const read = () => {
   try {
@@ -19,13 +45,13 @@ export function contractProfile(signal = {}) {
     signal.subTradeType || 'default',
     signal.option || 'unknown-option',
     digitTargetApplies ? (signal.predictedDigit ?? 'na') : 'na',
-    barrierApplies ? (signal.barrier ?? signal.predictedDigit ?? 'na') : 'na',
+    barrierApplies ? (signal.barrierMode === 'volatility-multiple' ? `volatility-multiple:${signal.barrierMultiple ?? 'na'}` : (signal.barrier ?? signal.predictedDigit ?? 'na')) : 'na',
     signal.duration ?? 'na',
     signal.timeframeUnit || 'na'
   ].join('|');
 }
 
-export function recordContractOutcome(signal, { profit, stake, contractId, bot = 'unknown' } = {}) {
+export function recordContractOutcome(signal, { profit, stake, contractId, bot = 'unknown', accountType = 'real', quote } = {}) {
   if (typeof window === 'undefined' || !Number.isFinite(Number(profit))) return null;
   const records = read();
   const row = {
@@ -40,6 +66,23 @@ export function recordContractOutcome(signal, { profit, stake, contractId, bot =
   records.push(row);
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(records.slice(-MAX_RECORDS))); }
   catch { /* Keep trading independent from optional browser storage. */ }
+  const askPrice = Number(quote?.ask_price ?? quote?.askPrice);
+  const payout = Number(quote?.payout);
+  if (accountType === 'demo' && contractId && Number.isFinite(askPrice) && Number.isFinite(payout)
+      && askPrice > 0 && payout > askPrice) {
+    const forwardRows = readForward();
+    if (!forwardRows.some(item => String(item.contractId) === String(contractId))) {
+      forwardRows.push({
+        key: forwardProfile(signal, quote?.currency || signal.currency || 'USD'),
+        contractId: String(contractId), accountType: 'demo',
+        won: Number(profit) > 0, profit: Number(profit), stake: Math.max(0, Number(stake) || 0),
+        askPrice, payout, breakEvenRate: askPrice / payout,
+        quotedAt: Number(quote?.date_start || quote?.quotedAt || Date.now()),
+        settledAt: Date.now()
+      });
+      writeForward(forwardRows);
+    }
+  }
   return getContractPerformance(signal);
 }
 
@@ -54,6 +97,37 @@ export function getContractPerformance(signal = {}) {
     netProfit: matching.reduce((sum, row) => sum + Number(row.profit || 0), 0),
     sampleSufficient: trades >= 100,
     note: trades < 100 ? 'Insufficient settled trades for reliable calibration.' : 'Historical descriptive statistics only; validate out of sample.'
+  };
+}
+
+/**
+ * Forward evidence is sourced only from broker-settled DEMO contracts. The
+ * profile key includes every contract-defining field plus currency. This
+ * same calibration gate can therefore protect every supported contract family
+ * without pretending that their settlement rules are identical.
+ */
+export function getForwardContractCalibration(signal = {}, currency = 'USD') {
+  const key = forwardProfile(signal, currency);
+  const matching = readForward().filter(row => row.key === key && row.accountType === 'demo'
+    && Number.isFinite(row.breakEvenRate) && row.breakEvenRate > 0 && row.breakEvenRate < 1);
+  const trades = matching.length;
+  const wins = matching.filter(row => row.won).length;
+  const winRate = trades ? wins / trades : null;
+  const recent = matching.slice(-50);
+  const recentTrades = recent.length;
+  const recentWins = recent.filter(row => row.won).length;
+  const recentWinRate = recentTrades ? recentWins / recentTrades : null;
+  const lowerBound = wilsonLowerBound(wins, trades);
+  const maxBreakEvenRate = trades ? Math.max(...matching.map(row => row.breakEvenRate)) : null;
+  const calibrated = trades >= MIN_FORWARD_TRADES && winRate >= TARGET_WIN_RATE
+    && recentTrades >= 50 && recentWinRate >= TARGET_WIN_RATE
+    && lowerBound !== null && maxBreakEvenRate !== null
+    && lowerBound > maxBreakEvenRate + SAFETY_MARGIN;
+  return {
+    key, trades, wins, losses: trades - wins, winRate,
+    recentTrades, recentWins, recentWinRate, lowerBound, maxBreakEvenRate,
+    minTrades: MIN_FORWARD_TRADES, targetWinRate: TARGET_WIN_RATE,
+    safetyMargin: SAFETY_MARGIN, calibrated
   };
 }
 

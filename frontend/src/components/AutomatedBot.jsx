@@ -5,9 +5,8 @@ import { validateEntryWindow } from '../services/strategyIntelligence'
 import { evaluateForwardCalibrationGate } from '../services/forwardCalibrationGate'
 import { validateLiveOpportunity } from '../services/liveOpportunityEngine'
 import { rankLiveStrategyUniverse } from '../services/strategyUniverse'
-import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
-import { evaluateAccountRisk, getAdaptiveStrategyStatus, getContractDifficulty, recordAdaptiveOutcome } from '../services/adaptiveTradingIntelligence'
-import { advancePaperTrials, beginPaperTrial, getPaperForwardSummary, recordSettledContractOutcome } from '../services/paperForwardCalibration'
+import { getForwardContractCalibration, recordContractOutcome } from '../services/contractOutcomeIntelligence'
+import { evaluateAccountRisk, getAdaptiveStrategyStatus, recordAdaptiveOutcome } from '../services/adaptiveTradingIntelligence'
 import { appendTickBuffer, seedTickBuffer } from '../services/marketTickBuffer'
 import { createRecoveryLedger, nextRecoveryStake, recordRecoveryOutcome } from '../services/recoveryAccounting'
 
@@ -68,6 +67,8 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
   const pingIntervalRef = useRef(null)
   const consecutiveLossesRef = useRef(0)
   const lastResearchNoticeRef = useRef('')
+  const lastCalibrationNoticeRef = useRef('')
+  const balanceWaitLoggedRef = useRef(false)
   const shouldAutoScrollRef = useRef(true)
   const accountBalanceRef = useRef(null)
   // Research runs on its own cadence and never waits for contract settlement.
@@ -79,7 +80,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
   const researchConfigRef = useRef({})
   researchConfigRef.current = { tradeType, subTradeType, option, predictedDigit: Number(predictedDigit), duration: durationValue, timeframeUnit }
 
-  const addLog = (msg) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`].slice(-2000))
+  const addLog = (msg) => setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`].slice(-250))
   useEffect(() => { try { localStorage.setItem('mwathe:automated-bot-logs:v1', JSON.stringify(logs)) } catch {} }, [logs])
   useEffect(() => { if (logRef.current && shouldAutoScrollRef.current) requestAnimationFrame(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight }) }, [logs])
   useEffect(() => { if (SUB_TRADE_TYPES[tradeType]?.length > 0) setSubTradeType(SUB_TRADE_TYPES[tradeType][0]); else setSubTradeType('') }, [tradeType])
@@ -111,7 +112,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         wsRef.current = ws
         ws.onopen = () => { ws.send(JSON.stringify({ balance: 1, subscribe: 1, req_id: reqIdRef.current++ })); 
           reconnectAttemptsRef.current = 0
-          if(isRunningRef.current) addLog('✅ Connection Restored')
+          if(isRunningRef.current) addLog('Connection restored.')
           if (pingIntervalRef.current) clearInterval(pingIntervalRef.current)
           pingIntervalRef.current = setInterval(() => {
             if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ ping: 1, req_id: reqIdRef.current++ }))
@@ -139,9 +140,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
                 lastLiveAtRef.current[symbol] = Date.now()
                 liveTickCountRef.current[symbol] = (liveTickCountRef.current[symbol] || 0) + 1
               }
-              const paperSettled = advancePaperTrials(symbol, { quote: msg.tick.quote, pipSize: msg.tick.pip_size })
-              paperSettled.forEach(row => addLog(`🧪 Forward sample settled: ${row.won ? 'WIN' : 'LOSS'} on ${symbol}; ${row.option} after ${row.duration} ticks.`))
-              if (paperSettled.length && isRunningRef.current) addLog('🧪 Forward calibration updated; the next scan will recheck its confidence bound.')
+
               if (!historySeededRef.current[symbol]) {
                 pendingLiveTicksRef.current[symbol] = appendTickBuffer(pendingLiveTicksRef.current[symbol], msg.tick.quote)
               }
@@ -167,13 +166,13 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
             reconnectAttemptsRef.current++
             const delay = Math.min(3000 * reconnectAttemptsRef.current, 30000)
             if (reconnectAttemptsRef.current === 20) {
-              addLog('⚠️ Deriv connection is still unavailable; continuing 30-second reconnect attempts. Research and new entries resume automatically when connected.')
+              addLog('Connection unavailable; retrying.')
             }
             setTimeout(connectWS, delay)
           }
         }
       } catch (err) {
-        addLog(`❌ Connection failed: ${err.message}`)
+        addLog('Connection failed; retrying.')
         if (connectionActiveRef.current) {
           reconnectAttemptsRef.current++
           const delay = Math.min(3000 * reconnectAttemptsRef.current, 30000)
@@ -207,7 +206,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         listeners.forEach(({ handler }) => wsRef.current?.removeEventListener('message', handler))
         historyLoadedRef.current = complete
         historyLoadInFlightRef.current = false
-        if (!complete) addLog(`⚠️ Historical preload incomplete (${completedCount}/${totalMarkets} successful); missing markets will be retried and cannot qualify for trading.`)
+        if (!complete) addLog(`Market data incomplete (${completedCount}/${totalMarkets}); waiting for feeds.`)
         resolve()
       }
       if (totalMarkets === 0) return finish(true)
@@ -317,7 +316,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || researchInFlightRef.current) return
     researchInFlightRef.current = true
     try { await scanMarkets() }
-    catch (error) { addLog(`Parallel market research error: ${error.message}`) }
+    catch (error) { addLog('Market research temporarily unavailable.') }
     finally { researchInFlightRef.current = false }
   }
 
@@ -358,7 +357,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         const currentTarget = refreshedQueue[0]
         if (!currentTarget) {
           if (!hasLoggedScanningRef.current) {
-          addLog('Thamira is waiting for a qualified setup on the selected contract; historical context is active and live feeds continue updating.')
+          addLog('Monitoring markets; waiting for a qualified setup.')
           hasLoggedScanningRef.current = true
         }
         await new Promise(r => setTimeout(r, 1000))
@@ -374,7 +373,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         if (adaptiveGate.blocked) {
           const cooldownKey = `${adaptiveGate.key}:${adaptiveGate.blockedUntil}`
           if (lastResearchNoticeRef.current !== cooldownKey) {
-            addLog(`🧠 Adaptive loss guard paused ${signal.option} entries across markets until ${new Date(adaptiveGate.blockedUntil).toLocaleTimeString()} after ${adaptiveGate.consecutiveLosses} consecutive loss(es).`)
+            addLog('Risk control active; entries temporarily paused.')
             lastResearchNoticeRef.current = cooldownKey
           }
           await new Promise(resolve => setTimeout(resolve, Math.min(5000, Math.max(500, adaptiveGate.blockedUntil - Date.now()))))
@@ -382,15 +381,13 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         }
         const accountRisk = evaluateAccountRisk({ balance: accountBalanceRef.current, sessionPL: sessionPLRef.current, targetProfit, stopLoss, nextStake: currentStakeRef.current })
         if (!accountRisk.allowEntry) {
-          if (accountRisk.balanceUnavailable) { addLog('⏳ Waiting for Deriv to confirm account balance before entry.'); await new Promise(resolve => setTimeout(resolve, 1000)); continue }
-          addLog(`🛡️ Account guard: ${accountRisk.message}. New entries stopped.`); isRunningRef.current = false; setIsRunning(false); break
+          if (accountRisk.balanceUnavailable) { if (!balanceWaitLoggedRef.current) addLog('Waiting for account balance confirmation.'); balanceWaitLoggedRef.current = true; await new Promise(resolve => setTimeout(resolve, 1000)); continue }
+          addLog('Risk limit reached; new entries stopped.'); isRunningRef.current = false; setIsRunning(false); break
         }
-        const tradeDirection = signal.option
+        balanceWaitLoggedRef.current = false
         lastResearchNoticeRef.current = ''
         setBestMarket(currentTarget.marketName); setConfluenceScore(currentTarget.score)
-        addLog(`🎯 SELECTED CANDIDATE: ${currentTarget.marketName} | Relative setup score: ${currentTarget.score}/94 (not win probability) | Direction: ${tradeDirection}`)
-        addLog('🔎 Requesting and validating the exact contract quote; no purchase has been sent yet.')
-        const executionStartedAt = performance.now()
+        
         // Reprice a bounded number of times because payout can vary with stake.
         // Do not mutate the live stake until one quote agrees with its recovery size.
         let requestedStake = roundStake(currentStakeRef.current)
@@ -408,7 +405,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
             netProfitPerUnit: quoteNetRate, maxStakeMultiplier: 3
           })
           if (!quoteRecovery.allowed) {
-            addLog(`🛑 Recovery gate: ${quoteRecovery.reason} Required stake ${Number(quoteRecovery.requiredStake).toFixed(2)}; configured ceiling is 3x base. No order sent.`)
+            addLog('Recovery limit reached; no further entry will be placed.')
             isRunningRef.current = false; setIsRunning(false); break
           }
           if (Math.abs(quoteRecovery.stake - requestedStake) < 0.01) {
@@ -417,55 +414,33 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
           }
           const riskAtRecoveryStake = evaluateAccountRisk({ balance: accountBalanceRef.current, sessionPL: sessionPLRef.current, targetProfit, stopLoss, nextStake: quoteRecovery.stake })
           if (!riskAtRecoveryStake.allowEntry) {
-            addLog(`🛡️ Recovery stake rejected by account guard: ${riskAtRecoveryStake.message}. No order sent.`)
+            addLog('Recovery stake exceeds the account risk limit; trading stopped.')
             isRunningRef.current = false; setIsRunning(false); break
           }
           requestedStake = roundStake(quoteRecovery.stake)
         }
         if (!isRunningRef.current) break
         if (!quoteConverged || !proposalRes?.proposal || !quoteRecovery) {
-          addLog('🛡️ Recovery quote did not stabilise within three quote attempts. No order sent; returning to fresh research without changing the recovery stake.')
+          
           await new Promise(resolve => setTimeout(resolve, 500))
           continue
         }
         currentStakeRef.current = requestedStake
         setCurrentStake(requestedStake)
-        if (signal.tradeType === 'Digits' && signal.timeframeUnit === 'Ticks') {
-          let calibration = getPaperForwardSummary(signal)
-          if (!calibration.calibrated) {
-            // Build non-overlapping forward evidence on both demo and real accounts.
-            // No purchase is sent while the exact profile is still being validated.
-            const started = beginPaperTrial({ ...signal, id: `paper-${signal.symbol}-${Date.now()}` }, {
-              quote: { askPrice: proposalRes.proposal.ask_price, payout: proposalRes.proposal.payout,
-                currency: proposalRes.proposal.currency, quotedAt: Date.now() }
-            })
-            if (started) {
-              const difficulty = getContractDifficulty(signal)
-              addLog(`🧪 Forward-validation sample started for ${signal.subTradeType}/${signal.option} on ${signal.symbol}; theoretical baseline ${difficulty.theoreticalWinChance === null ? 'n/a' : (difficulty.theoreticalWinChance * 100).toFixed(1) + '%'}; ${calibration.wins}/${calibration.trades} wins, ${calibration.trades}/200 settled forward samples. No purchase until this exact profile meets the 90% target and quote-adjusted confidence gate.`)
-            } else if (calibration.pending === 0) {
-              addLog('🛡️ Could not start a valid quote-matched forward sample. No purchase sent; waiting for a fresh valid quote.')
-              continue
-            }
-            const waitUntil = Date.now() + Math.max(15000, Number(signal.duration) * 5000)
-            while (isRunningRef.current && getPaperForwardSummary(signal).pending > 0 && Date.now() < waitUntil) {
-              await new Promise(resolve => setTimeout(resolve, 250))
-            }
-            calibration = getPaperForwardSummary(signal)
-            if (calibration.pending > 0) {
-              addLog(`⏳ Forward validation sample remains pending (${calibration.pending}); no purchase sent.`)
-              continue
-            }
-            if (!calibration.calibrated) {
-              addLog(`🧪 Forward validation: ${calibration.wins}/${calibration.trades} overall wins (${calibration.trades}/200); latest ${calibration.recentWins}/${calibration.recentTrades} wins; overall rate ${calibration.winRate === null ? 'n/a' : (calibration.winRate * 100).toFixed(1) + '%'}; confidence lower bound ${calibration.lowerBound === null ? 'n/a' : (calibration.lowerBound * 100).toFixed(1) + '%'}; profile not qualified, so no purchase was sent.`)
-              continue
-            }
-          }
-          const forwardGate = evaluateForwardCalibrationGate(calibration, proposalRes.proposal)
+        if (accountType !== 'demo') {
+          const calibration = getForwardContractCalibration(signal, proposalRes.proposal.currency || 'USD');
+          const forwardGate = evaluateForwardCalibrationGate(calibration, proposalRes.proposal);
           if (!forwardGate.allowed) {
-            addLog(`🛡️ Forward-calibration gate rejected ${signal.symbol}/${signal.option}: ${forwardGate.reason} ${Number.isFinite(forwardGate.lowerBound) ? `Lower bound ${(forwardGate.lowerBound * 100).toFixed(1)}%; required above ${(forwardGate.requiredBound * 100).toFixed(1)}%.` : ''} No purchase sent.`)
-            continue
+            const noticeKey = `forward:${calibration.key}:${forwardGate.reason}`;
+            if (lastCalibrationNoticeRef.current !== noticeKey) {
+              addLog(`Waiting for validation: ${signal.tradeType} / ${signal.subTradeType || 'default'} needs 200 demo-settled outcomes, 90% overall and recent wins, and positive quote-adjusted confidence.`);
+              lastCalibrationNoticeRef.current = noticeKey;
+            }
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            continue;
           }
-          addLog(`💹 Forward validation passed: ${calibration.wins}/${calibration.trades} overall wins (${(calibration.winRate * 100).toFixed(1)}%); latest 50 win rate ${(calibration.recentWinRate * 100).toFixed(1)}%; 95% lower bound ${(forwardGate.lowerBound * 100).toFixed(1)}% exceeds quote break-even ${(forwardGate.quoteBreakEven * 100).toFixed(1)}% plus safety margin. Expected value ${forwardGate.expectedValue.toFixed(4)} per contract.`)
+        } else {
+          lastCalibrationNoticeRef.current = '';
         }
         const marketSnapshot = {
           prices: liveTickDataRef.current[currentTarget.symbol] || [],
@@ -473,27 +448,21 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         }
         const liveCheck = validateLiveOpportunity(signal, marketSnapshot, { now: Date.now(), maxSignalAgeMs: 1500 })
         if (!liveCheck.valid) {
-          addLog(`Entry rejected after quote: ${liveCheck.reason} No purchase sent; returning to live ranking.`)
+          
           continue
         }
         const entryCheck = validateEntryWindow(signal, { maxSignalAgeMs: 1500, proposalBudgetMs: 300, minimumRemainingMs: 250 })
-        if (!entryCheck.valid) { addLog(`Entry expired before purchase: ${entryCheck.reason}`); continue }
-        addLog(`Execution checks passed in ${Math.round(performance.now() - executionStartedAt)}ms; live price drift ${liveCheck.drift.toPrecision(4)}. Sending purchase request now.`)
+        if (!entryCheck.valid) { ; continue }
+        
         const buyRes = await wsRequest({ buy: proposalRes.proposal.id, price: proposalRes.proposal.ask_price })
-        addLog(`🚀 PURCHASE CONFIRMED by Deriv | Contract: ${buyRes.buy.contract_id}`)
+        addLog(`Trade opened: ${signal.market} — ${signal.option} — ${requestedStake.toFixed(2)}.`)
         
         const contractResult = await monitorContract(buyRes.buy.contract_id); if (!contractResult) break
         const profit = parseFloat(contractResult.profit || 0); const isWin = profit > 0
-        if (signal.tradeType === 'Digits' && signal.timeframeUnit === 'Ticks') {
-          const settledCalibration = recordSettledContractOutcome(signal, {
-            quote: proposalRes.proposal, profit, contractId: contractResult.contract_id
-          })
-          if (settledCalibration) addLog(`🧪 Broker-settled calibration: ${settledCalibration.wins}/${settledCalibration.trades} wins, ${settledCalibration.trades}/200 samples for this exact contract profile.`)
-        }
-        const outcomeStats = recordContractOutcome(signal, { profit, stake: currentStakeRef.current, contractId: contractResult.contract_id, bot: 'Automated Bot' })
-        const adaptiveStats = recordAdaptiveOutcome(signal, { profit, stake: currentStakeRef.current, bot: 'Automated Bot' })
-        addLog(`🧠 Strategy profile: ${adaptiveStats.consecutiveLosses} consecutive losses across markets; ${adaptiveStats.trades} recent outcomes; win rate ${adaptiveStats.winRate === null ? 'n/a' : (adaptiveStats.winRate * 100).toFixed(1) + '%'} (90% target).`)
-        if (outcomeStats) addLog(`Thamira history: ${outcomeStats.trades} settled for this exact setup; win rate ${outcomeStats.winRate === null ? 'n/a' : (outcomeStats.winRate * 100).toFixed(1) + '%'}.`)
+        recordContractOutcome(signal, { profit, stake: currentStakeRef.current, contractId: contractResult.contract_id, bot: 'Automated Bot', accountType, quote: proposalRes.proposal })
+        recordAdaptiveOutcome(signal, { profit, stake: currentStakeRef.current, bot: 'Automated Bot' })
+        
+        
         totalTradesRef.current += 1
         sessionPLRef.current += profit
         if (isWin) {
@@ -509,10 +478,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         setWins(winsRef.current)
         setLosses(lossesRef.current)
         setCurrentPL(sessionPLRef.current)
-        addLog(isWin
-          ? `✅ WON +${profit.toFixed(2)} | Contract ${contractResult.contract_id}.`
-          : `❌ LOST -${Math.abs(profit).toFixed(2)} | Contract ${contractResult.contract_id}.`)
-        addLog(`📊 P/L: ${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
+        addLog(`${isWin ? 'WIN' : 'LOSS'} ${profit >= 0 ? '+' : '-'}${Math.abs(profit).toFixed(2)} | Session P/L ${sessionPLRef.current.toFixed(2)}.`)
         const quotedAsk = Number(proposalRes.proposal.ask_price)
         const quotedPayout = Number(proposalRes.proposal.payout)
         const netProfitPerUnit = quotedAsk > 0 && quotedPayout > quotedAsk ? (quotedPayout - quotedAsk) / quotedAsk : 0
@@ -524,16 +490,16 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
           netProfitPerUnit, maxStakeMultiplier: 3
         })
         if (!recoveryDecision.allowed) {
-          addLog(`🛑 Recovery stake required ${Number(recoveryDecision.requiredStake).toFixed(2)} exceeds the configured 3x base-stake ceiling. The settled trade remains recorded; no further entry will be forced.`)
+          addLog('Recovery limit reached; new entries stopped.')
           isRunningRef.current = false; setIsRunning(false); break
         }
-        addLog(`🧮 Cumulative recovery: ideal all-win profit ${recoveryLedgerRef.current.idealProfit.toFixed(2)} | actual P/L ${recoveryLedgerRef.current.actualProfit.toFixed(2)} | remaining gap ${recoveryLedgerRef.current.deficit.toFixed(2)} | next stake ${recoveryDecision.stake.toFixed(2)}.`)
+        
         currentStakeRef.current = recoveryDecision.stake
         setCurrentStake(currentStakeRef.current)
-        if (sessionPLRef.current >= parseFloat(targetProfit)) { addLog(`🎯 TARGET HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
-        if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog('🛑 STOP LOSS HIT!'); setIsRunning(false); isRunningRef.current = false; break }
+        if (sessionPLRef.current >= parseFloat(targetProfit)) { addLog(`Profit target reached (${sessionPLRef.current.toFixed(2)}); new trades stopped.`); setIsRunning(false); isRunningRef.current = false; break }
+        if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog(`Configured loss limit reached (${sessionPLRef.current.toFixed(2)}); new trades stopped.`); setIsRunning(false); isRunningRef.current = false; break }
         await new Promise(r => setTimeout(r, 250))
-      } catch (error) { if (!isRunningRef.current) break; addLog(`❌ Error: ${error.message}`); await new Promise(r => setTimeout(r, 2000)) }
+      } catch (error) { if (!isRunningRef.current) break; addLog('Trading cycle error; retrying after a pause.'); await new Promise(r => setTimeout(r, 2000)) }
     }
     researchInFlightRef.current = false
   }
@@ -543,11 +509,13 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
     isRunningRef.current = true; setIsRunning(true); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0
     currentStakeRef.current = parseFloat(stake); recoveryLedgerRef.current = createRecoveryLedger(parseFloat(stake) || 1); hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0
     consecutiveLossesRef.current = 0
+    lastCalibrationNoticeRef.current = ''
+    balanceWaitLoggedRef.current = false
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0)
-    addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets | Forward-Validated Predictive Gates | Cumulative Recovery)'); addLog(`Account mode: ${accountType === 'demo' ? 'DEMO — forward calibration required before orders' : 'REAL — 90% profile calibration required before digit orders'}`); addLog(`Type: ${tradeType} | Base stake: ${stake} | Martingale: ${martingaleFactor}x with cumulative deficit recovery and 3x hard cap`); addLog(`Target: ${targetProfit} | Stop: ${stopLoss}`); runTradeCycle()
+    addLog(`Bot started — monitoring 13 markets. Selected: ${tradeType}${subTradeType ? ` / ${subTradeType}` : ''}. ${accountType === 'demo' ? 'Demo trades will validate this exact profile.' : 'Real entries require 200 qualifying demo outcomes.'}`); runTradeCycle()
   }
 
-  const stopBot = () => { isRunningRef.current = false; setIsRunning(false); addLog('⏹️ Stopped new entries; all 13-market live research continues, and any open contract remains monitored until settlement.') }
+  const stopBot = () => { isRunningRef.current = false; setIsRunning(false); addLog('New entries stopped; live research continues.') }
   const resetBot = () => { if (isRunningRef.current) return; setLogs([]); try { localStorage.removeItem('mwathe:automated-bot-logs:v1') } catch {}; shouldAutoScrollRef.current = true; setValidationError('') }
   const rules = TIMEFRAME_RULES[tradeType]; const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
 
