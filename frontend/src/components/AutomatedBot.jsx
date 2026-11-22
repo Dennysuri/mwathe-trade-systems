@@ -288,8 +288,8 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         const tradeDirection = signal.option
         lastResearchNoticeRef.current = ''
         setBestMarket(currentTarget.marketName); setConfluenceScore(currentTarget.score)
-        addLog(`🎯 LOCKED: ${currentTarget.marketName} | Score: ${currentTarget.score}% | Direction: ${tradeDirection}`)
-        addLog('🚀 EXECUTING...')
+        addLog(`🎯 SELECTED CANDIDATE: ${currentTarget.marketName} | Relative setup score: ${currentTarget.score}/94 (not win probability) | Direction: ${tradeDirection}`)
+        addLog('🔎 Requesting and validating the exact contract quote; no purchase has been sent yet.')
         const proposalReq = buildProposal(signal, roundStake(currentStakeRef.current))
         const executionStartedAt = performance.now()
         // The proposal request itself validates the exact contract mapping; avoid a
@@ -319,7 +319,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
             if (updated.pending > 0) {
               addLog(`⏳ Waiting for live ticks to settle the calibration sample (${updated.pending} pending).`)
             } else {
-              addLog(`🧪 Calibration: ${updated.wins}/${updated.trades} wins; observed break-even ${updated.maxBreakEvenRate === null ? 'n/a' : (updated.maxBreakEvenRate * 100).toFixed(1) + '%'}; conservative lower bound ${updated.lowerBound === null ? 'n/a' : (updated.lowerBound * 100).toFixed(1) + '%'}; ${updated.calibrated ? 'qualified' : 'not yet qualified'}.`)
+              addLog(`🧪 PAPER calibration only: ${updated.wins}/${updated.trades} wins (${updated.trades}/200 required); observed break-even ${updated.maxBreakEvenRate === null ? 'n/a' : (updated.maxBreakEvenRate * 100).toFixed(1) + '%'}; conservative lower bound ${updated.lowerBound === null ? 'n/a' : (updated.lowerBound * 100).toFixed(1) + '%'}; ${updated.calibrated ? 'qualified' : 'not qualified; no real purchase sent'}.`)
             }
             continue
           }
@@ -335,10 +335,10 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         }
         const entryCheck = validateEntryWindow(signal, { maxSignalAgeMs: 1500, proposalBudgetMs: 300, minimumRemainingMs: 250 })
         if (!entryCheck.valid) { addLog(`Entry expired before purchase: ${entryCheck.reason}`); continue }
-        addLog(`Execution checks passed in ${Math.round(performance.now() - executionStartedAt)}ms; live price drift ${liveCheck.drift.toPrecision(4)}.`)
+        addLog(`Execution checks passed in ${Math.round(performance.now() - executionStartedAt)}ms; live price drift ${liveCheck.drift.toPrecision(4)}. Sending purchase request now.`)
         const buyRes = await wsRequest({ buy: proposalRes.proposal.id, price: proposalRes.proposal.ask_price })
         if (!isRunningRef.current) break
-        addLog(`✅ Contract: ${buyRes.buy.contract_id}`)
+        addLog(`🚀 PURCHASE CONFIRMED by Deriv | Contract: ${buyRes.buy.contract_id}`)
         
         const contractResult = await monitorContract(buyRes.buy.contract_id); if (!contractResult) break
         const profit = parseFloat(contractResult.profit || 0); const isWin = profit > 0
@@ -453,7 +453,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       </div>
       <div className="bg-black rounded-lg border border-gray-800 overflow-hidden flex-1 min-h-0 flex flex-col">
         <div className="bg-gray-900 px-2 py-1 flex items-center gap-1 border-b border-gray-800 flex-shrink-0"><Terminal size={10} className="text-green-500" /><span className="text-[10px] text-gray-400 font-bold">EXECUTION LOG</span></div>
-        <div ref={logRef} onScroll={() => { const el = logRef.current; if (el) shouldAutoScrollRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60 }} className="flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5" style={{scrollBehavior: 'auto'}}>
+        <div ref={logRef} onScroll={() => { const el = logRef.current; if (el) shouldAutoScrollRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60 }} className="log-selectable flex-1 p-2 overflow-y-auto font-mono text-[10px] space-y-0.5" style={{scrollBehavior: 'auto'}}>
           {logs.map((log, i) => <p key={i} className={log.includes('✅') || log.includes('WON') || log.includes('TARGET') ? 'text-green-400' : log.includes('❌') || log.includes('LOST') || log.includes('Error') || log.includes('STOP') ? 'text-red-500' : log.includes('🚀') || log.includes('') || log.includes('🔬') || log.includes('⏳') || log.includes('') || log.includes('⚠️') ? 'text-sky-400' : log.includes('━━') ? 'text-gray-600' : 'text-gray-400'}>{log}</p>)}
         </div>
       </div>
