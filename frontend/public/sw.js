@@ -45,7 +45,7 @@ self.addEventListener('fetch', (event) => {
 
   // Network-first for assets so an installed PWA cannot keep serving an older UI bundle.
   // Fall back to the current cache only while offline.
-  if (/\\.(?:js|css|svg|png|webp|ico|woff2?)$/i.test(url.pathname)) {
+  if (/\.(?:js|css|svg|png|webp|ico|woff2?)$/i.test(url.pathname)) {
     event.respondWith(
       fetch(request).then((response) => {
         if (response.ok && response.type === 'basic') {
