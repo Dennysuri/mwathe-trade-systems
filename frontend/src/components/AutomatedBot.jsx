@@ -167,11 +167,15 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
   }, [token, accountId])
 
   const loadAllHistory = () => {
+    if (historyLoadedRef.current || historyLoadInFlightRef.current) return Promise.resolve()
+    historyLoadInFlightRef.current = true
     return new Promise((resolve) => {
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return resolve()
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { historyLoadInFlightRef.current = false; return resolve() }
       let loadedCount = 0
+      let finished = false
+      const finish = () => { if (finished) return; finished = true; historyLoadedRef.current = true; historyLoadInFlightRef.current = false; resolve() }
       const totalMarkets = UNIQUE_MARKETS.length
-      const checkDone = () => { loadedCount++; if (loadedCount >= totalMarkets) { historyLoadedRef.current = true; resolve() } }
+      const checkDone = () => { loadedCount++; if (loadedCount >= totalMarkets) finish() }
       UNIQUE_MARKETS.forEach(([,sym]) => {
         const reqId = reqIdRef.current++
         const onMessage = (event) => {
@@ -186,7 +190,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         wsRef.current.addEventListener('message', onMessage)
         wsRef.current.send(JSON.stringify({ ticks_history: sym, count: 250, end: 'latest', style: 'ticks', subscribe: 1, req_id: reqId }))
       })
-      setTimeout(() => { historyLoadedRef.current = true; resolve() }, 4000)
+      setTimeout(finish, 4000)
     })
   }
 
