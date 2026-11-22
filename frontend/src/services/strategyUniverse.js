@@ -125,11 +125,18 @@ export async function rankLiveStrategyUniverse(markets, selectedConfig = {}, opt
   const ranked = groups.flat().sort((a, b) =>
     (b.report?.candidate?.score ?? b.score) - (a.report?.candidate?.score ?? a.score));
   const cycleCompletedAt = Date.now();
-  const rows = [...diagnostics.values()].map(row => ({
-    ...row, profileCount: profiles.length,
-    analysisComplete: row.profileEvaluations === profiles.length,
-    cycleStartedAt, cycleCompletedAt, cycleDurationMs: cycleCompletedAt - cycleStartedAt
-  }));
+  const rows = [...diagnostics.values()].map(row => {
+    const evaluatedAllProfiles = row.profileEvaluations === profiles.length;
+    const feedFresh = Boolean(row.lastLiveAt) && cycleCompletedAt - row.lastLiveAt >= 0
+      && cycleCompletedAt - row.lastLiveAt <= (options.maxAgeMs ?? 5000);
+    const hasRequiredSamples = row.liveTicks >= (options.minLiveTicks ?? 200)
+      && row.liveBufferSize >= (options.minLiveTicks ?? 200);
+    return {
+      ...row, profileCount: profiles.length, evaluatedAllProfiles, feedFresh, hasRequiredSamples,
+      analysisComplete: evaluatedAllProfiles && feedFresh && hasRequiredSamples,
+      cycleStartedAt, cycleCompletedAt, cycleDurationMs: cycleCompletedAt - cycleStartedAt
+    };
+  });
   options.onMarketDiagnostics?.(rows);
   options.onResearchCycle?.({
     cycleStartedAt, cycleCompletedAt, cycleDurationMs: cycleCompletedAt - cycleStartedAt,
