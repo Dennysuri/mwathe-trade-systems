@@ -265,7 +265,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     }
     const requiredScore = performanceRecoveryUntilRef.current > now ? 92 : consecutiveLossesRef.current >= 3 ? 92 : consecutiveLossesRef.current >= 2 ? 90 : consecutiveLossesRef.current === 1 ? 85 : 0
     const eligible = universe.filter(item => {
-      const adaptive = getAdaptiveStrategyStatus(item.signal || { ...item.profile, option: item.signal?.option || option, predictedDigit: Number(predictedDigit) }, now)
+      const adaptive = getAdaptiveStrategyStatus(item.signal || { ...item.profile, option: item.signal?.option || selectedConfig.option, predictedDigit: Number(selectedConfig.predictedDigit) }, now)
       return !adaptive.blocked
       && item.profile.tradeType === selectedConfig.tradeType
       && item.profile.subTradeType === (selectedConfig.subTradeType || '')
