@@ -5,9 +5,8 @@ import { validateEntryWindow } from '../services/strategyIntelligence'
 import { evaluateForwardCalibrationGate } from '../services/forwardCalibrationGate'
 import { validateLiveOpportunity } from '../services/liveOpportunityEngine'
 import { rankLiveStrategyUniverse } from '../services/strategyUniverse'
-import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
+import { getForwardContractCalibration, recordContractOutcome } from '../services/contractOutcomeIntelligence'
 import { evaluateAccountRisk, getAdaptiveStrategyStatus, recordAdaptiveOutcome } from '../services/adaptiveTradingIntelligence'
-import { advancePaperTrials, beginPaperTrial, getPaperForwardSummary, recordSettledContractOutcome, supportsForwardCalibration } from '../services/paperForwardCalibration'
 import { appendTickBuffer, seedTickBuffer } from '../services/marketTickBuffer'
 import { createRecoveryLedger, nextRecoveryStake, recordRecoveryOutcome } from '../services/recoveryAccounting'
 
@@ -140,8 +139,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
                 lastLiveAtRef.current[symbol] = Date.now()
                 liveTickCountRef.current[symbol] = (liveTickCountRef.current[symbol] || 0) + 1
               }
-              advancePaperTrials(symbol, { quote: msg.tick.quote, pipSize: msg.tick.pip_size })
-              // Forward-trial outcomes update calibration silently; the user sees only real trades.
+
               if (!historySeededRef.current[symbol]) {
                 pendingLiveTicksRef.current[symbol] = appendTickBuffer(pendingLiveTicksRef.current[symbol], msg.tick.quote)
               }
@@ -438,41 +436,18 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         }
         currentStakeRef.current = requestedStake
         setCurrentStake(requestedStake)
-        if (signal.tradeType === 'Digits' && signal.timeframeUnit === 'Ticks') {
-          let calibration = getPaperForwardSummary(signal)
-          if (!calibration.calibrated) {
-            // Build non-overlapping forward evidence on both demo and real accounts.
-            // No purchase is sent while the exact profile is still being validated.
-            const started = beginPaperTrial({ ...signal, id: `paper-${signal.symbol}-${Date.now()}` }, {
-              quote: { askPrice: proposalRes.proposal.ask_price, payout: proposalRes.proposal.payout,
-                currency: proposalRes.proposal.currency, quotedAt: Date.now() }
-            })
-            if (started) {
-              
-            } else if (calibration.pending === 0) {
-              
-              continue
-            }
-            const waitUntil = Date.now() + Math.max(15000, Number(signal.duration) * 5000)
-            while (isRunningRef.current && getPaperForwardSummary(signal).pending > 0 && Date.now() < waitUntil) {
-              await new Promise(resolve => setTimeout(resolve, 250))
-            }
-            calibration = getPaperForwardSummary(signal)
-            if (calibration.pending > 0) {
-              
-              continue
-            }
-            if (!calibration.calibrated) {
-              
-              continue
-            }
-          }
-          const forwardGate = evaluateForwardCalibrationGate(calibration, proposalRes.proposal)
+        if (accountType !== 'demo') {
+          const calibration = getForwardContractCalibration(signal, proposalRes.proposal.currency || 'USD');
+          const forwardGate = evaluateForwardCalibrationGate(calibration, proposalRes.proposal);
           if (!forwardGate.allowed) {
-            
-            continue
+            const noticeKey = `forward:${calibration.key}:${forwardGate.reason}`;
+            if (lastResearchNoticeRef.current !== noticeKey) {
+              addLog(`Waiting for validation: ${signal.tradeType} / ${signal.subTradeType || 'default'} needs 200 demo-settled outcomes, 90% overall and recent wins, and positive quote-adjusted confidence.`);
+              lastResearchNoticeRef.current = noticeKey;
+            }
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            continue;
           }
-          
         }
         const marketSnapshot = {
           prices: liveTickDataRef.current[currentTarget.symbol] || [],
@@ -491,12 +466,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         
         const contractResult = await monitorContract(buyRes.buy.contract_id); if (!contractResult) break
         const profit = parseFloat(contractResult.profit || 0); const isWin = profit > 0
-        if (signal.tradeType === 'Digits' && signal.timeframeUnit === 'Ticks') {
-          recordSettledContractOutcome(signal, {
-            quote: proposalRes.proposal, profit, contractId: contractResult.contract_id
-          })
-        }
-        recordContractOutcome(signal, { profit, stake: currentStakeRef.current, contractId: contractResult.contract_id, bot: 'Automated Bot' })
+        recordContractOutcome(signal, { profit, stake: currentStakeRef.current, contractId: contractResult.contract_id, bot: 'Automated Bot', accountType, quote: proposalRes.proposal })
         recordAdaptiveOutcome(signal, { profit, stake: currentStakeRef.current, bot: 'Automated Bot' })
         
         
@@ -548,7 +518,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
     consecutiveLossesRef.current = 0
     unsupportedNoticeRef.current = ''
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0)
-    addLog(`Bot started — monitoring 13 markets. Selected strategy: ${tradeType}${subTradeType ? ` / ${subTradeType}` : ''}.`); runTradeCycle()
+    addLog(`Bot started — monitoring 13 markets. Selected: ${tradeType}${subTradeType ? ` / ${subTradeType}` : ''}. ${accountType === 'demo' ? 'Demo trades will validate this exact profile.' : 'Real entries require 200 qualifying demo outcomes.'}`); runTradeCycle()
   }
 
   const stopBot = () => { isRunningRef.current = false; setIsRunning(false); addLog('New entries stopped; live research continues.') }
