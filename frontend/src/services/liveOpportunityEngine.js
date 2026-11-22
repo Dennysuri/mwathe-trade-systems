@@ -39,7 +39,7 @@ export async function rankLiveMarketOpportunities(markets, config = {}, {
       symbol: market.symbol,
       barrier: config.tradeType === 'Digits' ? String(config.predictedDigit) : config.barrier
     });
-    // Preserve the strongest observed setup for Thamira's comparison board even
+    // Preserve the strongest observed setup for the internal comparison board even
     // when it does not yet pass the legacy display threshold. Execution remains
     // separately qualified and must never treat a watch candidate as approved.
     const candidate = report.candidate || report.watchCandidate;
