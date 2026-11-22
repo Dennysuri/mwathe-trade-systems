@@ -142,9 +142,9 @@ export function getPaperForwardSummary(signal = null) {
 export function resetPaperTrials() { pending.clear(); }
 
 /**
- * Allow uncalibrated validation orders only on a Deriv demo account.
- * Real-account digit orders remain blocked until the exact quote-matched
- * profile clears the 90% sample, confidence and payout requirements.
+ * A demo purchase is permitted only after the exact quote-matched profile
+ * clears the same forward-performance, recent-regime and payout requirements
+ * used for real-account digit execution.
  */
 export function canExecuteDemoValidationTrade(accountType, calibration) {
   return accountType === 'demo' && calibration?.calibrated === true;
