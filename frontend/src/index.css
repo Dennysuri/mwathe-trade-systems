@@ -18,3 +18,15 @@ html, body, #root {
   touch-action: manipulation;
   user-select: none;
 }
+
+
+/* Log feeds must remain selectable on touch devices even though the app shell disables selection. */
+.log-selectable,
+.log-selectable * {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+  -webkit-touch-callout: default;
+}
+.log-selectable {
+  touch-action: pan-y;
+}
