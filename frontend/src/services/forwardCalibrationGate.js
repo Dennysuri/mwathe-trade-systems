@@ -8,6 +8,8 @@ export function evaluateForwardCalibrationGate(calibration = {}, quote = {}, {
 } = {}) {
   const trades = Number(calibration.trades);
   const winRate = Number(calibration.winRate);
+  const recentTrades = Number(calibration.recentTrades);
+  const recentWinRate = Number(calibration.recentWinRate);
   const lowerBound = Number(calibration.lowerBound);
   const maxBreakEvenRate = Number(calibration.maxBreakEvenRate);
   const ask = Number(quote.ask_price ?? quote.askPrice);
@@ -21,7 +23,13 @@ export function evaluateForwardCalibrationGate(calibration = {}, quote = {}, {
     return { allowed: false, reason: `Forward sample is incomplete (${Number.isFinite(trades) ? trades : 0}/${minTrades}).`, quoteBreakEven };
   }
   if (!Number.isFinite(winRate) || winRate < targetWinRate) {
-    return { allowed: false, reason: `Observed forward win rate is below ${(targetWinRate * 100).toFixed(1)}%.`, quoteBreakEven };
+    return { allowed: false, reason: `Overall forward win rate is below ${(targetWinRate * 100).toFixed(1)}%.`, quoteBreakEven };
+  }
+  if (!Number.isFinite(recentTrades) || recentTrades < 50) {
+    return { allowed: false, reason: 'The most recent 50 forward outcomes are not yet available.', quoteBreakEven };
+  }
+  if (!Number.isFinite(recentWinRate) || recentWinRate < targetWinRate) {
+    return { allowed: false, reason: `Recent forward win rate is below ${(targetWinRate * 100).toFixed(1)}%; the profile may be deteriorating.`, quoteBreakEven };
   }
   if (!Number.isFinite(lowerBound) || !Number.isFinite(maxBreakEvenRate)) {
     return { allowed: false, reason: 'A valid forward confidence bound and quote history are required.', quoteBreakEven };
