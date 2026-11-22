@@ -25,7 +25,7 @@ const wilsonLowerBound = (wins, trades, z = 1.96) => {
   return Math.max(0, (center - spread) / denominator);
 };
 
-const forwardProfile = (signal, currency = 'USD') => `${contractProfile(signal)}|${currency || 'USD'}`;
+const forwardProfile = (signal, currency = 'USD') => [contractProfile(signal), currency || 'USD', signal.multiplier ?? 'na', signal.growthRate ?? 'na', signal.takeProfit ?? 'na', signal.contractStopLoss ?? 'na'].join('|');
 
 const read = () => {
   try {
