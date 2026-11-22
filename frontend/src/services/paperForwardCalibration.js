@@ -147,5 +147,5 @@ export function resetPaperTrials() { pending.clear(); }
  * profile clears the 90% sample, confidence and payout requirements.
  */
 export function canExecuteDemoValidationTrade(accountType, calibration) {
-  return accountType === 'demo' && calibration?.calibrated !== true;
+  return accountType === 'demo' && calibration?.calibrated === true;
 }
