@@ -89,8 +89,9 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
 
   useEffect(() => {
     if (!token || !accountId) return
+    connectionActiveRef.current = true
     const handleVisibility = () => {
-      if (document.visibilityState === 'visible' && isRunningRef.current) {
+      if (document.visibilityState === 'visible') {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
           reconnectAttemptsRef.current = 0
           connectWS()
@@ -100,6 +101,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
     document.addEventListener('visibilitychange', handleVisibility)
     
     const connectWS = async () => {
+      if (!connectionActiveRef.current) return
       try {
         const response = await fetch(`https://api.derivws.com/trading/v1/options/accounts/${accountId}/otp`, { method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' } })
         const data = await response.json()
