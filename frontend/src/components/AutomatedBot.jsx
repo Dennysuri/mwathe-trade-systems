@@ -456,7 +456,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
               continue
             }
             if (!calibration.calibrated) {
-              addLog(`🧪 Forward validation: ${calibration.wins}/${calibration.trades} wins (${calibration.trades}/200); observed rate ${calibration.winRate === null ? 'n/a' : (calibration.winRate * 100).toFixed(1) + '%'}; confidence lower bound ${calibration.lowerBound === null ? 'n/a' : (calibration.lowerBound * 100).toFixed(1) + '%'}; profile not qualified, so no purchase was sent.`)
+              addLog(`🧪 Forward validation: ${calibration.wins}/${calibration.trades} overall wins (${calibration.trades}/200); latest ${calibration.recentWins}/${calibration.recentTrades} wins; overall rate ${calibration.winRate === null ? 'n/a' : (calibration.winRate * 100).toFixed(1) + '%'}; confidence lower bound ${calibration.lowerBound === null ? 'n/a' : (calibration.lowerBound * 100).toFixed(1) + '%'}; profile not qualified, so no purchase was sent.`)
               continue
             }
           }
@@ -465,7 +465,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
             addLog(`🛡️ Forward-calibration gate rejected ${signal.symbol}/${signal.option}: ${forwardGate.reason} ${Number.isFinite(forwardGate.lowerBound) ? `Lower bound ${(forwardGate.lowerBound * 100).toFixed(1)}%; required above ${(forwardGate.requiredBound * 100).toFixed(1)}%.` : ''} No purchase sent.`)
             continue
           }
-          addLog(`💹 Forward validation passed: ${calibration.wins}/${calibration.trades} wins (${(calibration.winRate * 100).toFixed(1)}%); 95% lower bound ${(forwardGate.lowerBound * 100).toFixed(1)}% exceeds quote break-even ${(forwardGate.quoteBreakEven * 100).toFixed(1)}% plus safety margin. Expected value ${forwardGate.expectedValue.toFixed(4)} per contract.`)
+          addLog(`💹 Forward validation passed: ${calibration.wins}/${calibration.trades} overall wins (${(calibration.winRate * 100).toFixed(1)}%); latest 50 win rate ${(calibration.recentWinRate * 100).toFixed(1)}%; 95% lower bound ${(forwardGate.lowerBound * 100).toFixed(1)}% exceeds quote break-even ${(forwardGate.quoteBreakEven * 100).toFixed(1)}% plus safety margin. Expected value ${forwardGate.expectedValue.toFixed(4)} per contract.`)
         }
         const marketSnapshot = {
           prices: liveTickDataRef.current[currentTarget.symbol] || [],
