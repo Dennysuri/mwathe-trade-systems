@@ -248,10 +248,8 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
       lastLiveAt: lastLiveAtRef.current[symbol] || 0,
       liveTicks: liveTickCountRef.current[symbol] || 0
     }))
-    const universe = await rankLiveStrategyUniverse(markets, {
-      tradeType, subTradeType, option, predictedDigit: Number(predictedDigit),
-      duration: durationValue, timeframeUnit
-    }, { now: Date.now(), maxAgeMs: 5000, minLiveTicks: 1 })
+    const selectedConfig = researchConfigRef.current
+    const universe = await rankLiveStrategyUniverse(markets, selectedConfig, { now: Date.now(), maxAgeMs: 5000, minLiveTicks: 1 })
     // Research all supported profiles, but only the exact user-selected profile
     // is eligible to enter the bot's existing validation/execution path.
     const now = Date.now()
@@ -266,10 +264,10 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     const eligible = universe.filter(item => {
       const adaptive = getAdaptiveStrategyStatus(item.signal || { ...item.profile, option: item.signal?.option || option, predictedDigit: Number(predictedDigit) }, now)
       return !adaptive.blocked
-      && item.profile.tradeType === tradeType
-      && item.profile.subTradeType === (subTradeType || '')
-      && item.profile.timeframeUnit === timeframeUnit
-      && Number(item.profile.duration) === Number(durationValue)
+      && item.profile.tradeType === selectedConfig.tradeType
+      && item.profile.subTradeType === (selectedConfig.subTradeType || '')
+      && item.profile.timeframeUnit === selectedConfig.timeframeUnit
+      && Number(item.profile.duration) === Number(selectedConfig.duration)
       && item.qualified === true
       && (marketCooldownUntilRef.current[item.symbol] || 0) <= now
       && Number(item.score || 0) >= requiredScore
