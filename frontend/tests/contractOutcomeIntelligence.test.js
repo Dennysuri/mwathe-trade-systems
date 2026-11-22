@@ -72,3 +72,25 @@ test('a deteriorating latest 50 outcomes disables a previously strong profile', 
   assert.equal(result.recentWinRate, 0.8);
   assert.equal(result.calibrated, false);
 });
+
+
+test('volatility-scaled barriers share a normalized profile while fixed contract parameters remain isolated', () => {
+  resetStorage();
+  const touchA = {
+    symbol:'R_100', tradeType:'Touch & No Touch', subTradeType:'Touch/No Touch',
+    option:'Touch', duration:5, timeframeUnit:'Ticks',
+    barrierMode:'volatility-multiple', barrierMultiple:3, barrier:'+0.0010'
+  };
+  const touchB = { ...touchA, barrier:'+0.0024' };
+  const touchDifferentModel = { ...touchB, barrierMultiple:2 };
+  assert.equal(getForwardContractCalibration(touchA, 'USD').key,
+    getForwardContractCalibration(touchB, 'USD').key);
+  assert.notEqual(getForwardContractCalibration(touchA, 'USD').key,
+    getForwardContractCalibration(touchDifferentModel, 'USD').key);
+  const multiplier = {
+    symbol:'R_100', tradeType:'Multipliers', subTradeType:'Multipliers',
+    option:'Up', duration:1, timeframeUnit:'Auto', multiplier:100
+  };
+  assert.notEqual(getForwardContractCalibration(multiplier, 'USD').key,
+    getForwardContractCalibration({ ...multiplier, multiplier:200 }, 'USD').key);
+});
