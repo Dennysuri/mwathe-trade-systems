@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { beginPaperTrial, advancePaperTrials, getPaperForwardSummary, resetPaperTrials, wilsonLowerBound } from '../src/services/paperForwardCalibration.js';
+import { beginPaperTrial, advancePaperTrials, canExecuteDemoValidationTrade, getPaperForwardSummary, resetPaperTrials, wilsonLowerBound } from '../src/services/paperForwardCalibration.js';
 
 function quote(askPrice=1,payout=1.9){ return {askPrice,payout,currency:'USD',quotedAt:900}; }
 
@@ -12,6 +12,13 @@ function resetStorage() {
     removeItem: key => values.delete(key)
   };
 }
+
+test('uncalibrated validation execution is enabled only for demo accounts', () => {
+  assert.equal(canExecuteDemoValidationTrade('demo', { calibrated: false }), true);
+  assert.equal(canExecuteDemoValidationTrade('real', { calibrated: false }), false);
+  assert.equal(canExecuteDemoValidationTrade('demo', { calibrated: true }), false);
+  assert.equal(canExecuteDemoValidationTrade(undefined, { calibrated: false }), false);
+});
 
 test('paper-forward digit trials require a valid Deriv proposal quote and settle after future ticks', () => {
   resetPaperTrials();
