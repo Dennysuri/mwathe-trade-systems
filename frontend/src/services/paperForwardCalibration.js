@@ -102,3 +102,12 @@ export function getPaperForwardSummary(signal = null) {
     note: 'Quote-matched forward paper outcomes. Calibration is local to this browser; the lower confidence bound must beat the worst observed quote break-even rate plus margin.' };
 }
 export function resetPaperTrials() { pending.clear(); }
+
+/**
+ * Allow uncalibrated validation orders only on a Deriv demo account.
+ * Real-account digit orders remain blocked until the exact quote-matched
+ * profile clears the 90% sample, confidence and payout requirements.
+ */
+export function canExecuteDemoValidationTrade(accountType, calibration) {
+  return accountType === 'demo' && calibration?.calibrated !== true;
+}

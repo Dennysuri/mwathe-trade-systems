@@ -6,7 +6,7 @@ import { validateLiveOpportunity } from '../services/liveOpportunityEngine'
 import { rankLiveStrategyUniverse } from '../services/strategyUniverse'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
 import { evaluateAccountRisk, getAdaptiveStrategyStatus, getContractDifficulty, recordAdaptiveOutcome } from '../services/adaptiveTradingIntelligence'
-import { advancePaperTrials, beginPaperTrial, getPaperForwardSummary } from '../services/paperForwardCalibration'
+import { advancePaperTrials, beginPaperTrial, canExecuteDemoValidationTrade, getPaperForwardSummary } from '../services/paperForwardCalibration'
 import { appendTickBuffer, seedTickBuffer } from '../services/marketTickBuffer'
 
 const copyLogFeed = async (entries) => {
@@ -30,7 +30,7 @@ const TIMEFRAME_RULES = { 'Digits': { units: ['Ticks'], defaultUnit: 'Ticks', mi
 
 const roundStake = (v) => Math.round(v * 100) / 100
 
-export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
+export default function AutomatedBot({ token, accountId, accountType = 'real', onBalanceUpdate }) {
   const [tradeType, setTradeType] = useState('Digits')
   const [subTradeType, setSubTradeType] = useState('Over/Under')
   const [option, setOption] = useState('Over')
@@ -368,23 +368,27 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
             })
             if (started) {
               const difficulty = getContractDifficulty(signal)
-              addLog(`🧪 Calibration-only trial started for ${signal.subTradeType}/${signal.option} on ${signal.symbol}; theoretical baseline ${difficulty.theoreticalWinChance === null ? 'n/a' : (difficulty.theoreticalWinChance * 100).toFixed(1) + '%'}; exact profile barrier ${signal.predictedDigit ?? 'n/a'}, duration ${signal.duration} ${signal.timeframeUnit}; ${calibration.wins}/${calibration.trades} wins, ${calibration.trades}/200 settled samples, 90% observed-win target plus quote break-even confidence required; no purchase sent.`)
+              addLog(`🧪 ${accountType === 'demo' ? 'Demo validation sample started' : 'Calibration-only trial started'} for ${signal.subTradeType}/${signal.option} on ${signal.symbol}; theoretical baseline ${difficulty.theoreticalWinChance === null ? 'n/a' : (difficulty.theoreticalWinChance * 100).toFixed(1) + '%'}; exact profile barrier ${signal.predictedDigit ?? 'n/a'}, duration ${signal.duration} ${signal.timeframeUnit}; ${calibration.wins}/${calibration.trades} wins, ${calibration.trades}/200 settled samples, 90% observed-win target plus quote break-even confidence required.`)
             } else if (calibration.pending === 0) {
               addLog('🛡️ No valid quote-matched calibration trial could be started; refusing this digit entry and retrying after a fresh quote.')
               await new Promise(resolve => setTimeout(resolve, 1500))
               continue
             }
-            const waitUntil = Date.now() + Math.max(15000, Number(signal.duration) * 5000)
-            while (isRunningRef.current && getPaperForwardSummary(signal).pending > 0 && Date.now() < waitUntil) {
-              await new Promise(resolve => setTimeout(resolve, 250))
+            const demoPilot = canExecuteDemoValidationTrade(accountType, calibration)
+            if (!demoPilot) {
+              const waitUntil = Date.now() + Math.max(15000, Number(signal.duration) * 5000)
+              while (isRunningRef.current && getPaperForwardSummary(signal).pending > 0 && Date.now() < waitUntil) {
+                await new Promise(resolve => setTimeout(resolve, 250))
+              }
+              const updated = getPaperForwardSummary(signal)
+              if (updated.pending > 0) {
+                addLog(`⏳ Waiting for live ticks to settle the calibration sample (${updated.pending} pending).`)
+              } else {
+                addLog(`🧪 PAPER calibration only: ${updated.wins}/${updated.trades} wins (${updated.trades}/200 required); observed break-even ${updated.maxBreakEvenRate === null ? 'n/a' : (updated.maxBreakEvenRate * 100).toFixed(1) + '%'}; conservative lower bound ${updated.lowerBound === null ? 'n/a' : (updated.lowerBound * 100).toFixed(1) + '%'}; ${updated.calibrated ? 'qualified' : 'not qualified; no real purchase sent'}.`)
+              }
+              continue
             }
-            const updated = getPaperForwardSummary(signal)
-            if (updated.pending > 0) {
-              addLog(`⏳ Waiting for live ticks to settle the calibration sample (${updated.pending} pending).`)
-            } else {
-              addLog(`🧪 PAPER calibration only: ${updated.wins}/${updated.trades} wins (${updated.trades}/200 required); observed break-even ${updated.maxBreakEvenRate === null ? 'n/a' : (updated.maxBreakEvenRate * 100).toFixed(1) + '%'}; conservative lower bound ${updated.lowerBound === null ? 'n/a' : (updated.lowerBound * 100).toFixed(1) + '%'}; ${updated.calibrated ? 'qualified' : 'not qualified; no real purchase sent'}.`)
-            }
-            continue
+            addLog('🧪 DEMO EXECUTION PILOT: sending a real Deriv demo order after normal live-signal, quote, balance and session-risk checks. Real-account orders remain blocked until this exact profile clears 90% calibration.')
           }
         }
         const marketSnapshot = {
@@ -453,7 +457,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     currentStakeRef.current = parseFloat(stake); hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0
     consecutiveLossesRef.current = 0; recentOutcomesRef.current = []; performanceCooldownUntilRef.current = 0; performanceRecoveryUntilRef.current = 0; lastPerformancePauseNoticeRef.current = 0
     setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); marketCooldownUntilRef.current = {}
-    addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets | Loss-Resistant Entry Gates)'); addLog(`Type: ${tradeType} | Stake: ${stake} | Recovery: adaptive strategy guard + bounded martingale`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); runTradeCycle()
+    addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets | Loss-Resistant Entry Gates)'); addLog(`Account mode: ${accountType === 'demo' ? 'DEMO — live validation orders enabled' : 'REAL — 90% profile calibration required before digit orders'}`); addLog(`Type: ${tradeType} | Stake: ${stake} | Recovery: adaptive strategy guard + bounded martingale`); addLog(`Target: ${targetProfit} | Stop: ${stopLoss}`); runTradeCycle()
   }
 
   const stopBot = () => { isRunningRef.current = false; setIsRunning(false); addLog('⏹️ Stopped new entries; all 13-market live research continues, and any open contract remains monitored until settlement.') }
