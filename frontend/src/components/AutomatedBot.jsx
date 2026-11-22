@@ -162,10 +162,18 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
             setTimeout(connectWS, delay)
           }
         }
-      } catch (err) { addLog(`❌ Connection failed`) }
+      } catch (err) {
+        addLog(`❌ Connection failed: ${err.message}`)
+        if (connectionActiveRef.current) {
+          reconnectAttemptsRef.current++
+          const delay = Math.min(3000 * reconnectAttemptsRef.current, 30000)
+          setTimeout(connectWS, delay)
+        }
+      }
     }
     connectWS()
     return () => { 
+      connectionActiveRef.current = false
       if (wsRef.current) wsRef.current.close()
       if (pingIntervalRef.current) clearInterval(pingIntervalRef.current)
       document.removeEventListener('visibilitychange', handleVisibility)
