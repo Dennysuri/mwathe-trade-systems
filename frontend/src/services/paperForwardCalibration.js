@@ -123,14 +123,21 @@ export function getPaperForwardSummary(signal = null) {
   const lowerBound = wilsonLowerBound(wins, trades);
   const maxBreakEvenRate = trades ? Math.max(...filtered.map(row => row.breakEvenRate)) : null;
   const winRate = trades ? wins / trades : null;
+  const recent = filtered.slice(-50);
+  const recentWins = recent.filter(row => row.won).length;
+  const recentTrades = recent.length;
+  const recentWinRate = recentTrades ? recentWins / recentTrades : null;
   const calibrated = trades >= MIN_CALIBRATION_TRADES && lowerBound !== null
     && winRate >= TARGET_WIN_RATE
+    && recentTrades >= 50 && recentWinRate >= TARGET_WIN_RATE
     && lowerBound > maxBreakEvenRate + SAFETY_MARGIN;
-  return { trades, wins, losses: trades - wins, winRate: trades ? wins / trades : null,
+  return { trades, wins, losses: trades - wins, winRate,
+    recentTrades, recentWins, recentWinRate,
     lowerBound, maxBreakEvenRate, safetyMargin: SAFETY_MARGIN, minTrades: MIN_CALIBRATION_TRADES,
     calibrated, pending: signal ? [...pending.values()].filter(item => item.key === paperProfile(signal)).length : pending.size,
     targetWinRate: TARGET_WIN_RATE, targetWinRateMet: trades >= MIN_CALIBRATION_TRADES && winRate >= TARGET_WIN_RATE,
-    note: 'Quote-matched forward paper outcomes. Calibration is local to this browser; the lower confidence bound must beat the worst observed quote break-even rate plus margin.' };
+    recentTargetMet: recentTrades >= 50 && recentWinRate >= TARGET_WIN_RATE,
+    note: 'Quote-matched forward outcomes. Calibration is local to this browser; both the full 200-sample record and most recent 50 outcomes must meet the 90% target, and the lower confidence bound must beat the worst observed quote break-even rate plus margin.' };
 }
 export function resetPaperTrials() { pending.clear(); }
 
