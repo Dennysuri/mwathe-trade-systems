@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect } from 'react'
 import { Play, Square, RefreshCw, Terminal, AlertCircle, TrendingUp, Target, ShieldCheck, Zap } from 'lucide-react'
-import { boundedNextStake, buildProposal, VOLATILITY_MARKETS } from '../services/tradingCore'
+import { buildProposal, VOLATILITY_MARKETS } from '../services/tradingCore'
 import { evaluateExpectedValue, validateEntryWindow } from '../services/strategyIntelligence'
 import { validateLiveOpportunity } from '../services/liveOpportunityEngine'
 import { rankLiveStrategyUniverse } from '../services/strategyUniverse'
 import { recordContractOutcome } from '../services/contractOutcomeIntelligence'
-import { evaluateAccountRisk, getAdaptiveStrategyStatus, getContractDifficulty, recordAdaptiveOutcome } from '../services/adaptiveTradingIntelligence'
+import { evaluateAccountRisk, getContractDifficulty, recordAdaptiveOutcome } from '../services/adaptiveTradingIntelligence'
 import { advancePaperTrials, beginPaperTrial, canExecuteDemoValidationTrade, getPaperForwardSummary } from '../services/paperForwardCalibration'
 import { appendTickBuffer, seedTickBuffer } from '../services/marketTickBuffer'
 import { createRecoveryLedger, nextRecoveryStake, recordRecoveryOutcome } from '../services/recoveryAccounting'
@@ -65,11 +65,6 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
   const pingIntervalRef = useRef(null)
   const consecutiveLossesRef = useRef(0)
   const lastResearchNoticeRef = useRef('')
-  const marketCooldownUntilRef = useRef({})
-  const recentOutcomesRef = useRef([])
-  const performanceCooldownUntilRef = useRef(0)
-  const performanceRecoveryUntilRef = useRef(0)
-  const lastPerformancePauseNoticeRef = useRef(0)
   const shouldAutoScrollRef = useRef(true)
   const accountBalanceRef = useRef(null)
   // Research runs on its own cadence and never waits for contract settlement.
@@ -195,25 +190,32 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
       let loadedCount = 0
       let finished = false
       const listeners = []
+      let completedCount = 0
+      const pendingMarkets = UNIQUE_MARKETS.filter(([, sym]) => !historySeededRef.current[sym])
+      const totalMarkets = pendingMarkets.length
       const finish = (complete = false) => {
         if (finished) return
         finished = true
         listeners.forEach(({ handler }) => wsRef.current?.removeEventListener('message', handler))
         historyLoadedRef.current = complete
         historyLoadInFlightRef.current = false
-        if (!complete) addLog(`⚠️ Historical preload incomplete (${loadedCount}/${UNIQUE_MARKETS.length}); no market will be treated as ready. Retrying.`)
+        if (!complete) addLog(`⚠️ Historical preload incomplete (${completedCount}/${totalMarkets} successful); missing markets will be retried and cannot qualify for trading.`)
         resolve()
       }
-      const totalMarkets = UNIQUE_MARKETS.length
-      const checkDone = () => { loadedCount++; if (loadedCount >= totalMarkets) finish(true) }
-      UNIQUE_MARKETS.forEach(([,sym]) => {
+      if (totalMarkets === 0) return finish(true)
+      const checkDone = success => {
+        if (success) completedCount++
+        loadedCount++
+        if (loadedCount >= totalMarkets) finish(completedCount === totalMarkets)
+      }
+      pendingMarkets.forEach(([,sym]) => {
         const reqId = reqIdRef.current++
         const onMessage = (event) => {
           try {
             const msg = JSON.parse(event.data)
             if (msg.req_id === reqId && (msg.msg_type === 'history' || msg.error)) {
               wsRef.current?.removeEventListener('message', onMessage)
-              checkDone()
+              checkDone(msg.msg_type === 'history' && Array.isArray(msg.history?.prices) && msg.history.prices.length > 0)
             }
           } catch (e) {}
         }
@@ -368,6 +370,40 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         // separate contracts_for round trip that would add avoidable entry latency.
         let proposalRes = await wsRequest(proposalReq)
         if (!isRunningRef.current) break
+        // Recalculate the recovery stake against this exact quote before buying.
+        const quoteAsk = Number(proposalRes.proposal?.ask_price)
+        const quotePayout = Number(proposalRes.proposal?.payout)
+        const quoteNetRate = quoteAsk > 0 && quotePayout > quoteAsk ? (quotePayout - quoteAsk) / quoteAsk : 0
+        const quoteRecovery = nextRecoveryStake(recoveryLedgerRef.current, {
+          baseStake: parseFloat(stake) || 1, martingaleFactor: parseFloat(martingaleFactor) || 1,
+          netProfitPerUnit: quoteNetRate, maxStakeMultiplier: 3
+        })
+        if (!quoteRecovery.allowed) {
+          addLog(`🛑 Recovery gate: ${quoteRecovery.reason} Required stake ${Number(quoteRecovery.requiredStake).toFixed(2)}; configured ceiling is 3x base. No order sent.`)
+          isRunningRef.current = false; setIsRunning(false); break
+        }
+        if (Math.abs(quoteRecovery.stake - currentStakeRef.current) >= 0.01) {
+          const riskAtRecoveryStake = evaluateAccountRisk({ balance: accountBalanceRef.current, sessionPL: sessionPLRef.current, targetProfit, stopLoss, nextStake: quoteRecovery.stake })
+          if (!riskAtRecoveryStake.allowEntry) {
+            addLog(`🛡️ Recovery stake rejected by account guard: ${riskAtRecoveryStake.message}. No order sent.`)
+            isRunningRef.current = false; setIsRunning(false); break
+          }
+          currentStakeRef.current = quoteRecovery.stake
+          setCurrentStake(quoteRecovery.stake)
+          proposalRes = await wsRequest(buildProposal(signal, roundStake(quoteRecovery.stake)))
+          if (!isRunningRef.current) break
+          const repricedAsk = Number(proposalRes.proposal?.ask_price)
+          const repricedPayout = Number(proposalRes.proposal?.payout)
+          const repricedRate = repricedAsk > 0 && repricedPayout > repricedAsk ? (repricedPayout - repricedAsk) / repricedAsk : 0
+          const repricedDecision = nextRecoveryStake(recoveryLedgerRef.current, {
+            baseStake: parseFloat(stake) || 1, martingaleFactor: parseFloat(martingaleFactor) || 1,
+            netProfitPerUnit: repricedRate, maxStakeMultiplier: 3
+          })
+          if (!repricedDecision.allowed || Math.abs(repricedDecision.stake - quoteRecovery.stake) >= 0.01) {
+            addLog('🛡️ Recovery quote changed the required stake; rejecting this quote and returning to fresh market research.')
+            continue
+          }
+        }
         if (signal.tradeType === 'Digits') {
           const lowerBound = Number(currentTarget.report?.candidate?.evidence?.lowerBound)
           const ask = Number(proposalRes.proposal?.ask_price)
@@ -454,7 +490,6 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         currentStakeRef.current = recoveryDecision.stake
         setCurrentStake(currentStakeRef.current)
         addLog(`🧮 Cumulative recovery: ideal all-win profit ${recoveryLedgerRef.current.idealProfit.toFixed(2)} | actual P/L ${recoveryLedgerRef.current.actualProfit.toFixed(2)} | remaining gap ${recoveryLedgerRef.current.deficit.toFixed(2)} | next stake ${currentStakeRef.current.toFixed(2)}.`)
-        recentOutcomesRef.current = [...recentOutcomesRef.current, profit].slice(-8)
 
         
         if (isWin) {
@@ -481,8 +516,8 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
     setValidationError(''); if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) { setValidationError('Not connected.'); return }
     isRunningRef.current = true; setIsRunning(true); sessionPLRef.current = 0; totalTradesRef.current = 0; winsRef.current = 0; lossesRef.current = 0
     currentStakeRef.current = parseFloat(stake); recoveryLedgerRef.current = createRecoveryLedger(parseFloat(stake) || 1); hasLoggedScanningRef.current = false; reconnectAttemptsRef.current = 0
-    consecutiveLossesRef.current = 0; recentOutcomesRef.current = []; performanceCooldownUntilRef.current = 0; performanceRecoveryUntilRef.current = 0; lastPerformancePauseNoticeRef.current = 0
-    setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0); marketCooldownUntilRef.current = {}
+    consecutiveLossesRef.current = 0
+    setCurrentPL(0); setTotalTrades(0); setWins(0); setLosses(0); setCurrentStake(parseFloat(stake)); setConfluenceScore(0)
     addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets | Live-Only Predictive Gates | Cumulative Recovery)'); addLog(`Account mode: ${accountType === 'demo' ? 'DEMO — live validation orders enabled' : 'REAL — 90% profile calibration required before digit orders'}`); addLog(`Type: ${tradeType} | Base stake: ${stake} | Martingale: ${martingaleFactor}x with cumulative deficit recovery and 3x hard cap`); addLog(`Target: ${targetProfit} | Stop: ${stopLoss}`); runTradeCycle()
   }
 
