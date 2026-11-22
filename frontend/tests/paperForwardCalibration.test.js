@@ -51,6 +51,8 @@ test('calibration requires at least 200 quote-matched samples and beats worst br
   const summary=getPaperForwardSummary(signal);
   assert.equal(summary.trades,200);
   assert.equal(summary.calibrated,false);
+  assert.equal(summary.targetWinRate,0.7);
+  assert.equal(summary.targetWinRateMet,false);
   assert.ok(summary.lowerBound!==null);
   assert.ok(summary.maxBreakEvenRate>0.5);
 });
@@ -86,4 +88,19 @@ test('pip size preserves trailing zero precision when deriving the terminal digi
   assert.equal(settled.length,1);
   assert.equal(settled[0].terminalDigit,0);
   assert.equal(settled[0].won,true);
+});
+
+
+test('70 percent observed win-rate target is enforced alongside quote break-even confidence', () => {
+  resetPaperTrials();
+  const signal={symbol:'R_100',tradeType:'Digits',subTradeType:'Even/Odd',option:'Even',
+    predictedDigit:4,duration:1,timeframeUnit:'Ticks',currency:'USD'};
+  for(let i=0;i<200;i++){
+    assert.equal(beginPaperTrial({...signal,id:'target-'+i},{quote:quote(1,1.8)}),true);
+    advancePaperTrials('R_100',i<140?123.42:123.41);
+  }
+  const summary=getPaperForwardSummary(signal);
+  assert.equal(summary.targetWinRate,0.7);
+  assert.equal(summary.targetWinRateMet,true);
+  assert.equal(summary.calibrated,true);
 });
