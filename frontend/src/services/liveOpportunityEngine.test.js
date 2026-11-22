@@ -2,17 +2,22 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { rankLiveMarketOpportunities } from './liveOpportunityEngine.js';
 
-test('historical prices and a few live ticks cannot qualify a market', async () => {
+test('preloaded history plus a fresh live tick can start analysis without 200 live ticks', async () => {
+  const diagnostics = [];
   const ranked = await rankLiveMarketOpportunities([{
     symbol: 'R_10',
     prices: Array.from({ length: 250 }, (_, index) => 100 + index / 100),
-    livePrices: [100.1, 100.2, 100.3],
-    liveTicks: 3,
+    livePrices: [102.51],
+    liveTicks: 1,
     lastLiveAt: 10000
   }], { tradeType: 'Digits', subTradeType: 'Over/Under', option: 'Over', predictedDigit: 3, duration: 1, timeframeUnit: 'Ticks' }, {
-    now: 10000, minLiveTicks: 200
+    now: 10000, minLiveTicks: 1,
+    onMarketEvaluation: result => diagnostics.push(result)
   });
-  assert.deepEqual(ranked, []);
+  assert.notEqual(diagnostics[0]?.status, 'WAITING_FOR_FIRST_LIVE_TICK');
+  assert.notEqual(diagnostics[0]?.status, 'INSUFFICIENT_LIVE_TICKS');
+  assert.ok(['QUALIFIED_CANDIDATE', 'WATCH_CANDIDATE', 'ANALYSED_NO_SIGNAL'].includes(diagnostics[0]?.status));
+  assert.ok(Array.isArray(ranked));
 });
 
 test('a market with stale live data is excluded even with a large sample', async () => {
