@@ -74,6 +74,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
   const latestResearchRef = useRef({ updatedAt: 0, candidates: [], marketCount: 0 })
   const researchInFlightRef = useRef(false)
   const researchTimerRef = useRef(null)
+  const connectionActiveRef = useRef(false)
   const historyLoadInFlightRef = useRef(false)
   const researchConfigRef = useRef({})
   researchConfigRef.current = { tradeType, subTradeType, option, predictedDigit: Number(predictedDigit), duration: durationValue, timeframeUnit }
