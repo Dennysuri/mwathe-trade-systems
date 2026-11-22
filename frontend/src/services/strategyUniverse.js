@@ -90,7 +90,7 @@ export async function rankLiveStrategyUniverse(markets, selectedConfig = {}, opt
   const cycleStartedAt = Date.now();
   const diagnostics = new Map((markets || []).map(m => [m.symbol, {
     symbol: m.symbol, marketName: m.name || m.symbol, status: 'WAITING_FOR_EVALUATION',
-    liveTicks: Number(m.liveTicks || 0), liveBufferSize: (m.livePrices || []).length,
+    liveTicks: Number(m.liveTicks || 0), liveBufferSize: (m.livePrices || []).length, analysisBufferSize: (m.prices || m.livePrices || []).length,
     lastLiveAt: Number(m.lastLiveAt || 0), profileEvaluations: 0, candidateCount: 0,
     evaluationStartedAt: 0, evaluationCompletedAt: 0, score: null
   }]));
@@ -107,7 +107,7 @@ export async function rankLiveStrategyUniverse(markets, selectedConfig = {}, opt
         row.evaluationCompletedAt = Math.max(row.evaluationCompletedAt, result.evaluationCompletedAt);
         if (result.status === 'QUALIFIED_CANDIDATE' || result.status === 'WATCH_CANDIDATE') row.candidateCount += 1;
         if (Number.isFinite(result.score)) row.score = Math.max(row.score ?? -Infinity, result.score);
-        row.liveTicks = result.liveTicks; row.liveBufferSize = result.liveBufferSize;
+        row.liveTicks = result.liveTicks; row.liveBufferSize = result.liveBufferSize; row.analysisBufferSize = result.analysisBufferSize ?? row.analysisBufferSize;
         row.lastLiveAt = result.lastLiveAt;
       }
     });
@@ -138,8 +138,10 @@ export async function rankLiveStrategyUniverse(markets, selectedConfig = {}, opt
     const evaluatedAllProfiles = row.profileEvaluations === profiles.length;
     const feedFresh = Boolean(row.lastLiveAt) && cycleCompletedAt - row.lastLiveAt >= 0
       && cycleCompletedAt - row.lastLiveAt <= (options.maxAgeMs ?? 5000);
-    const hasRequiredSamples = row.liveTicks >= (options.minLiveTicks ?? 200)
-      && row.liveBufferSize >= (options.minLiveTicks ?? 200);
+    // Profile-level sample sufficiency is checked by evaluateStrategyEnsemble
+    // against the preloaded + live analysis buffer (200 for Digits, 80 otherwise).
+    // This diagnostic is about having a fresh live feed, not accumulating 200 ticks.
+    const hasRequiredSamples = row.profileEvaluations === profiles.length;
     return {
       ...row, profileCount: profiles.length, evaluatedAllProfiles, feedFresh, hasRequiredSamples,
       rank: marketRanks.get(row.symbol) ?? null,
