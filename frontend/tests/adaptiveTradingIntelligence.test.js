@@ -46,6 +46,16 @@ test('account guard respects target, stop loss and remaining loss allowance', ()
   assert.equal(evaluateAccountRisk({ balance: 0.5, sessionPL: 0, targetProfit: 10, stopLoss: 10, nextStake: 1 }).insufficientBalance, true);
 });
 
+test('adaptive strategy reports the required 90 percent target', () => {
+  resetStorage();
+  const signal = { tradeType: 'Digits', subTradeType: 'Even/Odd', option: 'Even', duration: 1, timeframeUnit: 'Ticks' };
+  for (let i = 0; i < 100; i++) recordAdaptiveOutcome(signal, { profit: i < 90 ? 1 : -1, now: 1000 + i });
+  const status = getAdaptiveStrategyStatus(signal, 1200);
+  assert.equal(status.targetWinRate, 0.9);
+  assert.equal(status.winRateTargetMet, true);
+  assert.equal(status.status, 'target-met');
+});
+
 test('contract difficulty differentiates Over 1 from Over 7 and parity', () => {
   const overOne = getContractDifficulty({ tradeType: 'Digits', subTradeType: 'Over/Under', option: 'Over', predictedDigit: 1 });
   const overSeven = getContractDifficulty({ tradeType: 'Digits', subTradeType: 'Over/Under', option: 'Over', predictedDigit: 7 });
