@@ -368,7 +368,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
             })
             if (started) {
               const difficulty = getContractDifficulty(signal)
-              addLog(`🧪 Calibration-only trial started for ${signal.subTradeType}/${signal.option} on ${signal.symbol}; theoretical baseline ${difficulty.theoreticalWinChance === null ? 'n/a' : (difficulty.theoreticalWinChance * 100).toFixed(1) + '%'}; exact profile barrier ${signal.predictedDigit ?? 'n/a'}, duration ${signal.duration} ${signal.timeframeUnit}; ${calibration.wins}/${calibration.trades} wins, ${calibration.trades}/200 settled samples, 70% observed-win target plus quote break-even confidence required; no purchase sent.`)
+              addLog(`🧪 Calibration-only trial started for ${signal.subTradeType}/${signal.option} on ${signal.symbol}; theoretical baseline ${difficulty.theoreticalWinChance === null ? 'n/a' : (difficulty.theoreticalWinChance * 100).toFixed(1) + '%'}; exact profile barrier ${signal.predictedDigit ?? 'n/a'}, duration ${signal.duration} ${signal.timeframeUnit}; ${calibration.wins}/${calibration.trades} wins, ${calibration.trades}/200 settled samples, 90% observed-win target plus quote break-even confidence required; no purchase sent.`)
             } else if (calibration.pending === 0) {
               addLog('🛡️ No valid quote-matched calibration trial could be started; refusing this digit entry and retrying after a fresh quote.')
               await new Promise(resolve => setTimeout(resolve, 1500))
@@ -400,14 +400,13 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
         if (!entryCheck.valid) { addLog(`Entry expired before purchase: ${entryCheck.reason}`); continue }
         addLog(`Execution checks passed in ${Math.round(performance.now() - executionStartedAt)}ms; live price drift ${liveCheck.drift.toPrecision(4)}. Sending purchase request now.`)
         const buyRes = await wsRequest({ buy: proposalRes.proposal.id, price: proposalRes.proposal.ask_price })
-        if (!isRunningRef.current) break
         addLog(`🚀 PURCHASE CONFIRMED by Deriv | Contract: ${buyRes.buy.contract_id}`)
         
         const contractResult = await monitorContract(buyRes.buy.contract_id); if (!contractResult) break
         const profit = parseFloat(contractResult.profit || 0); const isWin = profit > 0
         const outcomeStats = recordContractOutcome(signal, { profit, stake: currentStakeRef.current, contractId: contractResult.contract_id, bot: 'Automated Bot' })
         const adaptiveStats = recordAdaptiveOutcome(signal, { profit, stake: currentStakeRef.current, bot: 'Automated Bot' })
-        addLog(`🧠 Strategy profile: ${adaptiveStats.consecutiveLosses} consecutive losses across markets; ${adaptiveStats.trades} recent outcomes; win rate ${adaptiveStats.winRate === null ? 'n/a' : (adaptiveStats.winRate * 100).toFixed(1) + '%'} (70% target).`)
+        addLog(`🧠 Strategy profile: ${adaptiveStats.consecutiveLosses} consecutive losses across markets; ${adaptiveStats.trades} recent outcomes; win rate ${adaptiveStats.winRate === null ? 'n/a' : (adaptiveStats.winRate * 100).toFixed(1) + '%'} (90% target).`)
         if (outcomeStats) addLog(`Thamira history: ${outcomeStats.trades} settled for this exact setup; win rate ${outcomeStats.winRate === null ? 'n/a' : (outcomeStats.winRate * 100).toFixed(1) + '%'}.`)
         totalTradesRef.current += 1; sessionPLRef.current += profit
         recentOutcomesRef.current = [...recentOutcomesRef.current, profit].slice(-8)
@@ -457,7 +456,7 @@ export default function AutomatedBot({ token, accountId, onBalanceUpdate }) {
     addLog('⚡ AUTOMATED BOT ACTIVATED (13 Markets | Loss-Resistant Entry Gates)'); addLog(`Type: ${tradeType} | Stake: ${stake} | Recovery: adaptive strategy guard + bounded martingale`); addLog(`Target: $${targetProfit} | Stop: $${stopLoss}`); runTradeCycle()
   }
 
-  const stopBot = () => { isRunningRef.current = false; setIsRunning(false); if (researchTimerRef.current) { clearInterval(researchTimerRef.current); researchTimerRef.current = null } addLog('⏹️ Stopped new entries and parallel market research; any open contract remains monitored until settlement.') }
+  const stopBot = () => { isRunningRef.current = false; setIsRunning(false); addLog('⏹️ Stopped new entries; all 13-market live research continues, and any open contract remains monitored until settlement.') }
   const resetBot = () => { if (isRunningRef.current) return; setLogs([]); try { localStorage.removeItem('mwathe:automated-bot-logs:v1') } catch {}; shouldAutoScrollRef.current = true; setValidationError('') }
   const rules = TIMEFRAME_RULES[tradeType]; const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(1) : '0.0'
 
