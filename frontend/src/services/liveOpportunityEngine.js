@@ -18,7 +18,7 @@ export async function rankLiveMarketOpportunities(markets, config = {}, {
     const reportStatus = (status, extra = {}) => onMarketEvaluation?.({
       symbol: market?.symbol, marketName: market?.name || market?.symbol || 'Unknown',
       status, evaluationStartedAt, evaluationCompletedAt: Date.now(),
-      liveTicks: Number(market?.liveTicks || 0), liveBufferSize: (market?.livePrices || []).length,
+      liveTicks: Number(market?.liveTicks || 0), liveBufferSize: (market?.livePrices || []).length, analysisBufferSize: (market?.prices || market?.livePrices || []).length,
       lastLiveAt: Number(market?.lastLiveAt || 0), ...extra
     });
     // Preloaded history supplies the statistical sample immediately; live ticks
