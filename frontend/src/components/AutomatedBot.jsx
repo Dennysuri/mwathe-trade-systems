@@ -425,6 +425,7 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         if (!isRunningRef.current) break
         if (!quoteConverged || !proposalRes?.proposal || !quoteRecovery) {
           addLog('🛡️ Recovery quote did not stabilise within three quote attempts. No order sent; returning to fresh research without changing the recovery stake.')
+          await new Promise(resolve => setTimeout(resolve, 500))
           continue
         }
         currentStakeRef.current = requestedStake
@@ -531,7 +532,6 @@ export default function AutomatedBot({ token, accountId, accountType = 'real', o
         setCurrentStake(currentStakeRef.current)
         if (sessionPLRef.current >= parseFloat(targetProfit)) { addLog(`🎯 TARGET HIT! $${sessionPLRef.current.toFixed(2)}`); setIsRunning(false); isRunningRef.current = false; break }
         if (sessionPLRef.current <= -parseFloat(stopLoss)) { addLog('🛑 STOP LOSS HIT!'); setIsRunning(false); isRunningRef.current = false; break }
-        addLog(`📊 P/L: ${sessionPLRef.current.toFixed(2)} | Trades: ${totalTradesRef.current}`)
         await new Promise(r => setTimeout(r, 250))
       } catch (error) { if (!isRunningRef.current) break; addLog(`❌ Error: ${error.message}`); await new Promise(r => setTimeout(r, 2000)) }
     }
